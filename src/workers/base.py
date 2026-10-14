@@ -12,7 +12,7 @@ from src.config import Settings
 from src.core.api import WikiMastersAPI
 from src.core.client import ApiError, RateLimited, SessionExpired, UncertainMutation, WikiMastersClient
 from src.core.database import Database
-from src.core.notifier import DiscordNotifier
+from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 
 
@@ -28,6 +28,7 @@ class Context:
 
 class Worker:
     name = "worker"
+    topic = Topic.SYSTEM  # catégorie affichée sur ses messages Discord
     # Après N erreurs consécutives, une alerte Discord est envoyée (une seule fois).
     alert_after_errors = 5
 
@@ -36,7 +37,7 @@ class Worker:
         self.settings = ctx.settings
         self.api = ctx.api
         self.db = ctx.db
-        self.notifier = ctx.notifier
+        self.notifier = ctx.notifier.for_topic(self.topic)
         self.log = logging.getLogger(f"worker.{self.name}")
         self._errors = 0
 

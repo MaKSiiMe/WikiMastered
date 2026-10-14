@@ -12,6 +12,7 @@ from datetime import datetime
 
 from src.core import timeutils
 from src.core.models import Auction
+from src.core.notifier import Topic
 from src.core.text import normalize_title
 from src.workers.base import Context
 
@@ -79,4 +80,4 @@ def flush(ctx: Context, title: str, lines: list[str]) -> None:
     """Un seul message par passage ; `lines` contient une ligne par carte."""
     if lines:
         shown = "\n".join(lines[:15]) + (f"\n… et {len(lines) - 15} autre(s)" if len(lines) > 15 else "")
-        ctx.notifier.info(f"{title} : {len(lines)} carte(s) en vente", shown)
+        ctx.notifier.info(f"{title} : {len(lines)} carte(s) en vente", shown, topic=Topic.TRENDS)

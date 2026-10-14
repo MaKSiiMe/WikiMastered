@@ -25,6 +25,7 @@ from src.config import RARITY_RANK, Settings
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import utcnow
 from src.core.models import DiscardResult, MyBids, OwnedCard
+from src.core.notifier import Topic
 from src.core.pricing import ANY, Quote
 from src.core.timeutils import now_local, random_in_window
 from src.workers.base import Context, Worker
@@ -140,6 +141,7 @@ def plan_listing_time(now: datetime, start: time, end: time, durations: list[int
 # ---------------------------------------------------------------------- worker
 class InventoryManager(Worker):
     name = "inventory"
+    topic = Topic.SALES
 
     async def setup(self) -> None:
         self._next_scan = utcnow() + timedelta(minutes=2)

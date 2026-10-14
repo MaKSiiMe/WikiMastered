@@ -12,6 +12,7 @@ import logging
 import math
 from datetime import datetime, timezone
 from typing import Any, TypeVar
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -54,6 +55,15 @@ class Card(_Model):
     image_url: str | None = None
     wikipedia_url: str | None = None
     is_shiny: bool = False
+
+    @property
+    def page_url(self) -> str | None:
+        """Article Wikipédia de la carte (fr.wikipedia d'après son titre si le site n'en donne pas)."""
+        if self.wikipedia_url:
+            return self.wikipedia_url
+        if not self.wikipedia_title:
+            return None
+        return "https://fr.wikipedia.org/wiki/" + quote(self.wikipedia_title.replace(" ", "_"))
 
 
 class OwnedCard(_Model):

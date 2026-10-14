@@ -21,8 +21,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
+from src.config import RARITY_RANK
 from src.core.database import utcnow
-from src.core.models import PackOpenResult
+from src.core.models import Card, PackOpenResult
+from src.core.notifier import Topic
 from src.core.timeutils import next_local
 from src.workers.base import Worker
 
@@ -63,6 +65,7 @@ def seconds_until_stock(state: PackState, target: int, period: timedelta, now: d
 
 class PackOpener(Worker):
     name = "packs"
+    topic = Topic.PACKS
 
     async def setup(self) -> None:
         s = self.settings
@@ -123,7 +126,7 @@ class PackOpener(Worker):
     async def _open_batch(self) -> None:
         opened = 0
         cards_pulled = 0
-        highlights: list[str] = []
+        highlights: list[tuple[Card, bool]] = []
         rate_retries = 0
         fresh_regen = False
         while opened <= self.settings.pack_max_stock:
@@ -188,12 +191,14 @@ class PackOpener(Worker):
             self.state.last_regen_at = utcnow()
         if opened:
             self.log.info("%d paquet(s) ouvert(s), stock restant : %s", opened, self.state.remaining)
-            summary = f"{opened} booster(s), {cards_pulled} carte(s), stock restant {self.state.remaining}"
+            counts = {"boosters": opened, "cartes": cards_pulled, "stock restant": self.state.remaining}
             if highlights:
-                self.notifier.success("Boosters ouverts : tirage remarquable !", summary + "\n" + "\n".join(highlights),
-                                      live=self.live)
+                best, _ = max(highlights, key=lambda h: (RARITY_RANK.get(h[0].rarity or "", -1), h[1]))
+                self.notifier.success("Boosters ouverts : tirage remarquable !",
+                                      "\n".join(highlight_line(card, shiny) for card, shiny in highlights),
+                                      live=self.live, thumbnail=best.image_url, url=best.page_url, **counts)
             else:
-                self.notifier.info("Boosters ouverts", summary, live=self.live)
+                self.notifier.info("Boosters ouverts", live=self.live, **counts)
         await self._save()
 
     async def _pause_for_verification(self) -> None:
@@ -209,7 +214,7 @@ class PackOpener(Worker):
         self.state.verification_required = True
         await self._save()
 
-    async def _record(self, pulled: list) -> list[str]:
+    async def _record(self, pulled: list) -> list[tuple[Card, bool]]:
         """Enregistre les cartes d'un paquet ; renvoie les tirages remarquables (UR, L, Shiny)."""
         notify_rarities = set(self.settings.pack_notify_rarities)
         highlights = []
@@ -221,6 +226,11 @@ class PackOpener(Worker):
                 rarity=card.rarity, is_shiny=shiny, pageviews=card.pageviews,
             )
             if card.rarity in notify_rarities or (shiny and self.settings.pack_notify_shiny):
-                highlights.append(f"**{card.rarity}**{' ✨ Shiny' if shiny else ''} — {card.wikipedia_title}")
+                highlights.append((card, shiny))
         self.log.info("paquet ouvert : %s", ", ".join(f"{c.rarity}:{c.wikipedia_title}" for c, _ in pulled))
         return highlights
+
+
+def highlight_line(card: Card, shiny: bool) -> str:
+    title = f"[{card.wikipedia_title}]({card.page_url})" if card.page_url else card.wikipedia_title
+    return f"**{card.rarity}**{' ✨ Shiny' if shiny else ''} — {title}"

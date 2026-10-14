@@ -26,6 +26,7 @@ import httpx
 
 from src.config import RARITY_RANK, Settings
 from src.core.database import utcnow
+from src.core.notifier import Topic
 from src.core.text import normalize_title
 from src.workers.base import Worker
 from src.workers.trend_common import flush, position_budget, scan_market
@@ -75,6 +76,7 @@ def detect_spike(article: str, yesterday_views: int, history: list[int], s: Sett
 
 class WikiTrends(Worker):
     name = "trends"
+    topic = Topic.TRENDS
 
     async def setup(self) -> None:
         self.http = httpx.AsyncClient(
