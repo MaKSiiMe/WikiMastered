@@ -134,6 +134,15 @@ colle le cookie, appuie sur Entrée puis Ctrl+D. Le bot le charge en moins de 30
 
 **Mettre à jour le code.** Stack > **Pull and redeploy**. Si les logs montrent que l'ancien code tourne encore, Portainer a réutilisé l'image existante au lieu de la reconstruire. Dans ce cas : *Images* > supprime `wikimastered:latest`, puis relance *Pull and redeploy*.
 
+## Déploiement automatique
+
+À chaque push sur `main` dont les tests passent, GitHub Actions ([.github/workflows/](../.github/workflows/)) appelle un webhook Portainer qui tire le dépôt et redéploie la stack. Sans l'étape ci-dessous, rien ne se déploie tout seul : le bouton **Pull and redeploy** reste la méthode manuelle.
+
+1. Stack > **Git** (ou *Editor*, selon la version) > active **Automatic updates** > mécanisme **Webhook** > active **Re-pull image and redeploy** (sinon l'ancienne image peut être réutilisée) > copie l'URL du webhook > **Update the stack**.
+2. GitHub > le dépôt > *Settings* > *Secrets and variables* > *Actions* > *New repository secret* : nom `PORTAINER_WEBHOOK_URL`, valeur = l'URL copiée.
+
+Portainer doit être joignable depuis internet (HTTPS) pour que GitHub l'appelle. Sinon, choisis plutôt le mécanisme **Polling** (toutes les 5 min par exemple) : aucun secret GitHub n'est alors nécessaire.
+
 **Données.** Elles sont dans le volume `wikimastered_wikimastered_data` (*Volumes*) : base SQLite, logs et session. Ce volume survit aux redéploiements et à la suppression du conteneur. Il n'est effacé que si tu supprimes le volume lui-même.
 
 **Arrêter.** Stack > *Stop*. Le bot termine proprement et envoie « Bot arrêté » sur Discord.
