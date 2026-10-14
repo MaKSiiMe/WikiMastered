@@ -108,7 +108,7 @@ Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes program
 
 **Paquets (B).** Le bot ouvre dès que `PACK_OPEN_MIN_STOCK` paquets sont disponibles, puis attend 15 à 60 s de plus, tirés au hasard. Le stock est déduit de `packs_remaining` et `packs_last_regen_at`. La limite quotidienne met en pause jusqu'au lendemain. Chaque carte est enregistrée en base.
 
-**Sniper (D).** Le prix d'une carte suit surtout les tendances (actu, pop culture, mèmes), pas sa rareté. Et le site limite à 5 ventes et 5 enchères simultanées. Le sniper raisonne donc en **capital** : il achète peu, mais gros, et uniquement pour revendre.
+**Sniper (D).** Le prix d'une carte suit surtout les tendances (actu, pop culture, mèmes), pas sa rareté. Et le site limite à **5 ventes simultanées** (les mises, elles, sont illimitées) : chaque carte achetée doit attendre une de ces 5 places pour être revendue. Le sniper raisonne donc en **capital** : il achète peu, mais gros, et uniquement pour revendre.
 - **Estimation** : le sniper observe toutes les fins d'enchères. Le dernier prix vu avant la fin d'une enchère est enregistré comme une vente observée. L'estimation est la médiane des 5 dernières ventes observées de la carte, plafonnée par la moyenne du site, qui peut être très datée (GMMTV : vendue 157, moyenne affichée 391). L'historique détaillé du site est réservé au PRO (403). Le bot n'achète qu'une carte vue vendue au moins `PRICE_MIN_SALES` fois : il commence donc par plusieurs jours d'observation.
 - **Budget d'une position** : (WikiBidous + capital déjà engagé) × `PORTFOLIO_CAPITAL_RATIO` / `PORTFOLIO_SLOTS`, soit environ 540 WB pour 3 000 WB.
 - **Condition d'achat** : bénéfice attendu (estimation − mise) ≥ 25 % de ce budget, et mise ≤ 70 % de l'estimation. Au plus `PORTFOLIO_MAX_POSITIONS` positions détenues ou en cours d'enchère.
@@ -117,6 +117,8 @@ Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes program
 - **Nuit** (02:00–07:30) : paramètres plus larges.
 
 **Positions.** Chaque carte gagnée est remise en vente en priorité, avant tes doublons, au prix estimé. Si elle ne se vend pas, elle est remise en vente à −10 % (deux fois au plus), puis gardée. Bénéfice et perte apparaissent dans le bilan quotidien. En DRY_RUN, gains et reventes sont simulés : la revente simulée suppose une vente au prix de départ, ce qui est optimiste.
+
+**Notifications.** Discord ne reçoit pas un message par enchère, mais un résumé toutes les `NOTIFY_DIGEST_MINUTES` (60 par défaut). Arrivent immédiatement : les achats et reventes de positions, les tirages remarquables, les alertes et le bilan quotidien. `NOTIFY_EACH_BID=true` rétablit un message par enchère.
 
 **Inventaire (C).** Le site limite à **5 ventes simultanées** (`maxConcurrentAuctions`) : le bot ne programme que les places libres et reporte au lendemain une vente qui n'a plus de place. Ne sont jamais vendus ni défaussés : les favoris, les shiny, les exemplaires engagés dans un échange, ceux déjà en vente, et le dernier exemplaire de chaque carte (`SELL_KEEP_COPIES`, `DISCARD_KEEP_COPIES`). La défausse passe par lots de 50. Elle est bloquée si un palier est à moins de `ACHIEVEMENT_MARGIN` cartes, et ne fait jamais repasser la collection sous un palier déjà atteint.
 

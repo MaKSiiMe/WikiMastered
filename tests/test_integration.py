@@ -180,7 +180,8 @@ async def test_sniper_respects_concurrent_bid_limit(tmp_path):
             return httpx.Response(200, json={"auctions": market, "hasMore": False})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, sniper_rarity_caps={"SR": 15}, portfolio_max_positions=10)
+    client, notifier = make_client(tmp_path, handler, sniper_rarity_caps={"SR": 15}, portfolio_max_positions=10,
+                                   sniper_max_concurrent_bids=5)  # limite volontaire (le site n'en a pas)
     db = Database(tmp_path / "t.db")
     await db.connect()
     api = WikiMastersAPI(client)
@@ -358,4 +359,37 @@ async def test_ended_auctions_become_observed_sales(tmp_path):
     assert await db.harvest_ended_auctions(now - timedelta(seconds=30)) == 1  # sans mise / vue trop tôt : ignorées
     assert await db.observed_prices("gmmtv", 5) == ([157], 1)
     assert await db._all("SELECT * FROM auctions_seen") == []
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bids_unlimited_by_default(tmp_path):
+    """Le site n'impose pas de limite aux mises : 94 enchères manuelles en cours ne bloquent rien."""
+    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path + "?" + str(request.url.query))
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": [{
+                "id": "33333333-3333-3333-3333-333333333333",
+                "card": {"id": "c1", "wikipedia_title": "Mème", "rarity": "C"},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active", "end_at": end,
+                "base_amount": 100, "current_bid": None, "current_bidder_id": None}], "hasMore": False})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    await seed_observed(db, "c1", [400, 410, 390])
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    await sniper.step()
+    assert (await db.last_bid("33333333-3333-3333-3333-333333333333"))["status"] == "simulated"
+    assert not any("mine=1" in c for c in calls)  # pas de lecture de mes enchères sans limite
     await db.close()
