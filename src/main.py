@@ -223,13 +223,21 @@ async def collection_status(settings: Settings) -> None:
         if not (settings.collection_sets or settings.collection_titles):
             print("Aucune collection configurée : ajoute COLLECTION_SETS=jours (et COLLECTION_MAX_PRICE).")
             return
+        print(f"COLLECTION_SETS = {settings.collection_sets}  COLLECTION_TITLES = {settings.collection_titles}")
         state = await refresh_collection(ctx)
+        if state["unknown_sets"]:
+            print(f"Ensemble(s) inconnu(s) : {state['unknown_sets']} — valeur attendue : jours")
         by_key = targets(ctx)
         print(summary_line(state, by_key).replace("**", ""))
         print("Manquantes : " + (", ".join(by_key.get(k, k) for k in state["missing"]) or "aucune"))
         if state["unmatched"]:
             print("Titres trouvés mais non reconnus (format différent ?) : " + ", ".join(state["unmatched"]))
         print(f"Mise maximale par carte manquante : {settings.collection_max_price} WB")
+        if state.get("tag"):
+            live = "" if settings.is_live("tag_card") else " (simulé : DRY_RUN)"
+            print(f"Étiquette « {state['tag']} » : {state['tagged']} ajoutée(s){live}, {state['to_tag']} restante(s)")
+        if state.get("tag_error"):
+            print(f"Étiquettes : {state['tag_error']}")
 
 
 async def check_session(settings: Settings) -> None:

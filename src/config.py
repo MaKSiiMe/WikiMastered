@@ -208,6 +208,8 @@ class Settings(BaseSettings):
     collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
     collection_max_price: int = 50                              # mise maximale pour une carte manquante
     collection_refresh_minutes: float = 360.0
+    collection_tag: str = "date"           # étiquette ajoutée à un exemplaire de chaque carte possédée ("" = non)
+    collection_tag_max_per_run: int = 60   # étiquettes posées par passage (requêtes espacées)
 
     # --- Module F : Google Trends (flux RSS public) ------------------------------
     google_trends_url: str = "https://trends.google.com/trending/rss?geo={geo}"
