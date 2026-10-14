@@ -44,3 +44,27 @@ async def test_signals_measured_against_later_sales(tmp_path):
     text = await trends_text(db, 10, 147, now)
     assert "Bénéfice médian +150 WB, 1/2 gagnant(s)" in text and "trop tôt pour conclure" in text
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_sources_compared_day_by_day(tmp_path):
+    from src.workers.trend_report import day_line
+
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    later = now + timedelta(hours=3)
+    for source, aid, card in (("google", "g1", "Greta Thunberg"), ("google", "g2", "Greta Thunberg"),
+                              ("google", "g3", "Lucie Bernardoni"), ("wikipedia", "w1", "Greta Thunberg"),
+                              ("wikipedia", "w2", "Viking FK")):
+        await db.record_signal(source=source, term=card, card_id=card, title=card, auction_id=aid,
+                               min_bid=10, end_at=later)
+    for term in ("greta thunberg", "lucie bernardoni", "décharge"):
+        await db.term_is_new("google", term, 500, now)
+    line = await day_line(db, now)
+    assert "Google Trends 3 termes → 2 carte(s) (3 ventes)" in line
+    assert "Wikipédia 2 carte(s) (2 ventes)" in line and "en commun : Greta Thunberg" in line
+    text = await trends_text(db, 7, 147, now)
+    assert "**Jour par jour**" in text and "en commun : 1" in text
+    assert "Cartes signalées par les deux sources : Greta Thunberg" in text
+    await db.close()

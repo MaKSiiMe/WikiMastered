@@ -33,7 +33,7 @@ from src.workers.google_trends import GoogleTrends
 from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
 from src.workers.pack_opener import PackOpener
-from src.workers.trend_report import trends_text
+from src.workers.trend_report import day_line, trends_text
 from src.workers.wiki_trends import WikiTrends
 
 log = logging.getLogger("wikimastered")
@@ -85,6 +85,8 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
     text = f"Tirages par rareté : {rarities}"
     if ctx.settings.dry_run:
         text += "\n\n" + validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales))
+    if ctx.settings.enable_google_trends or ctx.settings.enable_wiki_trends:
+        text += "\n\n" + await day_line(ctx.db, datetime.now(timezone.utc))
     if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine
         text += "\n\n" + await trends_text(ctx.db, 7, await min_profit(ctx), datetime.now(timezone.utc))
     if send:
