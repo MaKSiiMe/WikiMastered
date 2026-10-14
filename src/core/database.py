@@ -374,8 +374,9 @@ class Database:
         values = [iso(v) if isinstance(v, datetime) else v for v in fields.values()]
         await self._exec(f"UPDATE listings SET {cols} WHERE id = ?", (*values, listing_id))
 
-    async def pending_listings_count(self) -> int:
-        row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE status = 'scheduled'")
+    async def pending_listings_count(self, real_only: bool = False) -> int:
+        extra = " AND owned_card_id NOT LIKE 'sim-%'" if real_only else ""
+        row = await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE status = 'scheduled'{extra}")
         return int(row["n"]) if row else 0
 
     async def scheduled_owned_ids(self) -> set[str]:

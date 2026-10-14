@@ -310,7 +310,7 @@ class AuctionSniper(Worker):
     async def portfolio(self, now: datetime) -> Portfolio:
         held = await self.db.positions_summary()
         engaged_real = sum(amount for _, amount in self._leading.values())
-        engaged_sim = await self.db.simulated_engaged_cost(now) if self.settings.dry_run else 0
+        engaged_sim = await self.db.simulated_engaged_cost(now)  # 0 s'il n'y a aucune mise simulée
         bot_engaged = sum(1 for aid in self._bot_engaged if aid in self._engaged)
         cap, room = await self._sale_capacity(now)
         return portfolio_state(
@@ -390,7 +390,7 @@ class AuctionSniper(Worker):
         lines, self._digest = self._digest, []
         shown = "\n".join(lines[-15:])
         more = f"\n… et {len(lines) - 15} autre(s)" if len(lines) > 15 else ""
-        title = "Sniper : enchères simulées" if self.settings.dry_run else "Sniper : enchères placées"
+        title = "Sniper : enchères simulées" if not self.settings.is_live("place_bid") else "Sniper : enchères placées"
         self.notifier.info(f"{title} ({len(lines)})", shown + more)
 
     async def _remember(self, auctions: list[Auction], now: datetime) -> None:
@@ -435,7 +435,7 @@ class AuctionSniper(Worker):
             return True
         # Appliqué aussi en DRY_RUN : la simulation doit montrer un budget trop serré.
         today = now_local().date()
-        committed = await self.db.committed_since(local_dt(today, time(0, 0)), self.settings.dry_run)
+        committed = await self.db.committed_since(local_dt(today, time(0, 0)), not self.settings.is_live("place_bid"))
         if committed + amount > params.budget:
             if self._budget_warned_day != str(today):
                 self._budget_warned_day = str(today)
@@ -445,14 +445,16 @@ class AuctionSniper(Worker):
 
     async def _bid(self, auction: Auction, decision: Decision, params: SnipeParams, *, retried: bool = False) -> bool:
         """Place la mise ; renvoie True si elle est acceptée (ou simulée)."""
+        # Mises de positions (« sniper ») et de collection (« collection ») : réelles ou simulées séparément.
+        live = self.settings.is_live("collection_bid" if decision.collection else "place_bid")
         common = dict(
             auction_id=auction.id, card_id=auction.catalog_id, title=auction.title, rarity=auction.rarity,
             is_shiny=auction.shiny, amount=decision.amount, reference_price=decision.reference,
-            reason=decision.reason, night=params.night, dry_run=self.settings.dry_run, end_at=auction.end_at,
+            reason=decision.reason, night=params.night, dry_run=not live, end_at=auction.end_at,
         )
         label = f"{auction.title} ({auction.rarity}{' ✨' if auction.shiny else ''})"
         try:
-            result = await self.api.place_bid(auction.id, decision.amount)
+            result = await self.api.place_bid(auction.id, decision.amount, live=live)
         except UncertainMutation:
             await self.db.record_bid(**common, status="uncertain", note="réponse perdue")
             self._engaged[auction.id] = auction.end_at  # la mise a peut-être abouti : place occupée

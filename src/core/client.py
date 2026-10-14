@@ -682,13 +682,14 @@ class WikiMastersClient:
                                f"HTTP {status}, clés : {keys or '—'}\n{server_message(payload)}\n"
                                f"Détail : data/inspect/writes/{name}-1.json")
 
-    async def mutate(self, name: str, **values: Any) -> MutationResult:
+    async def mutate(self, name: str, *, live: bool | None = None, **values: Any) -> MutationResult:
+        """Écriture ; `live` force réel/simulé (sinon DRY_RUN, LIVE_WRITES et SIMULATE décident)."""
         req = self.endpoints.build(name, **values)
         if not req.is_mutation:
             raise ValueError(f"{name} n'est pas une écriture")
         await self._session_ok.wait()
         await self._maybe_refresh()
-        if not self.settings.is_live(name):
+        if not (self.settings.is_live(name) if live is None else live):
             log.info("[DRY RUN] %s %s %s", req.method, req.url, json.dumps(req.json, ensure_ascii=False))
             return MutationResult(0, None, dry_run=True)
         try:

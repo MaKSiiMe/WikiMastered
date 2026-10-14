@@ -86,6 +86,8 @@ python -m src.main inventory scan
 
 ## 7. Passer en réel
 
+**Par étapes (recommandé).** `DRY_RUN=false` et `SIMULATE=sniper` : paquets, ventes de doublons, collection et étiquettes deviennent réels, et seules les mises des positions du sniper restent simulées. Le bilan quotidien continue de juger la simulation du sniper. Pour garder aussi la collection en simulation : `SIMULATE=sniper,collection`. Quand le sniper est validé, retire `SIMULATE`.
+
 Attends que le bilan quotidien (23:00 sur Discord) indique, dans « Validation de la simulation », que le passage en réel est envisageable : au moins 10 reventes simulées, et un bilan positif même en comptant les invendues comme perdues.
 
 Au premier passage en réel, Discord affiche « Première réponse réelle : place_bid » et « Première réponse réelle : create_listing ». Les 3 premières réponses de chaque écriture sont enregistrées dans le volume. Envoie-moi leur contenu, obtenu dans la *Console* avec :

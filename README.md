@@ -15,7 +15,7 @@ Il parle directement aux routes JSON du site, sans navigateur.
 
 > **À lire avant de lancer**
 > - Automatiser un compte peut être contraire aux conditions d'utilisation de WikiMasters et mener à un bannissement. Le jitter et l'espacement limitent la charge sur le site ; ils ne garantissent rien.
-> - `DRY_RUN=true` par défaut : aucune enchère, vente, défausse ni ouverture n'est envoyée. Les actions sont seulement journalisées et annoncées sur Discord avec le préfixe `[DRY RUN]`.
+> - `DRY_RUN=true` par défaut : aucune enchère, vente, défausse ni ouverture n'est envoyée. Les actions sont seulement journalisées et annoncées sur Discord avec le préfixe `[DRY RUN]`. On peut passer en réel worker par worker : `DRY_RUN=false` avec `SIMULATE=sniper` rend tout réel sauf les mises des positions, et `DRY_RUN=true` avec `LIVE_WRITES=packs` rend seulement les paquets réels.
 > - Quand le site demande une **vérification humaine** pour les paquets, le bot s'arrête et te prévient. Il ne tente jamais de la contourner : fais-la toi-même dans ton navigateur.
 
 ## D'où viennent les routes

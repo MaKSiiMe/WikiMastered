@@ -202,17 +202,24 @@ class InventoryManager(Worker):
         return report
 
     # ------------------------------------------------------------ places
+    @property
+    def listing_live(self) -> bool:
+        return self.settings.is_live("create_listing")
+
     async def slot_usage(self) -> tuple[int, int]:
-        """(ventes en cours, maximum). En DRY_RUN, les ventes simulées occupent aussi une place."""
+        """(ventes en cours, maximum). Si les ventes sont simulées, les ventes simulées occupent aussi une place ;
+        si elles sont réelles (sniper seul simulé), les reventes simulées n'occupent pas tes vraies places."""
         selling, maximum = await self.api.listing_slots()
-        if self.settings.dry_run:
+        if not self.listing_live:
             selling += await self.db.simulated_active_listings(utcnow())
         return selling, maximum
 
     async def free_slots(self) -> int:
         """Places libres pour des doublons : les positions à revendre sont servies d'abord."""
         selling, maximum = await self.slot_usage()
-        reserved = await self.db.pending_listings_count() + len(await self.db.positions_to_list())
+        real_only = self.listing_live
+        positions = [r for r in await self.db.positions_to_list() if not (real_only and r["dry_run"])]
+        reserved = await self.db.pending_listings_count(real_only) + len(positions)
         return max(0, maximum - selling - reserved)
 
     def _window(self, at_peak: bool) -> tuple[time, time]:
@@ -299,17 +306,19 @@ class InventoryManager(Worker):
             return
         selling, maximum = await self.slot_usage()
         for row in due:
-            if selling >= maximum:
-                await self._postpone(row)
-                continue
-            selling += 1
+            simulated = bool(row["dry_run"]) or row["owned_card_id"].startswith("sim-")
+            if not (simulated and self.listing_live):  # une revente simulée n'occupe pas une vraie place
+                if selling >= maximum:
+                    await self._postpone(row)
+                    continue
+                selling += 1
             minutes = row["duration_minutes"]
             if not self.settings.listing_duration_options and row["target_end"]:
                 # Publication en retard (bot arrêté...) : on vise toujours la même heure de fin.
                 left = (datetime.fromisoformat(row["target_end"]) - utcnow()).total_seconds() // 60
                 minutes = int(max(self.settings.listing_min_duration_minutes, left))
             label = f"{row['title']} ({row['rarity']}) à {row['base_amount']} WB"
-            if row["dry_run"] or row["owned_card_id"].startswith("sim-"):
+            if simulated:
                 result = None
             else:
                 try:

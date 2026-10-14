@@ -18,6 +18,15 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 RARITIES: tuple[str, ...] = ("C", "PC", "R", "SR", "UR", "L")
 RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
 
+# Écritures du site regroupées par worker, pour LIVE_WRITES / SIMULATE (noms de routes acceptés aussi).
+WRITE_GROUPS: dict[str, tuple[str, ...]] = {
+    "sniper": ("place_bid",),            # mises des positions (achat pour revendre)
+    "collection": ("collection_bid",),   # mises du mode collection (cartes gardées)
+    "packs": ("open_pack",), "paquets": ("open_pack",),
+    "ventes": ("create_listing",), "inventory": ("create_listing", "bulk_discard"),
+    "defausse": ("bulk_discard",), "tags": ("tag_card",),
+}
+
 CsvList = Annotated[list[str], NoDecode]
 IntList = Annotated[list[int], NoDecode]
 
@@ -29,8 +38,17 @@ def _split_list(value: Any) -> Any:
             return []
         if value.startswith("["):
             return json.loads(value)
-        return [part.strip() for part in value.split(",") if part.strip()]
+        # Guillemets éventuels (« "jours" ») retirés : Portainer les garde tels quels.
+        parts = [part.strip().strip("\"'").strip() for part in value.split(",")]
+        return [part for part in parts if part]
     return value
+
+
+def expand_writes(names: list[str]) -> set[str]:
+    out: set[str] = set()
+    for name in names:
+        out.update(WRITE_GROUPS.get(name.casefold(), (name,)))
+    return out
 
 
 class Settings(BaseSettings):
@@ -38,8 +56,10 @@ class Settings(BaseSettings):
 
     # --- Général -------------------------------------------------------------
     dry_run: bool = True
-    # Écritures réelles malgré DRY_RUN, par nom de route (ex. open_pack : ouvrir les paquets pour de vrai).
+    # Écritures réelles malgré DRY_RUN=true (ex. packs : ouvrir les paquets pour de vrai).
     live_writes: CsvList = Field(default_factory=list)
+    # Écritures simulées malgré DRY_RUN=false (ex. sniper : tout est réel sauf les mises des positions).
+    simulate: CsvList = Field(default_factory=list)
     log_level: str = "INFO"
     timezone: str = "Europe/Paris"
     data_dir: Path = Path("data")
@@ -196,7 +216,7 @@ class Settings(BaseSettings):
     wikimedia_user_agent: str = "WikiMasteredBot/1.0 (self-hosted; configure WIKIMEDIA_USER_AGENT)"
 
     @field_validator(
-        "pack_notify_rarities", "discard_rarities", "listing_duration_options", "live_writes",
+        "pack_notify_rarities", "discard_rarities", "listing_duration_options", "live_writes", "simulate",
         "collection_sets", "collection_titles",
         "achievement_milestones", mode="before",
     )
@@ -223,8 +243,16 @@ class Settings(BaseSettings):
         return value
 
     def is_live(self, endpoint: str) -> bool:
-        """Cette écriture part-elle vraiment au site ?"""
-        return not self.dry_run or endpoint in self.live_writes
+        """Cette écriture part-elle vraiment au site ? DRY_RUN, sauf LIVE_WRITES ; réel, sauf SIMULATE."""
+        if self.dry_run:
+            return endpoint in expand_writes(self.live_writes)
+        return endpoint not in expand_writes(self.simulate)
+
+    @property
+    def mode_label(self) -> str:
+        if self.dry_run:
+            return f"DRY RUN (réel : {', '.join(self.live_writes)})" if self.live_writes else "DRY RUN (aucune écriture)"
+        return f"RÉEL (simulé : {', '.join(self.simulate)})" if self.simulate else "RÉEL"
 
     @property
     def session_file(self) -> Path:

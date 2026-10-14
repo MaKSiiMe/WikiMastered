@@ -87,7 +87,7 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
         stats["balance"] = "?"
     rarities = " ".join(f"{r}:{n}" for r, n in sorted(stats.pop("pulls_by_rarity").items())) or "—"
     text = f"Tirages par rareté : {rarities}"
-    if ctx.settings.dry_run:
+    if not ctx.settings.is_live("place_bid"):  # sniper simulé : on juge la simulation
         text += "\n\n" + validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales))
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         text += "\n\n" + summary_line(await ctx.db.kv_get("collection"), targets(ctx))
@@ -171,9 +171,7 @@ async def run_bot(settings: Settings) -> None:
         if settings.collection_sets or settings.collection_titles:
             workers.append(CollectionWorker(ctx))
 
-        mode = "RÉEL" if not settings.dry_run else (
-            f"DRY RUN (écritures réelles : {', '.join(settings.live_writes)})" if settings.live_writes
-            else "DRY RUN (aucune écriture)")
+        mode = settings.mode_label
         names = ", ".join(w.name for w in workers) or "aucun"
         log.info("Démarrage en mode %s — workers : %s — joueur %s", mode, names, ctx.client.user_id or "?")
         ctx.notifier.info("Bot démarré", f"Mode {mode}\nWorkers : {names}\nSession : {ctx.client.session_status()}")
