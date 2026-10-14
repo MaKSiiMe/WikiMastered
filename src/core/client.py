@@ -449,6 +449,28 @@ class WikiMastersClient:
             log.info("Session renouvelée (%s)", self.session_status())
             return True
 
+    async def supabase(self, method: str, table: str, *, params: dict[str, str] | None = None,
+                       json_body: Any = None, prefer: str = "") -> tuple[int, Any]:
+        """Requête à l'API REST Supabase du site (tables `tags`, `user_card_tags`), comme son éditeur
+        d'étiquettes [WP tags.js]. Nécessite SUPABASE_ANON_KEY et le jeton d'accès de la session."""
+        await self._maybe_refresh()
+        session = self.auth_session()
+        key = self.settings.supabase_anon_key
+        if not key or session is None or not session.data.get("access_token"):
+            raise ApiError(0, None, f"supabase:{table}", "SUPABASE_ANON_KEY ou session Supabase manquante")
+        await self._acquire_slot()
+        base = (self.settings.supabase_url or f"https://{session.ref}.supabase.co").rstrip("/")
+        headers = {"apikey": key, "Authorization": f"Bearer {session.data['access_token']}",
+                   "Accept": "application/json"}
+        if prefer:
+            headers["Prefer"] = prefer
+        try:
+            resp = await self._http.request(method, f"{base}/rest/v1/{table}", params=params, json=json_body,
+                                            headers=headers)
+        except httpx.HTTPError as exc:
+            raise ApiError(0, None, f"supabase:{table}", f"réseau : {type(exc).__name__}") from exc
+        return resp.status_code, _json_or_none(resp)
+
     # ------------------------------------------------------------ espacement
     async def _acquire_slot(self) -> None:
         async with self._slot_lock:
@@ -682,13 +704,14 @@ class WikiMastersClient:
                                f"HTTP {status}, clés : {keys or '—'}\n{server_message(payload)}\n"
                                f"Détail : data/inspect/writes/{name}-1.json")
 
-    async def mutate(self, name: str, **values: Any) -> MutationResult:
+    async def mutate(self, name: str, *, live: bool | None = None, **values: Any) -> MutationResult:
+        """Écriture ; `live` force réel/simulé (sinon DRY_RUN, LIVE_WRITES et SIMULATE décident)."""
         req = self.endpoints.build(name, **values)
         if not req.is_mutation:
             raise ValueError(f"{name} n'est pas une écriture")
         await self._session_ok.wait()
         await self._maybe_refresh()
-        if not self.settings.is_live(name):
+        if not (self.settings.is_live(name) if live is None else live):
             log.info("[DRY RUN] %s %s %s", req.method, req.url, json.dumps(req.json, ensure_ascii=False))
             return MutationResult(0, None, dry_run=True)
         try:

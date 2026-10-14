@@ -143,6 +143,11 @@ class InventoryManager(Worker):
 
     async def setup(self) -> None:
         self._next_scan = utcnow() + timedelta(minutes=2)
+        self._next_sale_check = utcnow() + timedelta(minutes=2)
+        # Doublons à vendre, du mieux coté au moins coté : relus au plus toutes les INVENTORY_INTERVAL_MINUTES
+        # (lire la collection coûte ~175 requêtes), consommés à chaque place libérée.
+        self._sale_queue: list[SaleCandidate] = []
+        self._queue_at: datetime | None = None
 
     async def step(self) -> float:
         await self.reconcile_listings()
@@ -150,15 +155,28 @@ class InventoryManager(Worker):
         await self.post_due_listings()
         await self.settle_listings()
         s = self.settings
-        if (s.auto_list or s.auto_discard) and utcnow() >= self._next_scan:
-            self._next_scan = utcnow() + timedelta(minutes=s.inventory_interval_minutes)
-            # Lire 8 000 exemplaires coûte ~175 requêtes : seulement s'il y a une place de vente à remplir.
-            list_cards = s.auto_list and await self.free_slots() > 0
-            if list_cards or s.auto_discard:
-                await self.run_cycle(list_cards=list_cards, discard=s.auto_discard)
-            else:
-                self.log.info("ventes pleines : pas de recherche de doublons à vendre")
+        now = utcnow()
+        if s.auto_list and now >= self._next_sale_check:
+            self._next_sale_check = now + timedelta(minutes=s.sell_check_minutes)
+            await self.fill_free_slots()
+        if s.auto_discard and now >= self._next_scan:
+            self._next_scan = now + timedelta(minutes=s.inventory_interval_minutes)
+            await self.run_cycle(list_cards=False, discard=True)
         return 30.0
+
+    async def fill_free_slots(self) -> int:
+        """Remplit les places de vente libres avec les doublons les mieux cotés."""
+        s = self.settings
+        free = min(s.sell_max_listings_per_run, await self.free_slots())
+        if free <= 0:
+            return 0
+        stale = self._queue_at is None or utcnow() - self._queue_at > timedelta(minutes=s.inventory_interval_minutes)
+        if not self._sale_queue and stale:
+            groups, excluded, quotes, _ = await self.snapshot()
+            self._sale_queue, self._queue_at = select_for_sale(groups, quotes, excluded, s), utcnow()
+            self.log.info("%d doublon(s) à vendre (cote ≥ %d WB)", len(self._sale_queue), s.sell_min_value)
+        batch, self._sale_queue = self._sale_queue[:free], self._sale_queue[free:]
+        return await self.schedule_sales(batch, slots=free)
 
     # ------------------------------------------------------------ analyse
     async def snapshot(self) -> tuple[dict[str, list[OwnedCard]], set[str], dict[str, dict[str, Quote]], int]:
@@ -202,25 +220,33 @@ class InventoryManager(Worker):
         return report
 
     # ------------------------------------------------------------ places
+    @property
+    def listing_live(self) -> bool:
+        return self.settings.is_live("create_listing")
+
     async def slot_usage(self) -> tuple[int, int]:
-        """(ventes en cours, maximum). En DRY_RUN, les ventes simulées occupent aussi une place."""
+        """(ventes en cours, maximum). Si les ventes sont simulées, les ventes simulées occupent aussi une place ;
+        si elles sont réelles (sniper seul simulé), les reventes simulées n'occupent pas tes vraies places."""
         selling, maximum = await self.api.listing_slots()
-        if self.settings.dry_run:
+        if not self.listing_live:
             selling += await self.db.simulated_active_listings(utcnow())
         return selling, maximum
 
     async def free_slots(self) -> int:
         """Places libres pour des doublons : les positions à revendre sont servies d'abord."""
         selling, maximum = await self.slot_usage()
-        reserved = await self.db.pending_listings_count() + len(await self.db.positions_to_list())
+        real_only = self.listing_live
+        positions = [r for r in await self.db.positions_to_list() if not (real_only and r["dry_run"])]
+        reserved = await self.db.pending_listings_count(real_only) + len(positions)
         return max(0, maximum - selling - reserved)
 
     def _window(self, at_peak: bool) -> tuple[time, time]:
         s = self.settings
-        if at_peak:
-            return s.listing_end_window_start, s.listing_end_window_end
         soon = now_local() + timedelta(minutes=max(s.listing_min_duration_minutes,
                                                    s.listing_preferred_duration_minutes) + 1)
+        # Une vente qui finirait en pleine nuit (peu d'acheteurs) vise plutôt l'heure de pointe.
+        if at_peak or soon.time() < time(9, 0):
+            return s.listing_end_window_start, s.listing_end_window_end
         return soon.time(), (soon + timedelta(minutes=30)).time()
 
     async def _schedule(self, *, owned_id: str, card_id: str, title: str, rarity: str | None, price: int,
@@ -241,19 +267,21 @@ class InventoryManager(Worker):
         return bool(listing_id)
 
     # ------------------------------------------------------- ventes de doublons
-    async def schedule_sales(self, candidates: list[SaleCandidate]) -> int:
+    async def schedule_sales(self, candidates: list[SaleCandidate], slots: int | None = None) -> int:
+        """Programme la vente de doublons (pas de message Discord : le bilan du soir les compte)."""
         s = self.settings
         count = 0
-        slots = min(s.sell_max_listings_per_run, await self.free_slots())
+        if slots is None:
+            slots = min(s.sell_max_listings_per_run, await self.free_slots())
         if candidates and not slots:
             self.log.info("aucune place de vente libre (%d candidat(s) en attente)", len(candidates))
         for c in candidates[:slots]:
             if await self._schedule(owned_id=c.owned.id, card_id=c.owned.catalog_id, title=c.owned.title,
-                                    rarity=c.owned.rarity, price=c.price, reason=f"cote {c.average:.0f}"):
+                                    rarity=c.owned.rarity, price=c.price, reason=f"cote {c.average:.0f}",
+                                    at_peak=not s.sell_anytime):
                 count += 1
         if count:
-            self.notifier.info("Ventes programmées", f"{count} doublon(s) mis en vente avec fin entre "
-                               f"{s.listing_end_window_start:%H:%M} et {s.listing_end_window_end:%H:%M}.")
+            self.log.info("%d doublon(s) mis en vente", count)
         return count
 
     # --------------------------------------------------------------- positions
@@ -299,17 +327,19 @@ class InventoryManager(Worker):
             return
         selling, maximum = await self.slot_usage()
         for row in due:
-            if selling >= maximum:
-                await self._postpone(row)
-                continue
-            selling += 1
+            simulated = bool(row["dry_run"]) or row["owned_card_id"].startswith("sim-")
+            if not (simulated and self.listing_live):  # une revente simulée n'occupe pas une vraie place
+                if selling >= maximum:
+                    await self._postpone(row)
+                    continue
+                selling += 1
             minutes = row["duration_minutes"]
             if not self.settings.listing_duration_options and row["target_end"]:
                 # Publication en retard (bot arrêté...) : on vise toujours la même heure de fin.
                 left = (datetime.fromisoformat(row["target_end"]) - utcnow()).total_seconds() // 60
                 minutes = int(max(self.settings.listing_min_duration_minutes, left))
             label = f"{row['title']} ({row['rarity']}) à {row['base_amount']} WB"
-            if row["dry_run"] or row["owned_card_id"].startswith("sim-"):
+            if simulated:
                 result = None
             else:
                 try:
@@ -322,12 +352,16 @@ class InventoryManager(Worker):
             if result is None or result.dry_run:
                 await self.db.update_listing(row["id"], status="simulated", posted_at=utcnow(), dry_run=1,
                                              duration_minutes=minutes, target_end=target_end)
-                self.notifier.info("Mise en vente simulée", label, durée=f"{minutes} min")
+                if row["bid_id"]:  # positions : message immédiat ; doublons : bilan du soir
+                    self.notifier.info("Mise en vente simulée", label, durée=f"{minutes} min")
             elif result.ok:
                 auction_id = await self._listing_auction_id(result.payload, row["card_id"])
                 await self.db.update_listing(row["id"], status="posted", posted_at=utcnow(), duration_minutes=minutes,
                                              target_end=target_end, auction_id=auction_id)
-                self.notifier.info("Carte mise en vente", label, durée=f"{minutes} min")
+                if row["bid_id"]:
+                    self.notifier.info("Carte mise en vente", label, durée=f"{minutes} min")
+                else:
+                    self.log.info("doublon mis en vente : %s (%d min)", label, minutes)
             else:
                 payload = result.payload if isinstance(result.payload, dict) else {}
                 error = payload.get("error") or payload.get("message") or f"HTTP {result.status}"

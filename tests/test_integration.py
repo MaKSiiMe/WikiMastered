@@ -227,7 +227,10 @@ async def test_pack_opener_learns_stock_and_backs_off_when_empty(tmp_path):
     await opener.setup()
     await opener._open_batch()
     assert stock["n"] == 0 and opener.state.remaining == 0
-    assert sum(1 for _, title in notifier.sent if title == "Tirage remarquable !") == 2
+    # Un seul message pour la session : 2 boosters, avec les 2 tirages remarquables (L shiny).
+    titles = [t for _, t in notifier.sent if t != "Première réponse réelle : open_pack"]
+    assert titles == ["Boosters ouverts : tirage remarquable !"]
+    assert (await db.report(datetime.now(timezone.utc) - timedelta(hours=1)))["boosters_ouverts"] == 2
     # Stock vide sans date fraîche : la prochaine tentative attend une période complète.
     await opener._open_batch()
     wait = seconds_until_stock(opener.state, 1, opener.period, datetime.now(timezone.utc))

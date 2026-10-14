@@ -114,6 +114,8 @@ class PackOpener(Worker):
 
     async def _open_batch(self) -> None:
         opened = 0
+        cards_pulled = 0
+        highlights: list[str] = []
         rate_retries = 0
         fresh_regen = False
         while opened <= self.settings.pack_max_stock:
@@ -163,7 +165,8 @@ class PackOpener(Worker):
                 break
 
             opened += 1
-            await self._record(pulled, pack.packs_remaining)
+            cards_pulled += len(pulled)
+            highlights += await self._record(pulled)
             if not pack.packs_remaining:
                 break
             await asyncio.sleep(random.uniform(self.settings.pack_between_opens_min_seconds,
@@ -175,6 +178,12 @@ class PackOpener(Worker):
             self.state.last_regen_at = utcnow()
         if opened:
             self.log.info("%d paquet(s) ouvert(s), stock restant : %s", opened, self.state.remaining)
+            summary = f"{opened} booster(s), {cards_pulled} carte(s), stock restant {self.state.remaining}"
+            if highlights:
+                self.notifier.success("Boosters ouverts : tirage remarquable !", summary + "\n" + "\n".join(highlights),
+                                      live=self.live)
+            else:
+                self.notifier.info("Boosters ouverts", summary, live=self.live)
         await self._save()
 
     async def _pause_for_verification(self) -> None:
@@ -190,9 +199,11 @@ class PackOpener(Worker):
         self.state.paused_until = recheck
         await self._save()
 
-    async def _record(self, pulled: list, remaining: int | None) -> None:
+    async def _record(self, pulled: list) -> list[str]:
+        """Enregistre les cartes d'un paquet ; renvoie les tirages remarquables (UR, L, Shiny)."""
         notify_rarities = set(self.settings.pack_notify_rarities)
         highlights = []
+        await self.db.record_pack_open(len(pulled))
         for card, copy in pulled:
             shiny = bool(copy and copy.is_shiny) or card.is_shiny
             await self.db.record_pull(
@@ -202,5 +213,4 @@ class PackOpener(Worker):
             if card.rarity in notify_rarities or (shiny and self.settings.pack_notify_shiny):
                 highlights.append(f"**{card.rarity}**{' ✨ Shiny' if shiny else ''} — {card.wikipedia_title}")
         self.log.info("paquet ouvert : %s", ", ".join(f"{c.rarity}:{c.wikipedia_title}" for c, _ in pulled))
-        if highlights:
-            self.notifier.success("Tirage remarquable !", "\n".join(highlights), stock=remaining, live=self.live)
+        return highlights

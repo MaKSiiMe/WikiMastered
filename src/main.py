@@ -87,7 +87,7 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
         stats["balance"] = "?"
     rarities = " ".join(f"{r}:{n}" for r, n in sorted(stats.pop("pulls_by_rarity").items())) or "—"
     text = f"Tirages par rareté : {rarities}"
-    if ctx.settings.dry_run:
+    if not ctx.settings.is_live("place_bid"):  # sniper simulé : on juge la simulation
         text += "\n\n" + validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales))
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         text += "\n\n" + summary_line(await ctx.db.kv_get("collection"), targets(ctx))
@@ -171,9 +171,7 @@ async def run_bot(settings: Settings) -> None:
         if settings.collection_sets or settings.collection_titles:
             workers.append(CollectionWorker(ctx))
 
-        mode = "RÉEL" if not settings.dry_run else (
-            f"DRY RUN (écritures réelles : {', '.join(settings.live_writes)})" if settings.live_writes
-            else "DRY RUN (aucune écriture)")
+        mode = settings.mode_label
         names = ", ".join(w.name for w in workers) or "aucun"
         log.info("Démarrage en mode %s — workers : %s — joueur %s", mode, names, ctx.client.user_id or "?")
         ctx.notifier.info("Bot démarré", f"Mode {mode}\nWorkers : {names}\nSession : {ctx.client.session_status()}")
@@ -225,13 +223,21 @@ async def collection_status(settings: Settings) -> None:
         if not (settings.collection_sets or settings.collection_titles):
             print("Aucune collection configurée : ajoute COLLECTION_SETS=jours (et COLLECTION_MAX_PRICE).")
             return
+        print(f"COLLECTION_SETS = {settings.collection_sets}  COLLECTION_TITLES = {settings.collection_titles}")
         state = await refresh_collection(ctx)
+        if state["unknown_sets"]:
+            print(f"Ensemble(s) inconnu(s) : {state['unknown_sets']} — valeur attendue : jours")
         by_key = targets(ctx)
         print(summary_line(state, by_key).replace("**", ""))
         print("Manquantes : " + (", ".join(by_key.get(k, k) for k in state["missing"]) or "aucune"))
         if state["unmatched"]:
             print("Titres trouvés mais non reconnus (format différent ?) : " + ", ".join(state["unmatched"]))
         print(f"Mise maximale par carte manquante : {settings.collection_max_price} WB")
+        if state.get("tag"):
+            live = "" if settings.is_live("tag_card") else " (simulé : DRY_RUN)"
+            print(f"Étiquette « {state['tag']} » : {state['tagged']} ajoutée(s){live}, {state['to_tag']} restante(s)")
+        if state.get("tag_error"):
+            print(f"Étiquettes : {state['tag_error']}")
 
 
 async def check_session(settings: Settings) -> None:

@@ -106,8 +106,8 @@ class WikiMastersAPI:
     async def open_pack(self) -> MutationResult:
         return await self.client.mutate("open_pack")
 
-    async def place_bid(self, auction_id: str, amount: int) -> MutationResult:
-        return await self.client.mutate("place_bid", auction_id=auction_id, amount=int(amount))
+    async def place_bid(self, auction_id: str, amount: int, *, live: bool | None = None) -> MutationResult:
+        return await self.client.mutate("place_bid", live=live, auction_id=auction_id, amount=int(amount))
 
     async def create_listing(self, owned_card_id: str, base_amount: int, duration_minutes: int) -> MutationResult:
         return await self.client.mutate(

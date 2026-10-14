@@ -197,3 +197,44 @@ async def test_sniper_completes_collection_one_auction_at_a_time(tmp_path):
     await sniper._load_collection()
     assert "14 octobre" not in sniper._collection_missing  # gagnée : plus recherchée
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_days_get_the_date_tag(tmp_path):
+    import json as jsonlib
+
+    from src.core.database import Database
+    from src.core.pricing import PriceService
+    from src.workers.base import Context
+    from src.workers.collection import refresh
+    from tests.test_session import cookie_for
+
+    inserted = []
+
+    def day(oid, title, tags=(), starred=False):
+        row = copy(oid, f"card-{title}", title)
+        row.update(tags=[{"id": 1, "name": t} for t in tags], starred=starred)
+        return row
+
+    def handler(request):
+        if request.url.host.endswith("supabase.co"):
+            assert request.headers["apikey"] == "anon-key" and request.headers["authorization"] == "Bearer a1"
+            if request.method == "GET":
+                assert request.url.path == "/rest/v1/tags"
+                return httpx.Response(200, json=[{"id": 3, "name": "Pokémon"}, {"id": 7, "name": "Date"}])
+            inserted.append(jsonlib.loads(request.content))
+            return httpx.Response(201)
+        rows = {"janvier": [day("o1", "1er janvier"), day("o2", "1er janvier", starred=True),
+                            day("o3", "2 janvier", tags=["date"])]}.get(request.url.params.get("q", ""), [])
+        return httpx.Response(200, json={"collection": rows})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, collection_sets=["Jours"],
+                                   supabase_anon_key="anon-key", wm_cookie=cookie_for("a1", "r1", 3600))
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    state = await refresh(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    assert state["owned"] == ["1 janvier", "2 janvier"] and state["unknown_sets"] == []
+    # 1er janvier : l'exemplaire favori est étiqueté ; 2 janvier l'est déjà.
+    assert inserted == [{"user_card_id": "o2", "tag_id": 7}] and state["tagged"] == 1 and state["to_tag"] == 0
+    await db.close()
