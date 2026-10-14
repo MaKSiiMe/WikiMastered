@@ -125,7 +125,7 @@ async def test_duplicates_fill_free_slots_during_the_day(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_simulated_positions_never_block_real_collection_bids(tmp_path):
+async def test_simulated_positions_never_block_real_collection_bids(tmp_path, caplog):
     """Des positions simulées qui dépassent le solde bloquent les mises simulées, pas les vraies."""
     now = datetime.now(timezone.utc)
 
@@ -163,7 +163,11 @@ async def test_simulated_positions_never_block_real_collection_bids(tmp_path):
     api = WikiMastersAPI(client)
     sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     await sniper.setup()
+    caplog.set_level("INFO", logger="worker.sniper")
     await sniper.step()
+    logged = caplog.text
+    assert "collection : 14 octobre (R) en vente, mise min 10 WB" in logged
+    assert "collection : 14 octobre à 10 WB" in logged and ": misée (collection)" in logged
     status = {r["auction_id"]: r["status"] for r in await db._all("SELECT * FROM bids WHERE auction_id <> 'vieille'")}
     assert status == {"col": "placed"}  # la vraie mise de collection passe, la position simulée non
     assert "solde ou budget du jour insuffisant 1" in sniper.recap()[0]
