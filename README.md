@@ -132,7 +132,7 @@ Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes program
 
 ## Données
 
-`data/` (volume) contient `wikimastered.db` (SQLite : historique des cotes, tirages, enchères, ventes, défausses), les logs dans `logs/bot.log` (rotation), la session et le `heartbeat` utilisé par le healthcheck Docker. Tout ce répertoire reste hors Git.
+`data/` (volume) contient `wikimastered.db` (SQLite : historique des cotes, tirages, enchères, ventes, défausses), les logs dans `logs/bot.log` (rotation), la session et le `heartbeat` utilisé par le healthcheck Docker. Tout ce répertoire reste hors Git. Après le bilan quotidien, le bot purge ce qui ne sert plus : historique des cotes de plus de 60 jours, ventes observées de plus de 120 jours, vues Wikipédia de plus de 60 jours. Enchères, ventes, tirages et défausses sont gardés.
 
 ## Développement
 

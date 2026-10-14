@@ -15,7 +15,7 @@ import contextlib
 import logging
 import signal
 import sys
-from datetime import time
+from datetime import datetime, time, timezone
 from logging.handlers import RotatingFileHandler
 
 from src.config import Settings, get_settings
@@ -109,9 +109,18 @@ def validation_text(v: dict[str, int]) -> str:
 
 
 async def report_loop(ctx: Context) -> None:
+    """Bilan quotidien, puis entretien de la base. Une erreur n'arrête jamais le bot."""
     while True:
         await sleep_until(next_local(ctx.settings.daily_report_time))
-        await daily_report(ctx)
+        try:
+            await daily_report(ctx)
+        except Exception:  # noqa: BLE001 - le bot continue sans bilan
+            log.exception("Bilan quotidien impossible")
+        try:
+            removed = await ctx.db.purge(datetime.now(timezone.utc))
+            log.info("Entretien de la base : %s", ", ".join(f"{t} -{n}" for t, n in removed.items() if n) or "rien")
+        except Exception:  # noqa: BLE001
+            log.exception("Entretien de la base impossible")
 
 
 async def heartbeat(ctx: Context) -> None:
