@@ -312,13 +312,12 @@ class AuctionSniper(Worker):
     async def portfolio(self, now: datetime) -> Portfolio:
         held = await self.db.positions_summary()
         engaged_real = sum(amount for _, amount in self._leading.values())
-        engaged_sim = await self.db.simulated_engaged_cost(now)  # 0 s'il n'y a aucune mise simulée
-        bot_engaged = sum(1 for aid in self._bot_engaged if aid in self._engaged)
+        pending = await self.db.pending_bids()  # mises pas encore réglées, même après la fin de l'enchère
         cap, room = await self._sale_capacity(now)
         return portfolio_state(
             self.settings, balance=await self._current_balance(), held_count=held["count"],
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
-            engaged_real=engaged_real, engaged_sim=engaged_sim, bot_engaged_count=bot_engaged,
+            engaged_real=engaged_real, engaged_sim=pending["sim_cost"], bot_engaged_count=pending["positions"],
             max_positions=cap, sale_room=room,
         )
 

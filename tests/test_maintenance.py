@@ -60,3 +60,25 @@ async def test_estimates_compare_same_rarity_and_shiny(tmp_path):
     assert set(await prices.observed_quote("x")) == {"C", "UR"}
     assert sorted(await db.observed_prices_since("x", now - timedelta(days=1), 5, rarity="C", shiny=False)) == [10, 12]
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_unsettled_bids_count_until_settled(tmp_path):
+    """Une mise dont l'enchère vient de finir, pas encore relue, compte toujours dans les plafonds."""
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+
+    async def bid(aid, status, amount, reason="revente ~300 WB", end=now - timedelta(minutes=5), dry_run=True):
+        await db.record_bid(auction_id=aid, card_id=aid, title=aid, rarity="C", is_shiny=False, amount=amount,
+                            reference_price=300, reason=reason, night=False, dry_run=dry_run, status=status,
+                            end_at=end)
+
+    await bid("fini", "simulated", 40)                                   # finie, pas encore relue
+    await bid("en-cours", "simulated", 60, end=now + timedelta(seconds=10))
+    await bid("reel", "placed", 80, dry_run=False)
+    await bid("col", "simulated", 15, reason="collection : carte manquante ≤ 20")
+    await bid("reglee", "sim_won", 50)                                   # réglée : compte comme position détenue
+    await bid("perdue", "outbid", 70, dry_run=False)
+    assert await db.pending_bids() == {"positions": 3, "sim_cost": 115}
+    await db.close()

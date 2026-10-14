@@ -329,10 +329,18 @@ class Database:
     async def close_position(self, bid_id: int, sale_price: int | None) -> None:
         await self.update_bid(bid_id, closed=1, sale_price=sale_price, sold_at=utcnow())
 
-    async def simulated_engaged_cost(self, now: datetime) -> int:
-        row = await self._one("SELECT COALESCE(SUM(amount), 0) AS s FROM bids WHERE status = 'simulated' "
-                              "AND end_at > ?", (iso(now),))
-        return int(row["s"]) if row else 0
+    async def pending_bids(self) -> dict[str, int]:
+        """Mises du bot pas encore réglées, enchère finie ou non : elles comptent tant que leur résultat
+        n'est pas relu (sinon, entre la fin de l'enchère et ce relevé, elles échappent aux plafonds).
+
+        `positions` : mises de positions (hors collection) ; `sim_cost` : WikiBidous des mises simulées."""
+        row = await self._one(
+            "SELECT COALESCE(SUM(reason NOT LIKE 'collection%'), 0) AS positions, "
+            "COALESCE(SUM(CASE WHEN status = 'simulated' THEN amount ELSE 0 END), 0) AS sim_cost "
+            "FROM bids b WHERE status IN ('placed', 'simulated', 'uncertain') "
+            "AND id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)")
+        return {"positions": int(row["positions"]), "sim_cost": int(row["sim_cost"])} if row else \
+            {"positions": 0, "sim_cost": 0}
 
     # --------------------------------------------------------------- ventes
     async def schedule_listing(self, *, owned_card_id: str, card_id: str, title: str, rarity: str | None,
