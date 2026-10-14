@@ -266,3 +266,20 @@ def test_trend_terms_match_card_titles():
     assert not title_matches("Décharge publique", "décharge")  # un seul mot : trop vague
     assert not title_matches("Squid Game", "squid game saison 3", exact=True)
     assert not title_matches("Game of Thrones", "squid game")
+
+
+def test_every_list_setting_accepts_csv_from_the_environment(monkeypatch):
+    """PROTECTED_TAGS=date (un seul élément, sans crochets) faisait planter le démarrage."""
+    from typing import get_origin
+
+    from src.config import Settings
+
+    lists = [name for name, f in Settings.model_fields.items() if get_origin(f.annotation) is list]
+    assert {"protected_tags", "collection_sets", "simulate", "live_writes", "achievement_milestones"} <= set(lists)
+    monkeypatch.setenv("PROTECTED_TAGS", "date")
+    monkeypatch.setenv("SIMULATE", "sniper, collection")
+    monkeypatch.setenv("ACHIEVEMENT_MILESTONES", "100,250")
+    monkeypatch.setenv("COLLECTION_TITLES", '["Paris", "Lyon"]')
+    s = Settings(_env_file=None)
+    assert s.protected_tags == ["date"] and s.simulate == ["sniper", "collection"]
+    assert s.achievement_milestones == [100, 250] and s.collection_titles == ["Paris", "Lyon"]
