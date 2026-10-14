@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -408,6 +408,29 @@ class Database:
             [(article, d, v) for d, v in views.items()],
         )
         await self.db.commit()
+
+    # ----------------------------------------------------------- entretien
+    async def purge(self, now: datetime) -> dict[str, int]:
+        """Supprime les données qui ne servent plus, pour un fonctionnement sans entretien.
+
+        Enchères, ventes, tirages et défausses sont gardés (comptabilité). Les ventes observées
+        récentes suffisent à l'estimation (médiane des 5 dernières) : les plus vieilles sont datées."""
+        def before(days: int) -> str | None:
+            return iso(now - timedelta(days=days))
+
+        rules = {
+            "price_history": ("observed_at < ?", before(60)),
+            "price_cache": ("fetched_at < ?", before(30)),
+            "observed_sales": ("ended_at < ?", before(120)),
+            "trend_alerts": ("alerted_at < ?", before(30)),
+            "pageviews": ("day < ?", f"{now - timedelta(days=60):%Y%m%d}"),
+        }
+        removed: dict[str, int] = {}
+        for table, (where, value) in rules.items():
+            cur = await self.db.execute(f"DELETE FROM {table} WHERE {where}", (value,))
+            removed[table] = cur.rowcount
+        await self.db.commit()
+        return removed
 
     # -------------------------------------------------------------- bilan
     async def report(self, since: datetime) -> dict[str, Any]:
