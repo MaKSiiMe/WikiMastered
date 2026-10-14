@@ -67,8 +67,8 @@ async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
     status = {r["auction_id"]: (r["status"], r["dry_run"]) for r in await db._all("SELECT * FROM bids")}
     assert status == {"pos": ("simulated", 1), "col": ("placed", 0)}
     assert posted == ["/api/marketplace/col/bid"]  # seule la mise de collection est partie
-    assert sniper.recap() == ["2 enchère(s) examinée(s) : misée 1 · misée (collection) 1"]
-    assert sniper.recap() == ["Aucune enchère dans la fenêtre de mise."]  # remis à zéro
+    assert sniper.recap()[1:] == ["2 enchère(s) examinée(s) : misée 1 · misée (collection) 1"]
+    assert sniper.recap()[1:] == ["Aucune enchère dans la fenêtre de mise."]  # remis à zéro
     sniper._flush_digest(now + timedelta(days=1))
     assert ("INFO", "Sniper : 2 enchères (1 placée(s), 1 simulée(s))") in notifier.sent
     assert client.user_id == ME
@@ -170,5 +170,5 @@ async def test_simulated_positions_never_block_real_collection_bids(tmp_path, ca
     assert "collection : 14 octobre à 10 WB" in logged and ": misée (collection)" in logged
     status = {r["auction_id"]: r["status"] for r in await db._all("SELECT * FROM bids WHERE auction_id <> 'vieille'")}
     assert status == {"col": "placed"}  # la vraie mise de collection passe, la position simulée non
-    assert "solde ou budget du jour insuffisant 1" in sniper.recap()[0]
+    assert "solde ou budget du jour insuffisant 1" in sniper.recap()[1]
     await db.close()

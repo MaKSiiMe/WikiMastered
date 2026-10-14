@@ -132,6 +132,11 @@ class Settings(BaseSettings):
     # --- Module D : sniper ------------------------------------------------------
     sniper_poll_min_seconds: float = 2.5
     sniper_poll_max_seconds: float = 4.0
+    # Le marché est trop gros pour lire les fins imminentes (environ 12 fins par seconde) : le sniper
+    # repère les nouvelles ventes de ces raretés (tri « recent ») et ne revend que celles-ci.
+    sniper_resale_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
+    sniper_discovery_seconds: float = 10.0  # nouvelles ventes de chaque rareté suivie, toutes les N s
+    sniper_observe_seconds: float = 30.0    # ventes tout juste terminées (prix observés), toutes les N s
     sniper_window_seconds: int = 20
     # Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais.
     sniper_min_seconds_left: int = 11
@@ -215,6 +220,7 @@ class Settings(BaseSettings):
     collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
     collection_max_price: int = 50                              # mise maximale pour une carte manquante
     collection_refresh_minutes: float = 360.0
+    collection_search_seconds: float = 10.0  # le sniper cherche un jour manquant sur le marché toutes les N s
     collection_tag: str = "date"           # étiquette ajoutée à un exemplaire de chaque carte possédée ("" = non)
     collection_tag_max_per_run: int = 60   # étiquettes posées par passage (requêtes espacées)
 
@@ -235,7 +241,7 @@ class Settings(BaseSettings):
             return _split_list(value)
         return value
 
-    @field_validator("pack_notify_rarities", "discard_rarities")
+    @field_validator("pack_notify_rarities", "discard_rarities", "sniper_resale_rarities")
     @classmethod
     def _check_rarities(cls, value: list[str]) -> list[str]:
         value = [v.upper() for v in value]
