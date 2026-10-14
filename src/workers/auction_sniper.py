@@ -24,7 +24,7 @@ from datetime import datetime, time, timedelta
 from src.config import Settings
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import utcnow
-from src.core.models import Auction, BidResult
+from src.core.models import Auction, BidResult, Card
 from src.core.notifier import Topic
 from src.core.pricing import Quote
 from src.core.text import normalize_title
@@ -522,9 +522,9 @@ class AuctionSniper(Worker):
             else:
                 winner = (auction.winner_id or auction.current_bidder_id or "").lower()
                 won = auction.status == "settled_sold" and me is not None and winner == me
-            await self._close_bid(row, won, simulated)
+            await self._close_bid(row, won, simulated, auction.card)
 
-    async def _close_bid(self, row, won: bool, simulated: bool) -> None:
+    async def _close_bid(self, row, won: bool, simulated: bool, card: Card | None = None) -> None:
         """Enregistre le résultat d'une enchère terminée ; une carte gagnée devient une position."""
         status = ("sim_won" if won else "sim_lost") if simulated else ("won" if won else "lost")
         # Un achat « collection » est gardé : ce n'est pas une position à revendre.
@@ -532,22 +532,27 @@ class AuctionSniper(Worker):
         await self.db.update_bid(row["id"], status=status, settled_at=utcnow(), closed=closed)
         self._leading.pop(row["auction_id"], None)
         self._engaged.pop(row["auction_id"], None)
-        if won and closed:
-            detail = f"{row['title']} ({row['rarity']}) pour {row['amount']} WB, gardée"
-            if simulated:
-                self.notifier.info("Collection : carte obtenue (simulé)", detail)
-            else:
-                self.notifier.success("Collection : carte obtenue !", detail)
+        if not won:
             return
-        if won:
-            ref = row["reference_price"]
-            detail = f"{row['title']} ({row['rarity']}) pour {row['amount']} WB"
-            if ref:
-                detail += f", revente visée ~{ref:.0f} WB (bénéfice ~{ref - row['amount']:.0f})"
-            if simulated:
-                self.notifier.info("Achat simulé remporté", detail)
-            else:
-                self.notifier.success("Position achetée !", detail, nuit="oui" if row["night"] else "non")
+        link = card.page_url if card else None
+        name = f"**[{row['title']}]({link})**" if link else f"**{row['title']}**"
+        look = {"thumbnail": card.image_url if card else None, "url": link}
+        if closed:
+            notify = self.notifier.info if simulated else self.notifier.success
+            title = "Collection : carte obtenue (simulé)" if simulated else "Collection : carte obtenue !"
+            notify(title, f"{name}, gardée dans la collection", topic=Topic.COLLECTION, **look,
+                   **{"rareté": row["rarity"] or "?", "prix": f"{row['amount']} WB"})
+            return
+        ref = row["reference_price"]
+        fields = {"rareté": row["rarity"] or "?", "mise": f"{row['amount']} WB"}
+        if ref:
+            fields["revente visée"] = f"~{ref:.0f} WB"
+            fields["bénéfice attendu"] = f"~{ref - row['amount']:.0f} WB"
+        fields["nuit"] = "oui" if row["night"] else "non"
+        if simulated:
+            self.notifier.info("Achat simulé remporté", name, **look, **fields)
+        else:
+            self.notifier.success("Position achetée !", name, **look, **fields)
 
     async def _reconcile(self) -> None:
         """Mises au résultat incertain (réponse perdue ou inattendue) : relues sur le serveur, jamais rejouées."""
@@ -560,7 +565,7 @@ class AuctionSniper(Worker):
             label = f"{row['title']} ({row['rarity']}), {row['amount']} WB"
             if auction.status != "active":
                 won = auction.status == "settled_sold" and leader == me
-                await self._close_bid(row, won, simulated=False)
+                await self._close_bid(row, won, simulated=False, card=auction.card)
                 verdict = "enchère remportée" if won else "enchère perdue ou mise non passée"
             elif leader == me:
                 amount = auction.current_bid or row["amount"]
