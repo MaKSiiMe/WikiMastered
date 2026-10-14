@@ -52,10 +52,10 @@ Optionnel, mais utile dès le départ :
 ```
 DISCORD_ALERT_WEBHOOK_URL=https://discord.com/api/webhooks/...
 DISCORD_MENTION=@here
-SNIPER_DAILY_BUDGET=300
-SNIPER_RARITY_CAPS={"SR": 15, "UR": 40, "L": 120}
 ACHIEVEMENT_MILESTONES=100,250,500,1000,2500,5000
 ```
+
+À ne **pas** ajouter : `SNIPER_RARITY_CAPS` (achats par rareté, contraires à la stratégie : le prix suit les tendances) et un petit `SNIPER_DAILY_BUDGET`. Une position coûte jusqu'à ~540 WB : un budget du jour de 300 bloquerait presque tous les achats.
 
 Toutes les autres variables sont décrites dans [.env.example](../.env.example). Elles s'ajoutent de la même façon.
 
