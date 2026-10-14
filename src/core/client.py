@@ -552,11 +552,15 @@ class WikiMastersClient:
         if not self._session_ok.is_set():
             return
         self._session_ok.clear()
+        hint = ("" if self.settings.supabase_anon_key else
+                "\n\nPour que ça ne se reproduise plus : ajoute SUPABASE_ANON_KEY dans la stack, avec un cookie "
+                "pris dans une fenêtre privée (docs/PORTAINER.md, « Session autonome »). Le bot renouvellera "
+                "alors sa session lui-même.")
         self.notifier.critical(
             f"Session expirée (HTTP {status})",
             "Tous les workers sont en pause.\n"
             "Copie un nouveau cookie depuis ton navigateur dans `data/session_cookie.txt` "
-            "(rechargé à chaud) ou dans WM_COOKIE puis redémarre le conteneur.",
+            "(rechargé à chaud) ou dans WM_COOKIE puis redémarre le conteneur." + hint,
             endpoint=endpoint,
         )
         if self._probe_task is None or self._probe_task.done():
