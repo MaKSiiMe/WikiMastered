@@ -25,6 +25,7 @@ from src.config import Settings
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import utcnow
 from src.core.models import Auction, BidResult
+from src.core.notifier import Topic
 from src.core.pricing import Quote
 from src.core.text import normalize_title
 from src.core.timeutils import in_window, local_dt, now_local
@@ -172,6 +173,7 @@ def is_own(auction: Auction, me: str | None) -> bool:
 
 class AuctionSniper(Worker):
     name = "sniper"
+    topic = Topic.SNIPER
     alert_after_errors = 20
 
     async def setup(self) -> None:
@@ -202,7 +204,8 @@ class AuctionSniper(Worker):
         await self._check_config()
         if not self.api.user_id:
             self.notifier.warning("Sniper : identifiant joueur inconnu",
-                                  "Renseigne WM_USER_ID pour ne jamais enchérir sur tes propres ventes.")
+                                  "Renseigne WM_USER_ID pour ne jamais enchérir sur tes propres ventes.",
+                                  topic=Topic.SYSTEM)
 
     async def _check_config(self) -> None:
         """Signale au démarrage les réglages qui contredisent la stratégie orientée capital."""
@@ -210,13 +213,14 @@ class AuctionSniper(Worker):
         if s.sniper_rarity_caps or s.sniper_shiny_cap:
             self.notifier.warning("Sniper : achats par rareté actifs",
                                   "SNIPER_RARITY_CAPS / SNIPER_SHINY_CAP achètent des cartes gardées, jamais "
-                                  "revendues. Retire ces variables si tu ne le veux pas.")
+                                  "revendues. Retire ces variables si tu ne le veux pas.", topic=Topic.SYSTEM)
         if s.sniper_daily_budget:
             budget = (await self.portfolio(utcnow())).position_budget
             if s.sniper_daily_budget < budget:
                 self.notifier.warning("Sniper : budget du jour trop petit",
                                       f"SNIPER_DAILY_BUDGET={s.sniper_daily_budget} < budget d'une position "
-                                      f"(~{budget} WB) : la plupart des achats seront bloqués. Mets 0 ou plus.")
+                                      f"(~{budget} WB) : la plupart des achats seront bloqués. Mets 0 ou plus.",
+                                      topic=Topic.SYSTEM)
 
     async def step(self) -> float:
         self._ticks += 1

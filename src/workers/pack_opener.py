@@ -23,6 +23,7 @@ from typing import Any
 
 from src.core.database import utcnow
 from src.core.models import PackOpenResult
+from src.core.notifier import Topic
 from src.core.timeutils import next_local
 from src.workers.base import Worker
 
@@ -63,6 +64,7 @@ def seconds_until_stock(state: PackState, target: int, period: timedelta, now: d
 
 class PackOpener(Worker):
     name = "packs"
+    topic = Topic.PACKS
 
     async def setup(self) -> None:
         s = self.settings

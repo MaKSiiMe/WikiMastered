@@ -25,6 +25,7 @@ import logging
 from src.core.client import ApiError
 from src.core.database import utcnow
 from src.core.models import OwnedCard
+from src.core.notifier import Topic
 from src.core.text import normalize_title
 from src.workers.base import Context, Worker
 
@@ -147,6 +148,7 @@ def summary_line(state: dict | None, targets_by_key: dict[str, str]) -> str:
 
 class CollectionWorker(Worker):
     name = "collection"
+    topic = Topic.SNIPER
 
     async def step(self) -> float:
         state = await refresh(self.ctx)
@@ -154,7 +156,7 @@ class CollectionWorker(Worker):
                       len(state["missing"]))
         if state.get("unknown_sets"):
             self.notifier.warning("Collection : ensemble inconnu", f"COLLECTION_SETS={state['unknown_sets']} : "
-                                  "valeur attendue « jours ».")
+                                  "valeur attendue « jours ».", topic=Topic.SYSTEM)
         if state.get("tagged"):
             self.notifier.info("Collection : étiquettes ajoutées",
                                f"« {state['tag']} » ajoutée à {state['tagged']} carte(s) ; reste {state['to_tag']}.")

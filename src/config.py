@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     discord_webhook_url: str = ""
     discord_alert_webhook_url: str = ""
     discord_mention: str = ""
+    # Salons par thème (facultatifs) : vides, les messages vont dans DISCORD_WEBHOOK_URL.
+    discord_webhook_sniper: str = ""   # enchères, positions achetées, cartes de collection obtenues
+    discord_webhook_sales: str = ""    # mises en vente, reventes, défausses
+    discord_webhook_packs: str = ""    # boosters ouverts
+    discord_webhook_trends: str = ""   # signaux Wikipédia et Google Trends
+    discord_webhook_report: str = ""   # bilan du soir
     daily_report_time: time = time(23, 0)
     notify_each_bid: bool = False
     notify_digest_minutes: float = 60.0
