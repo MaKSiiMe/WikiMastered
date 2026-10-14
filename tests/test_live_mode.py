@@ -67,6 +67,8 @@ async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
     status = {r["auction_id"]: (r["status"], r["dry_run"]) for r in await db._all("SELECT * FROM bids")}
     assert status == {"pos": ("simulated", 1), "col": ("placed", 0)}
     assert posted == ["/api/marketplace/col/bid"]  # seule la mise de collection est partie
+    sniper._flush_digest(now + timedelta(days=1))
+    assert ("INFO", "Sniper : 2 enchères (1 placée(s), 1 simulée(s))") in notifier.sent
     assert client.user_id == ME
     await db.close()
 

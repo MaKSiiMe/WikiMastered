@@ -191,7 +191,7 @@ class AuctionSniper(Worker):
         self._engaged: dict[str, datetime] = {}
         # Enchères engagées par le bot lui-même (pour le décompte des positions).
         self._bot_engaged: set[str] = set(self._leading)
-        self._digest: list[str] = []
+        self._digest: list[tuple[bool, str]] = []  # (simulée, résumé)
         self._next_digest = utcnow() + timedelta(minutes=self.settings.notify_digest_minutes)
         # Tes mises manuelles (collections) : enchères et cartes que le bot ne touche jamais.
         self._manual_auctions: set[str] = set()
@@ -388,11 +388,18 @@ class AuctionSniper(Worker):
         self._next_digest = now + timedelta(minutes=self.settings.notify_digest_minutes)
         if not self._digest:
             return
-        lines, self._digest = self._digest, []
+        entries, self._digest = self._digest, []
+        simulated = sum(sim for sim, _ in entries)
+        real = len(entries) - simulated
+        mixed = simulated and real
+        lines = [f"{'[simulée] ' if mixed and sim else ''}{summary}" for sim, summary in entries]
         shown = "\n".join(lines[-15:])
         more = f"\n… et {len(lines) - 15} autre(s)" if len(lines) > 15 else ""
-        title = "Sniper : enchères simulées" if not self.settings.is_live("place_bid") else "Sniper : enchères placées"
-        self.notifier.info(f"{title} ({len(lines)})", shown + more)
+        if mixed:  # ex. mises de collection réelles, positions simulées (SIMULATE=sniper)
+            title = f"Sniper : {len(lines)} enchères ({real} placée(s), {simulated} simulée(s))"
+        else:
+            title = f"Sniper : enchères {'simulées' if simulated else 'placées'} ({len(lines)})"
+        self.notifier.info(title, shown + more)
 
     async def _remember(self, auctions: list[Auction], now: datetime) -> None:
         await self.db.upsert_auctions([{
@@ -466,7 +473,7 @@ class AuctionSniper(Worker):
             await self.db.record_bid(**common, status="simulated")
             self._engaged[auction.id] = auction.end_at
             self._bot_engaged.add(auction.id)
-            self._report_bid("Enchère simulée", summary)
+            self._report_bid("Enchère simulée", summary, simulated=True)
             return True
 
         payload = result.payload if isinstance(result.payload, dict) else {}
@@ -498,12 +505,12 @@ class AuctionSniper(Worker):
                                                      decision.profit), params, retried=True)
         return False
 
-    def _report_bid(self, title: str, summary: str) -> None:
+    def _report_bid(self, title: str, summary: str, *, simulated: bool = False) -> None:
         self.log.info("%s : %s", title, summary)
         if self.settings.notify_each_bid:
             self.notifier.info(title, summary)
         else:
-            self._digest.append(summary)
+            self._digest.append((simulated, summary))
 
     async def _settle(self) -> None:
         """Résultat des enchères échues. En DRY_RUN : gagnée si personne n'a payé plus que notre mise."""
