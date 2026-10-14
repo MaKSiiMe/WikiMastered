@@ -257,3 +257,12 @@ def test_never_bid_in_the_last_ten_seconds():
     assert not in_snipe_window(ending(25), ME, 20, NOW, min_left=11)
     s = settings()
     assert snipe_params(s, night=True).window_seconds == snipe_params(s, night=False).window_seconds == 20
+
+
+def test_trend_terms_match_card_titles():
+    from src.workers.trend_common import title_matches
+    assert title_matches("François Berléand", "françois berléand")
+    assert title_matches("Squid Game", "squid game saison 3")
+    assert not title_matches("Décharge publique", "décharge")  # un seul mot : trop vague
+    assert not title_matches("Squid Game", "squid game saison 3", exact=True)
+    assert not title_matches("Game of Thrones", "squid game")

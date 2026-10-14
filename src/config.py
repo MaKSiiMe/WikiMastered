@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     enable_sniper: bool = True
     enable_inventory: bool = True
     enable_wiki_trends: bool = True
+    enable_google_trends: bool = True
 
     # --- Module B : paquets -----------------------------------------------------
     pack_regen_minutes: float = 10.0
@@ -177,6 +178,12 @@ class Settings(BaseSettings):
     trends_max_price: int = 0   # 0 = budget d'une position (solde × ratio / places)
     trends_auto_buy: bool = False
     trends_auto_buy_max: int = 20
+    # --- Module F : Google Trends (flux RSS public) ------------------------------
+    google_trends_url: str = "https://trends.google.com/trending/rss?geo={geo}"
+    google_trends_geo: str = "FR"
+    google_trends_interval_minutes: float = 20.0  # le flux ne couvre que la dernière heure environ
+    google_trends_min_traffic: int = 0
+
     wikimedia_user_agent: str = "WikiMasteredBot/1.0 (self-hosted; configure WIKIMEDIA_USER_AGENT)"
 
     @field_validator(

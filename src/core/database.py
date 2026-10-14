@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS trend_alerts (
     auction_id TEXT PRIMARY KEY, article TEXT, alerted_at TEXT NOT NULL
 );
 
+-- Signaux de tendance (Wikipédia, Google Trends) : carte en vente au moment du signal,
+-- pour mesurer ensuite si son prix a vraiment monté.
+CREATE TABLE IF NOT EXISTS trend_signals (
+    id INTEGER PRIMARY KEY, source TEXT NOT NULL, term TEXT NOT NULL, card_id TEXT NOT NULL, title TEXT,
+    auction_id TEXT NOT NULL, min_bid INTEGER NOT NULL, end_at TEXT NOT NULL, signal_at TEXT NOT NULL,
+    UNIQUE (source, auction_id)
+);
+CREATE TABLE IF NOT EXISTS trend_terms (
+    source TEXT NOT NULL, term TEXT NOT NULL, traffic INTEGER, first_seen TEXT NOT NULL, matched INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (source, term)
+);
+
 CREATE TABLE IF NOT EXISTS pageviews (
     article TEXT NOT NULL, day TEXT NOT NULL, views INTEGER NOT NULL, PRIMARY KEY (article, day)
 );
@@ -451,6 +463,50 @@ class Database:
             (auction_id, article, iso(utcnow())),
         )
 
+    async def record_signal(self, *, source: str, term: str, card_id: str, title: str, auction_id: str,
+                            min_bid: int, end_at: datetime) -> bool:
+        """Enregistre un signal ; False s'il était déjà connu pour cette enchère."""
+        cur = await self.db.execute(
+            "INSERT OR IGNORE INTO trend_signals (source, term, card_id, title, auction_id, min_bid, end_at, signal_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (source, term, card_id, title, auction_id, min_bid, iso(end_at), iso(utcnow())),
+        )
+        await self.db.commit()
+        return cur.rowcount > 0
+
+    async def signals_since(self, since: datetime) -> list[aiosqlite.Row]:
+        return await self._all("SELECT * FROM trend_signals WHERE signal_at >= ? ORDER BY signal_at", (iso(since),))
+
+    async def term_is_new(self, source: str, term: str, traffic: int | None, now: datetime,
+                          every: float = 86400) -> bool:
+        """Vrai si le terme n'a pas été traité depuis `every` secondes (il est alors noté comme vu)."""
+        row = await self._one("SELECT first_seen FROM trend_terms WHERE source = ? AND term = ?", (source, term))
+        if row and (now - parse_iso(row["first_seen"])).total_seconds() < every:  # type: ignore[operator]
+            return False
+        await self._exec(
+            "INSERT INTO trend_terms (source, term, traffic, first_seen, matched) VALUES (?, ?, ?, ?, 0) "
+            "ON CONFLICT(source, term) DO UPDATE SET traffic = excluded.traffic, first_seen = excluded.first_seen, "
+            "matched = 0", (source, term, traffic, iso(now)))
+        return True
+
+    async def mark_term_matched(self, source: str, term: str) -> None:
+        await self._exec("UPDATE trend_terms SET matched = 1 WHERE source = ? AND term = ?", (source, term))
+
+    async def terms_stats(self, source: str, since: datetime) -> tuple[int, int]:
+        row = await self._one("SELECT COUNT(*) AS n, COALESCE(SUM(matched), 0) AS m FROM trend_terms "
+                              "WHERE source = ? AND first_seen >= ?", (source, iso(since)))
+        return (int(row["n"]), int(row["m"])) if row else (0, 0)
+
+    async def observed_final(self, auction_id: str) -> int | None:
+        row = await self._one("SELECT price FROM observed_sales WHERE auction_id = ?", (auction_id,))
+        return int(row["price"]) if row else None
+
+    async def observed_prices_between(self, card_id: str, start: datetime, end: datetime,
+                                      exclude_auction: str) -> list[int]:
+        rows = await self._all("SELECT price FROM observed_sales WHERE card_id = ? AND ended_at > ? AND ended_at <= ? "
+                               "AND auction_id != ?", (card_id, iso(start), iso(end), exclude_auction))
+        return [r["price"] for r in rows]
+
     async def pageviews_get(self, article: str, days: list[str]) -> dict[str, int]:
         marks = ",".join("?" * len(days))
         rows = await self._all(
@@ -479,6 +535,8 @@ class Database:
             "price_cache": ("fetched_at < ?", before(30)),
             "observed_sales": ("ended_at < ?", before(120)),
             "trend_alerts": ("alerted_at < ?", before(30)),
+            "trend_terms": ("first_seen < ?", before(30)),
+            "trend_signals": ("signal_at < ?", before(90)),
             "pageviews": ("day < ?", f"{now - timedelta(days=60):%Y%m%d}"),
         }
         removed: dict[str, int] = {}
