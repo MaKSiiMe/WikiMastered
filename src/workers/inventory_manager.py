@@ -113,8 +113,11 @@ def parse_selling(mine: MyBids) -> list:
 
 
 def plan_listing_time(now: datetime, start: time, end: time, durations: list[int], min_duration: int,
-                      rng: random.Random | None = None) -> tuple[datetime, int, datetime]:
-    """(heure de publication, durée en minutes, fin visée) pour finir dans la fenêtre [start, end]."""
+                      rng: random.Random | None = None, preferred: int = 360) -> tuple[datetime, int, datetime]:
+    """(heure de publication, durée en minutes, fin visée) pour finir dans la fenêtre [start, end].
+
+    Parmi les durées du site, on prend la plus proche de `preferred` : assez longue pour
+    être vue, sans bloquer une des 5 places de vente toute une journée."""
     local_now = now
     for offset in range(4):
         target = random_in_window(local_now.date() + timedelta(days=offset), start, end, rng)
@@ -125,7 +128,7 @@ def plan_listing_time(now: datetime, start: time, end: time, durations: list[int
             continue
         feasible = [(target - timedelta(minutes=d), d) for d in durations if target - timedelta(minutes=d) >= local_now]
         if feasible:
-            post_at, minutes = min(feasible)
+            post_at, minutes = min(feasible, key=lambda f: (abs(f[1] - preferred), f[0]))
             return post_at, minutes, target
     raise ValueError("aucune durée de vente ne permet de finir dans la fenêtre demandée")
 
@@ -191,7 +194,8 @@ class InventoryManager(Worker):
         s = self.settings
         if at_peak:
             return s.listing_end_window_start, s.listing_end_window_end
-        soon = now_local() + timedelta(minutes=s.listing_min_duration_minutes + 1)
+        soon = now_local() + timedelta(minutes=max(s.listing_min_duration_minutes,
+                                                   s.listing_preferred_duration_minutes) + 1)
         return soon.time(), (soon + timedelta(minutes=30)).time()
 
     async def _schedule(self, *, owned_id: str, card_id: str, title: str, rarity: str | None, price: int,
@@ -199,7 +203,8 @@ class InventoryManager(Worker):
         s = self.settings
         start, end = self._window(at_peak)
         post_at, minutes, target = plan_listing_time(now_local(), start, end, s.listing_duration_options,
-                                                     s.listing_min_duration_minutes)
+                                                     s.listing_min_duration_minutes,
+                                                     preferred=s.listing_preferred_duration_minutes)
         listing_id = await self.db.schedule_listing(
             owned_card_id=owned_id, card_id=card_id, title=title, rarity=rarity, base_amount=price,
             duration_minutes=minutes, post_at=post_at, target_end=target, reason=reason, bid_id=bid_id,
@@ -315,7 +320,8 @@ class InventoryManager(Worker):
         s = self.settings
         start, end = self._window(row["bid_id"] is None or s.position_list_at_peak)
         post_at, minutes, target = plan_listing_time(now_local() + timedelta(days=1), start, end,
-                                                     s.listing_duration_options, s.listing_min_duration_minutes)
+                                                     s.listing_duration_options, s.listing_min_duration_minutes,
+                                                     preferred=s.listing_preferred_duration_minutes)
         await self.db.update_listing(row["id"], post_at=max(post_at, now_local()), duration_minutes=minutes,
                                      target_end=target)
         self.log.info("ventes pleines : %s reportée, fin visée %s", row["title"], f"{target:%d/%m %H:%M}")
