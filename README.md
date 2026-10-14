@@ -117,8 +117,8 @@ Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes program
 - **File d'attente** : une position qui trouve une place de vente libre (5 moins tes ventes manuelles) exige le bénéfice normal. Au-delà, elle attend son tour, jusqu'à `PORTFOLIO_BUFFER` (10) positions en attente. Comme son capital reste immobilisé, elle doit rapporter au moins 50 % du budget (`PORTFOLIO_QUEUE_PROFIT_RATIO`), soit environ 270 WB. Le tout est plafonné à `PORTFOLIO_MAX_POSITIONS` (15).
 - **Tes collections** : le bot ignore toute carte sur laquelle tu mises toi-même, y compris ses autres ventes (`SNIPER_AVOID_MY_BIDS`). Les cartes que tu gagnes à la main ne sont jamais revendues par le bot.
 - **Mise** : toujours le minimum natif (`max(ceil(1,1 × mise), mise + 1)`). Les places libres vont aux plus gros bénéfices attendus.
-- **Prolongation** : le site prolonge de 60 s une enchère disputée dans ses 10 dernières secondes. Le bot ré-évalue l'enchère à chaque passage, sans dépasser son plafond.
-- **Nuit** (02:00–07:30) : paramètres plus larges.
+- **Moment de la mise** : entre 20 et 11 s avant la fin (`SNIPER_WINDOW_SECONDS`, `SNIPER_MIN_SECONDS_LEFT`), de jour comme de nuit. Le site prolonge de 60 s une enchère disputée dans ses 10 dernières secondes : le bot n'y mise jamais. Si quelqu'un d'autre la prolonge, l'enchère repasse dans la fenêtre et le bot peut miser à nouveau, sans dépasser son plafond.
+- **Nuit** (02:00–07:30) : mise jusqu'à 80 % de l'estimation au lieu de 70 %.
 
 **Ventes.** Le site accepte des durées de 10 min, 30 min, 1 h, 3 h, 6 h, 12 h ou 24 h. Le bot choisit celle qui se rapproche le plus de 6 h (`LISTING_PREFERRED_DURATION_MINUTES`) tout en finissant entre 20:00 et 22:30 : il publie vers 14 h-16 h 30 pour une fin à l'heure de pointe. Si aucune place n'est libre au moment de publier, la vente est reportée au lendemain. Avec une fin à l'heure de pointe, chaque place sert une fois par jour ; `POSITION_LIST_AT_PEAK=false` vend plus vite (une place toutes les 6 h environ), mais hors des heures de pointe.
 

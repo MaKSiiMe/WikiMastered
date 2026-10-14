@@ -112,7 +112,7 @@ async def test_dry_run_never_sends_writes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sniper_step_simulates_deal_bid(tmp_path):
-    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
     auction = {
         "id": "33333333-3333-3333-3333-333333333333",
         "card": {"id": "44444444-4444-4444-4444-444444444444", "wikipedia_title": "Ada Lovelace", "rarity": "C"},
@@ -158,7 +158,7 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sniper_respects_concurrent_bid_limit(tmp_path):
-    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
 
     def auction(i: int, base: int) -> dict:
         return {
@@ -297,7 +297,7 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
     state = {"ended": False}
 
     def auction(**kw) -> dict:
-        end = datetime.now(timezone.utc) + (timedelta(seconds=-120) if state["ended"] else timedelta(seconds=8))
+        end = datetime.now(timezone.utc) + (timedelta(seconds=-120) if state["ended"] else timedelta(seconds=15))
         return {"id": auction_id, "card": {"id": "c1", "wikipedia_title": "Mème", "rarity": "C"},
                 "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
                 "end_at": end.isoformat(), "base_amount": 100, "current_bid": None, "current_bidder_id": None, **kw}
@@ -371,7 +371,7 @@ async def test_ended_auctions_become_observed_sales(tmp_path):
 @pytest.mark.asyncio
 async def test_bids_unlimited_by_default(tmp_path):
     """Le site n'impose pas de limite aux mises : 94 enchères manuelles en cours ne bloquent rien."""
-    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
     calls = []
 
     def handler(request):
@@ -411,7 +411,7 @@ async def test_bids_unlimited_by_default(tmp_path):
 @pytest.mark.asyncio
 async def test_sniper_never_takes_cards_you_bid_on(tmp_path):
     """Tes mises manuelles (collections) : le bot ignore ces enchères et les autres ventes de la même carte."""
-    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
 
     def auction(aid: str, card: str) -> dict:
         return {"id": aid, "card": {"id": card, "wikipedia_title": card, "rarity": "C"},
@@ -492,7 +492,7 @@ async def test_first_rate_limit_alert_even_right_after_boot(tmp_path, monkeypatc
 @pytest.mark.asyncio
 async def test_daily_budget_applies_in_dry_run(tmp_path):
     """La simulation respecte SNIPER_DAILY_BUDGET et prévient s'il est sous le budget d'une position."""
-    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
     market = [{"id": f"33333333-3333-3333-3333-{i:012d}", "card": {"id": f"c{i}", "wikipedia_title": f"C{i}",
                "rarity": "C"}, "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
                "end_at": end, "base_amount": 100, "current_bid": None, "current_bidder_id": None} for i in range(3)]

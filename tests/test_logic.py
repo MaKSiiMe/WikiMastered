@@ -159,7 +159,7 @@ def test_portfolio_counts_engaged_capital():
 def test_night_mode_is_more_aggressive():
     s = settings(sniper_rarity_caps={"UR": 40}, sniper_daily_budget=300, night_budget_bonus=200)
     day, night = snipe_params(s, False), snipe_params(s, True)
-    assert night.deal_ratio > day.deal_ratio and night.window_seconds > day.window_seconds
+    assert night.deal_ratio > day.deal_ratio and night.window_seconds == day.window_seconds  # même timing de mise
     assert night.rarity_caps["UR"] > day.rarity_caps["UR"] and night.budget > day.budget
     assert snipe_params(settings(), True).budget == 0  # pas de budget quotidien par défaut
 
@@ -247,3 +247,13 @@ def test_parse_curl_from_devtools():
     assert parsed.cookie == "sb-x-auth-token=abc; other=1" and parsed.extra_headers == {"x-custom": "1"}
     spec = to_endpoint(parsed, ["auction_id"])
     assert spec["path"] == "/api/marketplace/{auction_id}/bid" and spec["json"] == {"amount": 12}
+
+
+def test_never_bid_in_the_last_ten_seconds():
+    """Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : fenêtre 20 s → 11 s."""
+    ending = lambda s: auction(end_at=(NOW + timedelta(seconds=s)).isoformat())  # noqa: E731
+    assert in_snipe_window(ending(18), ME, 20, NOW, min_left=11)
+    assert not in_snipe_window(ending(10), ME, 20, NOW, min_left=11)
+    assert not in_snipe_window(ending(25), ME, 20, NOW, min_left=11)
+    s = settings()
+    assert snipe_params(s, night=True).window_seconds == snipe_params(s, night=False).window_seconds == 20

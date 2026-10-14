@@ -104,6 +104,8 @@ class Settings(BaseSettings):
     sniper_poll_min_seconds: float = 2.5
     sniper_poll_max_seconds: float = 4.0
     sniper_window_seconds: int = 20
+    # Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais.
+    sniper_min_seconds_left: int = 11
     # Achat « collection » par rareté : désactivé (le prix suit les tendances, pas la rareté).
     sniper_rarity_caps: dict[str, int] = Field(default_factory=dict)
     sniper_shiny_cap: int = 0
@@ -122,7 +124,7 @@ class Settings(BaseSettings):
     night_end: time = time(7, 30)
     night_deal_ratio_max: float = 0.80
     night_caps_multiplier: float = 1.3
-    night_window_seconds: int = 45
+    night_window_seconds: int = 20
     night_budget_bonus: int = 0
 
     # --- Capital : positions achetées pour être revendues ----------------------------
