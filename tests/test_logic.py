@@ -108,6 +108,7 @@ def test_rarity_cap_and_deal_rules():
     assert decide(common, params, Quote(20.0, 5), 3).ceiling == 9      # floor(20 × 0,45) = 9
     assert decide(common, params, Quote(19.0, 5), 3) is None          # 8 < 9
     assert decide(common, params, Quote(40.0, 1), 3) is None          # pas assez de ventes
+    assert decide(common, params, Quote(20.0, None), 3).ceiling == 9  # compte non PRO : nombre inconnu
 
 
 def test_night_mode_is_more_aggressive():

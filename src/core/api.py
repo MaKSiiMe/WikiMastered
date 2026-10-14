@@ -7,8 +7,8 @@ from typing import Any, AsyncIterator
 
 from src.core.client import MutationResult, WikiMastersClient
 from src.core.models import (
-    Auction, AuctionDetail, Balance, CollectionPage, CollectionStats, MarketPage, OwnedCard,
-    SalesSummary, TradesList,
+    Auction, AuctionDetail, Balance, CollectionPage, CollectionStats, MarketPage, MyListingsInfo,
+    OwnedCard, SalesSummary, TradesList,
 )
 
 log = logging.getLogger(__name__)
@@ -65,8 +65,8 @@ class WikiMastersAPI:
     async def auction(self, auction_id: str) -> Auction:
         return AuctionDetail.model_validate(await self.client.get("auction_detail", auction_id=auction_id)).auction
 
-    async def sales_summary(self, card_id: str) -> SalesSummary:
-        return SalesSummary.model_validate(await self.client.get("sales_summary", card_id=card_id))
+    async def sales_summary(self, card_id: str, *, wait: bool = True) -> SalesSummary:
+        return SalesSummary.model_validate(await self.client.get("sales_summary", card_id=card_id, wait=wait))
 
     async def active_trades(self) -> TradesList:
         return TradesList.model_validate(await self.client.get("active_trades"))
@@ -74,17 +74,21 @@ class WikiMastersAPI:
     async def my_listings_raw(self) -> Any:
         return await self.client.get("my_listings")
 
+    async def listing_slots(self) -> tuple[int, int]:
+        """(ventes en cours, maximum simultané). Le site limite à 5 ventes (relevé du 14/10/2026)."""
+        info = MyListingsInfo.model_validate(await self.my_listings_raw())
+        return info.sellingCount, info.maxConcurrentAuctions or 5
+
     async def protected_owned_ids(self, owned_ids: set[str]) -> set[str]:
-        """Exemplaires engagés dans un échange en attente ou déjà en vente : jamais vendus ni défaussés."""
+        """Exemplaires engagés dans un échange en attente : jamais vendus ni défaussés.
+
+        /api/marketplace/mine ne renvoie que des compteurs : les exemplaires déjà en vente
+        sont suivis par la base locale (table listings) et refusés par le serveur sinon."""
         protected: set[str] = set()
         for trade in (await self.active_trades()).trades:
             if trade.status == "pending":
                 protected.update(i.user_card_id for i in trade.items if i.user_card_id)
-        # Comme KZ bridge/marketplace.js : la structure de /mine n'est pas documentée,
-        # on cherche donc les identifiants d'exemplaires dans le texte de la réponse.
-        mine_text = str(await self.my_listings_raw())
-        protected.update(oid for oid in owned_ids if oid in mine_text)
-        return protected
+        return protected & owned_ids
 
     # ------------------------------------------------------------ écriture
     async def open_pack(self) -> MutationResult:

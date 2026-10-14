@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
 from src.config import Settings
-from src.core.client import UncertainMutation
+from src.core.client import RateLimited, UncertainMutation
 from src.core.database import utcnow
 from src.core.models import Auction, BidResult
 from src.core.pricing import Quote
@@ -158,7 +158,15 @@ class AuctionSniper(Worker):
             if last["status"] in ("placed", "outbid") and not self.settings.sniper_allow_rebid:
                 return
 
-        quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity)
+        # La cote n'est demandée que si le plafond de rareté ne suffit pas : la route des
+        # cotes est limitée par le site, et le sniper ne doit jamais attendre qu'elle se libère.
+        cap = rarity_ceiling(auction, params)
+        quote = None
+        if cap is None or auction.min_bid > cap:
+            try:
+                quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False)
+            except RateLimited:
+                quote = None
         decision = decide(auction, params, quote, self.settings.price_min_sales)
         if decision is None:
             return
@@ -233,7 +241,8 @@ class AuctionSniper(Worker):
             if auction.status == "active":
                 await self.db.update_bid(row["id"], end_at=auction.end_at)  # prolongée
                 continue
-            won = auction.status == "settled_sold" and me is not None and (auction.current_bidder_id or "").lower() == me
+            winner = (auction.winner_id or auction.current_bidder_id or "").lower()
+            won = auction.status == "settled_sold" and me is not None and winner == me
             await self.db.update_bid(row["id"], status="won" if won else "lost", settled_at=utcnow())
             self._leading.pop(row["auction_id"], None)
             if won:

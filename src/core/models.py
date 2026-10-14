@@ -103,6 +103,8 @@ class Auction(_Model):
     base_amount: int
     current_bid: int | None = None
     current_bidder_id: str | None = None
+    winner_id: str | None = None
+    final_price: int | None = None
     snapshot_rarity: str | None = None
     is_shiny: bool = False
 
@@ -216,4 +218,12 @@ class TradesList(_Model):
 
 
 class MyBids(_Model):
-    bidding: list[Any] = []
+    """/api/marketplace?mine=1 : réponse réelle du 14/10/2026 = { auctions, selling, hasMore }."""
+    auctions: list[Any] = []
+    selling: list[Any] = []
+
+
+class MyListingsInfo(_Model):
+    """/api/marketplace/mine : seulement des compteurs (relevé du 14/10/2026)."""
+    sellingCount: int = 0
+    maxConcurrentAuctions: int | None = None

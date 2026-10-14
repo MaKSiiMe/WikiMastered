@@ -156,8 +156,9 @@ class InventoryManager(Worker):
         groups, excluded, quotes, total = await self.snapshot()
         report: dict = {}
         if list_cards:
-            report["listed"] = await self.schedule_sales(select_for_sale(groups, quotes, excluded, self.settings))
+            # Les reventes d'arbitrage passent en premier : les places de vente sont limitées.
             report["relisted"] = await self.schedule_arbitrage(groups, excluded)
+            report["listed"] = await self.schedule_sales(select_for_sale(groups, quotes, excluded, self.settings))
         if discard:
             report["discard"] = await self.discard(groups, quotes, excluded, total)
         return report
@@ -176,10 +177,17 @@ class InventoryManager(Worker):
                           owned.title, owned.rarity, price, f"{post_at:%d/%m %H:%M}", f"{target:%d/%m %H:%M}")
         return bool(listing_id)
 
+    async def free_slots(self) -> int:
+        selling, maximum = await self.api.listing_slots()
+        return max(0, maximum - selling - await self.db.pending_listings_count())
+
     async def schedule_sales(self, candidates: list[SaleCandidate]) -> int:
         s = self.settings
         count = 0
-        for c in candidates[: s.sell_max_listings_per_run]:
+        slots = min(s.sell_max_listings_per_run, await self.free_slots())
+        if candidates and not slots:
+            self.log.info("aucune place de vente libre (%d candidat(s) en attente)", len(candidates))
+        for c in candidates[:slots]:
             if await self._schedule(c.owned, c.price, f"cote {c.average:.0f}", s.listing_end_window_start,
                                     s.listing_end_window_end):
                 count += 1
@@ -193,7 +201,10 @@ class InventoryManager(Worker):
         count = 0
         center = datetime.combine(now_local().date(), s.arbitrage_relist_end_time)
         start, end = (center - timedelta(minutes=10)).time(), (center + timedelta(minutes=10)).time()
+        slots = await self.free_slots()
         for bid in await self.db.won_unlisted_night_bids():
+            if count >= slots:
+                break
             copies = [c for c in groups.get(bid["card_id"], []) if not c.starred and c.id not in excluded
                       and c.rarity == bid["rarity"]]
             if not copies:
@@ -207,7 +218,15 @@ class InventoryManager(Worker):
         return count
 
     async def post_due_listings(self) -> None:
-        for row in await self.db.due_listings(utcnow()):
+        due = await self.db.due_listings(utcnow())
+        if not due:
+            return
+        selling, maximum = await self.api.listing_slots()
+        for row in due:
+            if selling >= maximum:
+                await self._postpone(row)
+                continue
+            selling += 1
             minutes = row["duration_minutes"]
             if not self.settings.listing_duration_options and row["target_end"]:
                 # Publication en retard (bot arrêté...) : on vise toujours la même heure de fin.
@@ -230,6 +249,16 @@ class InventoryManager(Worker):
                 error = payload.get("error") or payload.get("message") or f"HTTP {result.status}"
                 await self.db.update_listing(row["id"], status="failed", error=str(error)[:300])
                 self.notifier.warning("Mise en vente refusée", f"{label} : {error}")
+
+    async def _postpone(self, row) -> None:
+        """Plus de place de vente : on vise la même fenêtre de fin, le jour suivant."""
+        s = self.settings
+        post_at, minutes, target = plan_listing_time(now_local() + timedelta(days=1), s.listing_end_window_start,
+                                                     s.listing_end_window_end, s.listing_duration_options,
+                                                     s.listing_min_duration_minutes)
+        await self.db.update_listing(row["id"], post_at=max(post_at, now_local()), duration_minutes=minutes,
+                                     target_end=target)
+        self.log.info("ventes pleines : %s reportée, fin visée %s", row["title"], f"{target:%d/%m %H:%M}")
 
     # ------------------------------------------------------------ défausse
     async def discard(self, groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],

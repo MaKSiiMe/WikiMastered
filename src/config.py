@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     pack_verification_recheck_minutes: float = 30.0
 
     # --- Cotes ------------------------------------------------------------------
-    price_cache_ttl_minutes: float = 30.0
+    price_cache_ttl_minutes: float = 180.0
     price_min_sales: int = 3
 
     # --- Module D : sniper ------------------------------------------------------
@@ -119,7 +119,7 @@ class Settings(BaseSettings):
     sell_min_value: int = 15
     sell_keep_copies: int = 1
     sell_price_multiplier: float = 1.0
-    sell_max_listings_per_run: int = 20
+    sell_max_listings_per_run: int = 5
     listing_end_window_start: time = time(20, 0)
     listing_end_window_end: time = time(22, 30)
     listing_duration_options: IntList = Field(default_factory=list)
