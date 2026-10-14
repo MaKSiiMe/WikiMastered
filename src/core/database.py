@@ -74,6 +74,22 @@ CREATE TABLE IF NOT EXISTS pageviews (
 """
 
 
+# Colonnes ajoutées après la première version : migrées au démarrage sur une base existante.
+MIGRATIONS: list[tuple[str, str, str]] = [
+    ("bids", "closed", "INTEGER NOT NULL DEFAULT 0"),
+    ("bids", "sale_price", "INTEGER"),
+    ("bids", "sold_at", "TEXT"),
+    ("listings", "bid_id", "INTEGER"),
+    ("listings", "auction_id", "TEXT"),
+    ("listings", "sale_price", "INTEGER"),
+    ("listings", "settled_at", "TEXT"),
+    ("listings", "relist_count", "INTEGER NOT NULL DEFAULT 0"),
+]
+
+HELD = "status IN ('won', 'sim_won') AND closed = 0"
+LISTING_OPEN = "('scheduled', 'posted', 'simulated')"
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -100,6 +116,11 @@ class Database:
         self._db = await aiosqlite.connect(self.path)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
+        for table, column, decl in MIGRATIONS:
+            async with self._db.execute(f"PRAGMA table_info({table})") as cur:
+                existing = {row[1] for row in await cur.fetchall()}
+            if column not in existing:
+                await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         await self._db.commit()
 
     async def close(self) -> None:
@@ -149,8 +170,8 @@ class Database:
 
     async def price_put(self, card_id: str, summary: dict[str, tuple[float | None, int | None]]) -> None:
         now = iso(utcnow())
-        # Ligne sentinelle "*" : une carte sans aucune vente reste en cache.
-        rows = summary or {"*": (None, None)}
+        # Ligne sentinelle "_" : une carte sans aucune vente reste en cache.
+        rows = summary or {"_": (None, None)}
         await self.db.execute("DELETE FROM price_cache WHERE card_id = ?", (card_id,))
         await self.db.executemany(
             "INSERT INTO price_cache (card_id, rarity, average, sales_count, fetched_at) VALUES (?, ?, ?, ?, ?)",
@@ -189,6 +210,9 @@ class Database:
         values = [iso(v) if isinstance(v, datetime) else v for v in fields.values()]
         await self._exec(f"UPDATE bids SET {cols} WHERE id = ?", (*values, bid_id))
 
+    async def get_bid(self, bid_id: int) -> aiosqlite.Row | None:
+        return await self._one("SELECT * FROM bids WHERE id = ?", (bid_id,))
+
     async def placed_bids(self) -> list[aiosqlite.Row]:
         return await self._all("SELECT id, auction_id, amount FROM bids WHERE status = 'placed'")
 
@@ -203,7 +227,7 @@ class Database:
     async def bids_to_settle(self, before: datetime, limit: int = 3) -> list[aiosqlite.Row]:
         """Dernière mise confirmée de chaque enchère échue, à vérifier sur le serveur."""
         return await self._all(
-            "SELECT * FROM bids b WHERE status = 'placed' AND end_at < ? AND id = "
+            "SELECT * FROM bids b WHERE status IN ('placed', 'simulated') AND end_at < ? AND id = "
             "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id) ORDER BY end_at LIMIT ?",
             (iso(before), limit),
         )
@@ -218,32 +242,66 @@ class Database:
         )
         return int(row["s"]) if row else 0
 
-    async def won_unlisted_night_bids(self) -> list[aiosqlite.Row]:
+    # ------------------------------------------------------------ positions
+    async def positions_summary(self) -> dict[str, int]:
+        """Positions détenues (achetées, pas encore revendues) : nombre et coût, réelles / simulées."""
+        rows = await self._all(f"SELECT dry_run, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS cost "
+                               f"FROM bids WHERE {HELD} GROUP BY dry_run")
+        out = {"count": 0, "real_cost": 0, "sim_cost": 0}
+        for r in rows:
+            out["count"] += r["n"]
+            out["sim_cost" if r["dry_run"] else "real_cost"] += r["cost"]
+        return out
+
+    async def positions_to_list(self) -> list[aiosqlite.Row]:
         return await self._all(
-            "SELECT * FROM bids WHERE status = 'won' AND night = 1 AND relisted = 0 AND dry_run = 0"
+            f"SELECT * FROM bids b WHERE {HELD} AND NOT EXISTS (SELECT 1 FROM listings l "
+            f"WHERE l.bid_id = b.id AND l.status IN {LISTING_OPEN}) ORDER BY settled_at"
         )
+
+    async def close_position(self, bid_id: int, sale_price: int | None) -> None:
+        await self.update_bid(bid_id, closed=1, sale_price=sale_price, sold_at=utcnow())
+
+    async def simulated_engaged_cost(self, now: datetime) -> int:
+        row = await self._one("SELECT COALESCE(SUM(amount), 0) AS s FROM bids WHERE status = 'simulated' "
+                              "AND end_at > ?", (iso(now),))
+        return int(row["s"]) if row else 0
 
     # --------------------------------------------------------------- ventes
     async def schedule_listing(self, *, owned_card_id: str, card_id: str, title: str, rarity: str | None,
                                base_amount: int, duration_minutes: int, post_at: datetime,
-                               target_end: datetime, reason: str) -> int | None:
+                               target_end: datetime, reason: str, bid_id: int | None = None,
+                               relist_count: int = 0) -> int | None:
         existing = await self._one(
-            "SELECT id FROM listings WHERE owned_card_id = ? AND status IN ('scheduled', 'posted')",
-            (owned_card_id,),
+            f"SELECT id FROM listings WHERE owned_card_id = ? AND status IN {LISTING_OPEN}", (owned_card_id,),
         )
         if existing:
             return None
         return await self._exec(
             "INSERT INTO listings (owned_card_id, card_id, title, rarity, base_amount, duration_minutes, "
-            "post_at, target_end, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)",
+            "post_at, target_end, reason, status, created_at, bid_id, relist_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?)",
             (owned_card_id, card_id, title, rarity, base_amount, duration_minutes, iso(post_at),
-             iso(target_end), reason, iso(utcnow())),
+             iso(target_end), reason, iso(utcnow()), bid_id, relist_count),
         )
 
     async def due_listings(self, now: datetime) -> list[aiosqlite.Row]:
+        # Les positions (cartes achetées pour revente) passent avant les doublons.
         return await self._all(
-            "SELECT * FROM listings WHERE status = 'scheduled' AND post_at <= ? ORDER BY post_at", (iso(now),)
+            "SELECT * FROM listings WHERE status = 'scheduled' AND post_at <= ? "
+            "ORDER BY bid_id IS NULL, post_at", (iso(now),)
         )
+
+    async def listings_to_settle(self, before: datetime) -> list[aiosqlite.Row]:
+        return await self._all(
+            "SELECT * FROM listings WHERE status IN ('posted', 'simulated') AND target_end < ? ORDER BY target_end",
+            (iso(before),),
+        )
+
+    async def simulated_active_listings(self, now: datetime) -> int:
+        row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE status = 'simulated' AND target_end > ?",
+                              (iso(now),))
+        return int(row["n"]) if row else 0
 
     async def update_listing(self, listing_id: int, **fields: Any) -> None:
         cols = ", ".join(f"{k} = ?" for k in fields)
@@ -322,6 +380,9 @@ class Database:
         )
         listings = await self._all("SELECT status, base_amount FROM listings WHERE created_at >= ?", (s,))
         discards = await self._one("SELECT COUNT(*) AS n FROM discards WHERE discarded_at >= ? AND dry_run = 0", (s,))
+        closed = await self._all("SELECT dry_run, amount, sale_price FROM bids WHERE closed = 1 AND sold_at >= ? "
+                                 "AND sale_price IS NOT NULL", (s,))
+        held = await self.positions_summary()
         by_rarity: dict[str, int] = {}
         for p in pulls:
             by_rarity[p["rarity"] or "?"] = by_rarity.get(p["rarity"] or "?", 0) + 1
@@ -336,4 +397,9 @@ class Database:
             "listings_posted": sum(1 for x in listings if x["status"] == "posted"),
             "listings_scheduled": sum(1 for x in listings if x["status"] == "scheduled"),
             "discarded": discards["n"] if discards else 0,
+            "positions_sold": sum(1 for c in closed if not c["dry_run"]),
+            "profit": sum(c["sale_price"] - c["amount"] for c in closed if not c["dry_run"]),
+            "profit_simulated": sum(c["sale_price"] - c["amount"] for c in closed if c["dry_run"]),
+            "positions_held": held["count"],
+            "capital_in_positions": held["real_cost"] + held["sim_cost"],
         }

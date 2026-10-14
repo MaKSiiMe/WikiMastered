@@ -18,7 +18,7 @@ from pydantic import BaseModel, ValidationError
 from src.core.client import ApiError
 from src.core.models import (
     Auction, AuctionDetail, Balance, CollectionPage, CollectionStats, MarketPage, MyBids, OwnedCard,
-    SalesSummary, TradesList,
+    SaleRow, SalesHistory, SalesSummary, TradesList,
 )
 from src.workers.base import Context
 
@@ -120,6 +120,7 @@ async def inspect(ctx: Context, out_dir: str | None = None) -> None:
         card_id = first.get("card_id") or (first.get("card") or {}).get("id")
         if card_id:
             await probe("sales_summary", {"card_id": card_id}, SalesSummary, None, None)
+            await probe("sales_history", {"card_id": card_id}, SalesHistory, SaleRow, "recent")
     if ctx.client.endpoints.has("pack_status"):
         await probe("pack_status", {}, None, None, None)
     print(f"Réponses brutes enregistrées dans {out}/ (contiennent des données de ton compte).")

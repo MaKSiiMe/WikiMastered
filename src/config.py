@@ -93,17 +93,20 @@ class Settings(BaseSettings):
     # --- Cotes ------------------------------------------------------------------
     price_cache_ttl_minutes: float = 180.0
     price_min_sales: int = 3
+    price_recent_sales: int = 5  # estimation = médiane des N dernières ventes réelles
 
     # --- Module D : sniper ------------------------------------------------------
     sniper_poll_min_seconds: float = 2.5
     sniper_poll_max_seconds: float = 4.0
     sniper_window_seconds: int = 20
-    sniper_rarity_caps: dict[str, int] = Field(default_factory=lambda: {"SR": 15, "UR": 40, "L": 120})
-    sniper_shiny_cap: int = 50
-    sniper_deal_ratio_max: float = 0.45
-    sniper_max_bid: int = 300
-    sniper_daily_budget: int = 300
+    # Achat « collection » par rareté : désactivé (le prix suit les tendances, pas la rareté).
+    sniper_rarity_caps: dict[str, int] = Field(default_factory=dict)
+    sniper_shiny_cap: int = 0
+    sniper_deal_ratio_max: float = 0.70
+    sniper_max_bid: int = 0          # 0 = pas de plafond absolu (le budget par position s'applique)
+    sniper_daily_budget: int = 0     # 0 = pas de budget quotidien
     sniper_min_balance_reserve: int = 50
+    sniper_prefetch_seconds: float = 8.0
     sniper_allow_rebid: bool = True
     sniper_settle_grace_seconds: int = 30
     sniper_max_concurrent_bids: int = 5
@@ -111,10 +114,22 @@ class Settings(BaseSettings):
     # Arbitrage nocturne
     night_start: time = time(2, 0)
     night_end: time = time(7, 30)
-    night_deal_ratio_max: float = 0.60
+    night_deal_ratio_max: float = 0.80
     night_caps_multiplier: float = 1.3
     night_window_seconds: int = 45
-    night_budget_bonus: int = 200
+    night_budget_bonus: int = 0
+
+    # --- Capital : positions achetées pour être revendues ----------------------------
+    portfolio_slots: int = 5              # = places de vente simultanées du site
+    portfolio_max_positions: int = 6      # positions détenues + enchères du bot en cours
+    portfolio_capital_ratio: float = 0.9  # part des WikiBidous engagée en positions
+    portfolio_min_profit_ratio: float = 0.25  # bénéfice attendu ≥ 25 % du budget d'une position
+    portfolio_min_profit: int = 30        # plancher absolu du bénéfice attendu
+    sale_fee_pct: float = 0.0             # commission éventuelle du site sur une vente
+    position_list_ratio: float = 1.0      # prix de départ = estimation × ratio
+    position_list_at_peak: bool = True    # fin de vente dans LISTING_END_WINDOW
+    position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
+    position_max_relists: int = 2
 
     # --- Module C : inventaire --------------------------------------------------
     inventory_interval_minutes: float = 360.0
@@ -127,8 +142,6 @@ class Settings(BaseSettings):
     listing_end_window_end: time = time(22, 30)
     listing_duration_options: IntList = Field(default_factory=list)
     listing_min_duration_minutes: int = 60
-    arbitrage_relist_end_time: time = time(21, 0)
-    arbitrage_markup: float = 1.0
 
     auto_discard: bool = False
     discard_rarities: CsvList = Field(default_factory=lambda: ["C", "PC"])

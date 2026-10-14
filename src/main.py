@@ -62,7 +62,7 @@ async def build_context(settings: Settings):
     db = Database(settings.data_dir / "wikimastered.db")
     await db.connect()
     api = WikiMastersAPI(client)
-    ctx = Context(settings, client, api, db, notifier, PriceService(api, db, settings.price_cache_ttl_minutes))
+    ctx = Context(settings, client, api, db, notifier, PriceService(api, db, settings.price_cache_ttl_minutes, settings.price_recent_sales))
     try:
         yield ctx
     finally:

@@ -53,6 +53,10 @@ endpoints:
     path: /api/marketplace/cards/{card_id}/sales
     params: {scope: summary}
 
+  sales_history:                # [WP market.js] historique public des ventes d'une carte
+    method: GET                 # -> { recent: [ {final_price, ...} ], sales: [ ... ] }
+    path: /api/marketplace/cards/{card_id}/sales
+
   my_listings:                  # [KZ bridge/marketplace.js] -> { sellingCount, maxConcurrentAuctions }
     method: GET                 #   (relevé réel du 14/10/2026 : 5 ventes simultanées max)
     path: /api/marketplace/mine
