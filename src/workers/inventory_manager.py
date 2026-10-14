@@ -371,6 +371,9 @@ class InventoryManager(Worker):
     async def _listing_auction_id(self, payload, card_id: str) -> str | None:
         """Identifiant de l'enchère créée : dans la réponse, sinon dans mes ventes en cours."""
         if isinstance(payload, dict):
+            # Réponse réelle (relevé du 14/10/2026) : HTTP 201 {"auction_id": "<uuid>"}.
+            if isinstance(payload.get("auction_id"), str):
+                return payload["auction_id"]
             for candidate in (payload.get("auction"), payload.get("listing"), payload):
                 if isinstance(candidate, dict) and isinstance(candidate.get("id"), str):
                     return candidate["id"]

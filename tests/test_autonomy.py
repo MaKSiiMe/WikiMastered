@@ -116,3 +116,15 @@ async def test_position_kept_after_repeated_listing_failures(tmp_path):
     assert (await db.positions_summary())["count"] == 0
     assert ("WARNING", "Revente abandonnée") in notifier.sent
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_listing_auction_id_read_from_real_response(tmp_path):
+    """Réponse réelle de POST /api/marketplace : HTTP 201 {"auction_id": ...}, sans appel supplémentaire."""
+    def handler(request):
+        raise AssertionError(f"aucune requête attendue : {request.url}")
+
+    ctx, db, _ = await setup_ctx(tmp_path, handler)
+    found = await InventoryManager(ctx)._listing_auction_id({"auction_id": "63880418-489d"}, "c1")
+    assert found == "63880418-489d"
+    await db.close()
