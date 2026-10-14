@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
 from src.config import Settings
+from src.core import timeutils
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import utcnow
 from src.core.models import Auction, BidResult, Card
@@ -221,6 +222,10 @@ class AuctionSniper(Worker):
         self._sale_slots: tuple[datetime, int, int] | None = None  # (lu à, max, ventes en cours)
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
+        # Jours manquants d'après la dernière lecture (avant de retirer ceux que le bot a gagnés), et
+        # ventes de ces cartes déjà signalées dans les logs : id -> issue journalisée (None = repérée).
+        self._collection_wanted: set[str] = set()
+        self._collection_logged: dict[str, str | None] = {}
         await self._load_collection()
         await self._refresh_engaged()
         await self._check_config()
@@ -259,10 +264,12 @@ class AuctionSniper(Worker):
             await self._refresh_engaged()
             await self._load_collection()
 
+        self._log_collection_sales(auctions, now)
         in_window_now = [a for a in auctions if in_snipe_window(a, me, params.window_seconds, now,
                                                                 self.settings.sniper_min_seconds_left)]
         if in_window_now:
             await self._play(in_window_now, params, now)
+            self._log_collection_outcomes(in_window_now)
         else:
             await self._prefetch(auctions, params, me, now)
 
@@ -385,7 +392,36 @@ class AuctionSniper(Worker):
         state = await self.db.kv_get(COLLECTION_KV) or {}
         # Gagnées par le bot (même en simulation) : plus manquantes, même avant la prochaine lecture.
         won = {collection_key(t) for t in await self.db.collection_cards(("won", "sim_won"))}
-        self._collection_missing = set(state.get("missing", [])) - won
+        self._collection_wanted = set(state.get("missing", []))
+        self._collection_missing = self._collection_wanted - won
+
+    def _log_collection_sales(self, auctions: list[Auction], now: datetime) -> None:
+        """Journalise une fois chaque vente d'une carte de collection manquante repérée sur le marché."""
+        for a in auctions:
+            if a.id in self._collection_logged or collection_key(a.title) not in self._collection_wanted:
+                continue
+            self._collection_logged[a.id] = None
+            self.log.info("collection : %s (%s) en vente, mise min %d WB, fin %s", a.title, a.rarity, a.min_bid,
+                          f"{a.end_at.astimezone(timeutils.PARIS):%H:%M:%S}")
+        if len(self._collection_logged) > 2000:
+            self._collection_logged.clear()
+
+    def _log_collection_outcomes(self, auctions: list[Auction]) -> None:
+        """Journalise l'issue d'une carte de collection manquante dans la fenêtre de mise (une fois par issue)."""
+        for a in auctions:
+            key = collection_key(a.title)
+            if key not in self._collection_wanted:
+                continue
+            if key not in self._collection_missing:
+                outcome = "déjà gagnée par le bot (lance reset-simulation si c'était en simulation)"
+            elif self.is_manual_interest(a):
+                outcome = "tu mises sur cette carte"
+            else:
+                outcome = self._outcomes.get(a.id, "pas évaluée (mise déjà en cours sur une autre vente ?)")
+            if self._collection_logged.get(a.id) != outcome:
+                self._collection_logged[a.id] = outcome
+                self.log.info("collection : %s à %d WB, %.0f s avant la fin : %s", a.title, a.min_bid,
+                              a.seconds_left(), outcome)
 
     async def _collection_cap(self, auction: Auction) -> int | None:
         """Plafond si la carte manque à la collection et que le bot ne mise pas déjà sur une autre vente."""
