@@ -1,0 +1,97 @@
+# Registre des routes WikiMasters utilisées par le bot.
+#
+# Rien ici n'est inventé : chaque route provient du code des extensions communautaires
+# (relevé du 14/10/2026) :
+#   [KZ] qkerman/WikiMastersTools-kzfamily   (bridge/*.js, features/*.js)
+#   [WR] Lypningeuh/WikiRemastered            (extension/api.js, market-api.js, network.js,
+#                                              pack-cards.js, docs/TECHNIQUE.md)
+#   [WP] ThePommespanzer/wikimasters-plus     (extension/content.js, inject.js)
+#
+# Si le site change, corrige ici (ou importe une requête avec
+#   python -m src.tools.parse_curl --name <clé> --write  <  ma_requete.curl
+# ) puis vérifie les réponses avec : python -m src.main inspect
+#
+# Format :
+#   method   GET | POST
+#   path     chemin, avec {placeholders} (encodés URL)
+#   params   query string ; un paramètre rendu vide est omis
+#   json     corps JSON ; une valeur "{x}" seule garde le type Python de x
+#   defaults valeurs par défaut des placeholders
+
+base_url: https://www.wiki-masters.com
+
+endpoints:
+  # --- Lecture -----------------------------------------------------------------
+  balance:                      # [WR market-api.js] -> { balance: int }
+    method: GET
+    path: /api/wikibidous
+
+  collection_page:              # [WR api.js, KZ bridge/collection.js] page de 50 exemplaires, page>=0
+    method: GET                 # -> { collection: [ { id, card_id, card{...}, is_shiny, starred,
+    path: /api/my-collection    #       snapshot_rarity, user_id, tags } ], total? }
+    params: {sort: "{sort}", page: "{page}", stats: "0", q: "{q}"}
+    defaults: {sort: added, q: ""}
+
+  collection_stats:             # [WR api.js, KZ] -> { total: int, rarities: [ {rarity, count} ] }
+    method: GET
+    path: /api/my-collection/stats
+    params: {sort: "{sort}"}
+    defaults: {sort: added}
+
+  market_page:                  # [WR market-api.js] page>=1, sort: ending_soon | recent
+    method: GET                 # -> { auctions: [ {id, card{...}, seller_id, status, end_at,
+    path: /api/marketplace      #       base_amount, current_bid, current_bidder_id} ], hasMore }
+    params: {page: "{page}", limit: "{limit}", sort: "{sort}", q: "{q}"}
+    defaults: {page: 1, limit: 50, sort: ending_soon, q: ""}
+
+  auction_detail:               # [WR market-api.js, KZ bridge/marketplace.js] -> { auction: {...} }
+    method: GET
+    path: /api/marketplace/{auction_id}
+
+  sales_summary:                # [KZ bridge/prices.js, WR api.js]
+    method: GET                 # -> { summary: { "<rareté>": {average, count} }, wikipedia_title }
+    path: /api/marketplace/cards/{card_id}/sales
+    params: {scope: summary}
+
+  my_listings:                  # [KZ bridge/marketplace.js] mes ventes en cours (structure non
+    method: GET                 #   documentée : le bot y cherche seulement des identifiants)
+    path: /api/marketplace/mine
+
+  my_bids:                      # [KZ features/my-bids.js] -> { bidding: [ auction, ... ] }
+    method: GET
+    path: /api/marketplace
+    params: {page: "1", limit: "1", mine: "1"}
+
+  active_trades:                # [WR api.js] -> { trades: [ {status, items: [ {card_id,
+    method: GET                 #   user_card_id, offered_by} ] } ] }
+    path: /api/trades
+    params: {active: "1"}
+
+  # --- Écriture (bloquées tant que DRY_RUN=true, jamais rejouées) -------------------
+  open_pack:                    # [KZ bridge/packs.js, WR pack-cards.js] pas de corps
+    method: POST                # -> { cards, packs_remaining, packs_last_regen_at, owned_copies }
+    path: /api/packs/open       #    ou { rate_limited, retry_after } | { rate_limit_daily }
+                                #    | { human_verification_required }
+
+  place_bid:                    # [WR market-api.js] -> { current_bid, bidder_balance }
+    method: POST                #   erreur possible : { error, min }
+    path: /api/marketplace/{auction_id}/bid
+    json: {amount: "{amount}"}
+
+  create_listing:               # [KZ bridge/marketplace.js] card_id = id de l'EXEMPLAIRE possédé
+    method: POST
+    path: /api/marketplace
+    json: {card_id: "{owned_card_id}", base_amount: "{base_amount}", duration_minutes: "{duration_minutes}"}
+
+  bulk_discard:                 # [WR api.js, discard.js] 50 exemplaires max par lot
+    method: POST                # -> { discarded_count, failed: [] }
+    path: /api/user-cards/bulk-discard
+    json: {card_ids: "{owned_card_ids}"}
+
+  # Statut des paquets SANS en ouvrir : aucune route REST documentée (le site lit la table
+  # Supabase `profiles` : packs_remaining, packs_last_regen_at, pack_human_verified_at).
+  # Si tu la récupères dans DevTools, déclare-la ici sous le nom `pack_status` ; le bot
+  # s'en servira automatiquement (champs attendus : packs_remaining, packs_last_regen_at).
+  # pack_status:
+  #   method: GET
+  #   path: ...

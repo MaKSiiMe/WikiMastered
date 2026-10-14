@@ -1,0 +1,5 @@
+# Outils optionnels, hors conteneur (poste avec écran) et tests.
+-r requirements.txt
+playwright==1.55.0
+pytest==8.4.2
+pytest-asyncio==1.2.0
