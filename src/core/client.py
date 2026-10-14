@@ -34,7 +34,8 @@ from src.core.notifier import DiscordNotifier
 log = logging.getLogger(__name__)
 
 _RATE_HINT = re.compile(r"rate.?limit|too many requests|trop de requ[eê]tes", re.I)
-_AUTH_COOKIE = re.compile(r"^sb-[a-z0-9]+-auth-token(?:\.(\d+))?$", re.I)
+_AUTH_COOKIE = re.compile(r"^sb-([a-z0-9]+)-auth-token(?:\.(\d+))?$", re.I)
+SUPABASE_CHUNK_SIZE = 3180  # taille maximale d'un morceau de cookie [@supabase/ssr]
 # Réponses métier qui ne sont ni une perte de session ni une limitation globale.
 _DOMAIN_KEYS = {"human_verification_required", "rate_limited", "rate_limit_daily", "min"}
 
@@ -96,20 +97,69 @@ def _b64url_json(data: str) -> Any:
     return json.loads(base64.urlsafe_b64decode(data).decode("utf-8"))
 
 
-def user_id_from_cookie(header: str) -> str | None:
-    """Lit user.id dans le cookie Supabase `sb-<ref>-auth-token[.N]` [KZ my-bids-logic.js]."""
+def _auth_cookie(header: str) -> tuple[str, Any] | None:
+    """(ref du projet Supabase, contenu décodé) du cookie `sb-<ref>-auth-token[.N]` [KZ my-bids-logic.js]."""
     chunks: dict[int, str] = {}
+    ref = ""
     for name, value in parse_cookie_header(header).items():
         match = _AUTH_COOKIE.match(name)
         if match:
-            chunks[int(match.group(1) or 0)] = value
+            ref = match.group(1)
+            chunks[int(match.group(2) or 0)] = value
     if not chunks:
         return None
     raw = unquote("".join(v for _, v in sorted(chunks.items())))
     try:
-        data = _b64url_json(raw[7:]) if raw.startswith("base64-") else json.loads(raw)
+        return ref, _b64url_json(raw[7:]) if raw.startswith("base64-") else json.loads(raw)
     except (ValueError, UnicodeDecodeError):
         return None
+
+
+@dataclass
+class AuthSession:
+    """Session Supabase stockée dans le cookie : access_token, refresh_token, expires_at, user…"""
+    ref: str
+    data: dict[str, Any]
+
+    @property
+    def refresh_token(self) -> str | None:
+        token = self.data.get("refresh_token")
+        return token if isinstance(token, str) and token else None
+
+    @property
+    def expires_at(self) -> float | None:
+        exp = self.data.get("expires_at")
+        if isinstance(exp, (int, float)):
+            return float(exp)
+        try:  # sinon, `exp` du jeton d'accès (JWT)
+            return float(_b64url_json(str(self.data.get("access_token", "")).split(".")[1])["exp"])
+        except (IndexError, KeyError, TypeError, ValueError):
+            return None
+
+    def cookies(self) -> dict[str, str]:
+        """Cookies au format du site : `base64-` + JSON en base64url, découpé en `.0`, `.1`… si trop long."""
+        text = json.dumps(self.data, separators=(",", ":"), ensure_ascii=False)
+        value = "base64-" + base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+        name = f"sb-{self.ref}-auth-token"
+        if len(value) <= SUPABASE_CHUNK_SIZE:
+            return {name: value}
+        size = SUPABASE_CHUNK_SIZE
+        return {f"{name}.{i}": value[i * size:(i + 1) * size] for i in range((len(value) + size - 1) // size)}
+
+
+def auth_session_from_cookie(header: str) -> AuthSession | None:
+    parsed = _auth_cookie(header)
+    if parsed is None or not isinstance(parsed[1], dict):
+        return None
+    return AuthSession(parsed[0], parsed[1])
+
+
+def user_id_from_cookie(header: str) -> str | None:
+    """Lit user.id dans le cookie Supabase `sb-<ref>-auth-token[.N]` [KZ my-bids-logic.js]."""
+    parsed = _auth_cookie(header)
+    if parsed is None:
+        return None
+    data = parsed[1]
     if isinstance(data, dict):
         user = data.get("user")
         if isinstance(user, dict) and isinstance(user.get("id"), str):
@@ -193,6 +243,10 @@ class WikiMastersClient:
         self._session_ok.set()
         self._probe_task: asyncio.Task[None] | None = None
         self._persisted_cookie = ""
+        self._refresh_lock = asyncio.Lock()
+        self._refresh_blocked = False
+        self._last_refresh = float("-inf")
+        self._auth_cache: tuple[str, AuthSession | None] = ("", None)
 
         cookie = self._initial_cookie()
         self._set_cookies(cookie)
@@ -219,6 +273,7 @@ class WikiMastersClient:
         for name, value in parse_cookie_header(header).items():
             self._http.cookies.set(name, value, domain=self._host, path="/")
         self._persisted_cookie = header
+        self._refresh_blocked = False  # nouveau cookie : on peut de nouveau tenter un renouvellement
 
     def cookie_header(self) -> str:
         values: dict[str, str] = {}
@@ -271,6 +326,128 @@ class WikiMastersClient:
         self._persist_cookies()
         log.info("Nouveau cookie chargé depuis %s", drop)
         return True
+
+    # ------------------------------------------------------- session Supabase
+    def auth_session(self) -> AuthSession | None:
+        header = self.cookie_header()
+        if header != self._auth_cache[0]:
+            self._auth_cache = (header, auth_session_from_cookie(header))
+        return self._auth_cache[1]
+
+    @property
+    def can_refresh(self) -> bool:
+        return bool(self.settings.supabase_anon_key) and not self._refresh_blocked
+
+    def session_status(self) -> str:
+        session = self.auth_session()
+        expires = session.expires_at if session else None
+        when = (datetime.fromtimestamp(expires, timezone.utc).astimezone().strftime("%d/%m %H:%M")
+                if expires else "inconnue")
+        if not self.settings.supabase_anon_key:
+            auto = "inactif (SUPABASE_ANON_KEY vide)"
+        elif session is None or not session.refresh_token:
+            auto = "impossible (pas de refresh_token dans le cookie)"
+        else:
+            auto = "bloqué (jeton refusé)" if self._refresh_blocked else "actif"
+        return f"jeton d'accès valable jusqu'au {when}, renouvellement automatique {auto}"
+
+    def adopt_saved_session(self) -> bool:
+        """Reprend la session de data/session.json si elle est plus récente que la nôtre.
+
+        Une commande lancée dans la console (check, inventory…) est un autre processus : si elle
+        renouvelle la session, notre refresh_token est consommé et seul ce fichier a le nouveau."""
+        try:
+            saved = json.loads(self.settings.session_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        cookie = saved.get("cookie")
+        if (saved.get("env_hash") != _sha(self.settings.wm_cookie.strip()) or not cookie
+                or cookie == self._persisted_cookie):
+            return False
+        theirs, ours = auth_session_from_cookie(cookie), self.auth_session()
+        if theirs is None or theirs.expires_at is None:
+            return False
+        if ours is not None and ours.expires_at is not None and theirs.expires_at <= ours.expires_at:
+            return False
+        uid = user_id_from_cookie(cookie)
+        if uid and self.user_id and uid != self.user_id:
+            return False
+        self._set_cookies(cookie)
+        log.info("Session plus récente reprise depuis %s", self.settings.session_file)
+        return True
+
+    async def _maybe_refresh(self) -> None:
+        """Renouvelle la session avant l'expiration du jeton d'accès (comme le fait le navigateur)."""
+        if not self.can_refresh:
+            return
+        session = self.auth_session()
+        expires = session.expires_at if session else None
+        if expires is not None and expires - time.time() <= self.settings.session_refresh_margin_minutes * 60:
+            await self.refresh_session()
+
+    def _apply_auth(self, session: AuthSession) -> None:
+        prefix = f"sb-{session.ref}-auth-token"
+        for cookie in list(self._http.cookies.jar):
+            if cookie.name == prefix or cookie.name.startswith(prefix + "."):
+                self._http.cookies.jar.clear(cookie.domain, cookie.path, cookie.name)
+        for name, value in session.cookies().items():
+            self._http.cookies.set(name, value, domain=self._host, path="/")
+
+    async def refresh_session(self) -> bool:
+        """Échange le refresh_token contre une nouvelle session (API Supabase /auth/v1/token).
+
+        Le refresh_token est à usage unique : si ton navigateur utilise la même session, l'un des
+        deux finit par présenter un jeton déjà consommé et Supabase le refuse."""
+        async with self._refresh_lock:
+            if time.monotonic() - self._last_refresh < 30:
+                return True  # une autre tâche vient de le faire
+            if self.adopt_saved_session():
+                session = self.auth_session()
+                margin = self.settings.session_refresh_margin_minutes * 60
+                if session and session.expires_at and session.expires_at - time.time() > margin:
+                    return True
+            session = self.auth_session()
+            if not self.can_refresh or session is None or not session.refresh_token:
+                return False
+            key = self.settings.supabase_anon_key
+            base = (self.settings.supabase_url or f"https://{session.ref}.supabase.co").rstrip("/")
+            try:
+                resp = await self._http.post(
+                    f"{base}/auth/v1/token", params={"grant_type": "refresh_token"},
+                    json={"refresh_token": session.refresh_token},
+                    headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                )
+            except httpx.HTTPError as exc:
+                log.warning("Renouvellement de session impossible pour l'instant (%s)", type(exc).__name__)
+                return False
+            payload = _json_or_none(resp)
+            if (resp.status_code != 200 or not isinstance(payload, dict)
+                    or not payload.get("access_token") or not payload.get("refresh_token")):
+                detail = ""
+                if isinstance(payload, dict):
+                    detail = str(payload.get("error_description") or payload.get("msg")
+                                 or payload.get("error") or "")[:200]
+                log.warning("Renouvellement de session refusé : HTTP %s %s", resp.status_code, detail)
+                if 400 <= resp.status_code < 500:
+                    self._refresh_blocked = True
+                    self.notifier.critical(
+                        "Session : renouvellement refusé",
+                        f"Supabase refuse le jeton de renouvellement (HTTP {resp.status_code} {detail}).\n"
+                        "Cause la plus fréquente : ton navigateur et le bot partagent la même session. "
+                        "Donne au bot sa propre session (docs/PORTAINER.md, « Session autonome »), "
+                        "puis dépose le nouveau cookie.",
+                    )
+                return False
+            data = dict(payload)
+            if not isinstance(data.get("expires_at"), (int, float)) and isinstance(data.get("expires_in"), (int, float)):
+                data["expires_at"] = int(time.time() + data["expires_in"])
+            if "user" not in data and "user" in session.data:
+                data["user"] = session.data["user"]
+            self._apply_auth(AuthSession(session.ref, data))
+            self._last_refresh = time.monotonic()
+            self._persist_cookies()
+            log.info("Session renouvelée (%s)", self.session_status())
+            return True
 
     # ------------------------------------------------------------ espacement
     async def _acquire_slot(self) -> None:
@@ -398,8 +575,10 @@ class WikiMastersClient:
         while not self._session_ok.is_set():
             await asyncio.sleep(30)
             reloaded = self._consume_cookie_drop()
+            refreshed = not reloaded and (self.adopt_saved_session()
+                                          or (self.can_refresh and await self.refresh_session()))
             due = time.monotonic() - last_probe >= self.settings.session_recheck_minutes * 60
-            if not (reloaded or due):
+            if not (reloaded or refreshed or due):
                 continue
             last_probe = time.monotonic()
             if await self._probe():
@@ -416,8 +595,8 @@ class WikiMastersClient:
 
     def check_cookie_drop(self) -> None:
         """Appelé périodiquement : un cookie déposé est pris en compte même sans panne."""
-        if self._session_ok.is_set():
-            self._consume_cookie_drop()
+        if self._session_ok.is_set() and not self._consume_cookie_drop():
+            self.adopt_saved_session()
 
     # ------------------------------------------------------------- appels
     async def get(self, name: str, *, wait: bool = True, **values: Any) -> Any:
@@ -429,8 +608,10 @@ class WikiMastersClient:
         if self._route_forbidden.get(name, 0.0) > time.monotonic():
             raise ApiError(403, None, name, "route refusée par le site (mémorisé)")
         attempts = 0
+        refreshed = False
         while True:
             await self._session_ok.wait()
+            await self._maybe_refresh()
             paused = self.route_paused_for(name)
             if paused > 0:
                 if not wait:
@@ -451,6 +632,9 @@ class WikiMastersClient:
                 self._on_route_success(name)
                 return payload
             if kind == "auth":
+                if not refreshed and await self.refresh_session():
+                    refreshed = True
+                    continue
                 self._on_auth_lost(name, resp.status_code)
                 continue
             if kind == "route_rate":
@@ -462,6 +646,9 @@ class WikiMastersClient:
                     self._route_forbidden[name] = time.monotonic() + 6 * 3600
                     log.info("route %s refusée (session valide) : ignorée pendant 6 h", name)
                     raise ApiError(403, payload, name, "accès refusé à cette route (session valide)")
+                if not refreshed and await self.refresh_session():
+                    refreshed = True
+                    continue
                 self._on_auth_lost(name, 403)
                 continue
             attempts += 1
@@ -475,6 +662,7 @@ class WikiMastersClient:
         if not req.is_mutation:
             raise ValueError(f"{name} n'est pas une écriture")
         await self._session_ok.wait()
+        await self._maybe_refresh()
         if self.dry_run:
             log.info("[DRY RUN] %s %s %s", req.method, req.url, json.dumps(req.json, ensure_ascii=False))
             return MutationResult(0, None, dry_run=True)
@@ -494,13 +682,17 @@ class WikiMastersClient:
         if kind == "ok":
             self._on_success()
             return MutationResult(resp.status_code, payload)
+        # Refusée faute de session : rien n'a été écrit. Après renouvellement, le worker
+        # refera sa décision au passage suivant ; l'écriture n'est pas rejouée ici.
         if kind == "auth":
-            self._on_auth_lost(name, resp.status_code)
+            if not await self.refresh_session():
+                self._on_auth_lost(name, resp.status_code)
             raise SessionExpired(name)
         if kind == "forbidden":
             if await self._probe():
                 return MutationResult(resp.status_code, payload)
-            self._on_auth_lost(name, 403)
+            if not await self.refresh_session():
+                self._on_auth_lost(name, 403)
             raise SessionExpired(name)
         if kind == "route_rate":
             self._route_backoff(name, _retry_after_seconds(resp))

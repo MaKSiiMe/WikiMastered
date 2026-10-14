@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     )
     wm_user_id: str = ""
     wm_extra_headers: dict[str, str] = Field(default_factory=dict)
+    # Renouvellement autonome de la session Supabase (API standard /auth/v1/token).
+    # Clé publique « anon » : DevTools > Réseau > une requête vers *.supabase.co > en-tête `apikey`.
+    supabase_anon_key: str = ""
+    supabase_url: str = ""                  # vide = https://<ref>.supabase.co, ref lu dans le cookie
+    session_refresh_margin_minutes: float = 10.0
 
     # --- Réseau / anti-ban -----------------------------------------------------
     http_min_spacing_seconds: float = 1.5

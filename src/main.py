@@ -113,7 +113,7 @@ async def run_bot(settings: Settings) -> None:
         mode = "DRY RUN (aucune écriture)" if settings.dry_run else "RÉEL"
         names = ", ".join(w.name for w in workers) or "aucun"
         log.info("Démarrage en mode %s — workers : %s — joueur %s", mode, names, ctx.client.user_id or "?")
-        ctx.notifier.info("Bot démarré", f"Mode {mode}\nWorkers : {names}")
+        ctx.notifier.info("Bot démarré", f"Mode {mode}\nWorkers : {names}\nSession : {ctx.client.session_status()}")
 
         tasks = [asyncio.create_task(w.run(), name=w.name) for w in workers]
         tasks += [asyncio.create_task(report_loop(ctx), name="report"),
@@ -141,6 +141,7 @@ async def check_session(settings: Settings) -> None:
         balance = await asyncio.wait_for(ctx.api.balance(), timeout=120)
         stats = await ctx.api.collection_stats()
         print(f"Session OK — joueur {ctx.client.user_id or '?'} — solde {balance} WB — {stats.total} exemplaires")
+        print(f"Session : {ctx.client.session_status()}")
 
 
 def main(argv: list[str] | None = None) -> None:
