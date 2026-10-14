@@ -8,6 +8,7 @@
     python -m src.main trends [--days 7]        # les tendances auraient-elles rapporté ?
     python -m src.main packs [--hours 24]       # paquets ouverts récemment
     python -m src.main collection               # collection à compléter (jours de l'année…)
+    python -m src.main market [--pages 4]       # où sont les fins imminentes dans le marché
 """
 
 from __future__ import annotations
@@ -297,6 +298,28 @@ async def collection_status(settings: Settings) -> None:
             print(f"Étiquettes : {state['tag_error']}")
 
 
+async def market_status(settings: Settings, pages: int, sort: str) -> None:
+    """Lit quelques pages du marché (50 enchères, 3 s d'écart) et montre où sont les fins imminentes."""
+    async with build_context(settings) as ctx:
+        for page in range(1, pages + 1):
+            if page > 1:
+                await asyncio.sleep(3)
+            auctions, more = await ctx.api.market_page(page=page, sort=sort)
+            now = datetime.now(timezone.utc)
+            left = sorted(a.seconds_left(now) for a in auctions)
+            statuses: dict[str, int] = {}
+            for a in auctions:
+                statuses[a.status] = statuses.get(a.status, 0) + 1
+            span = f"fins de {left[0]:+.0f} s à {left[-1]:+.0f} s" if left else "vide"
+            print(f"page {page} : {len(auctions)} enchères, {sum(x <= 0 for x in left)} terminées, "
+                  f"{sum(0 < x <= 60 for x in left)} finissent dans la minute, {span}, statuts {statuses}, "
+                  f"hasMore={more}")
+            for a in auctions[:3] + auctions[-2:]:
+                print(f"    {a.seconds_left(now):+8.0f} s  {a.status:<8} {a.rarity or '?':<3} {a.title[:50]}")
+            if not more:
+                break
+
+
 async def check_session(settings: Settings) -> None:
     async with build_context(settings) as ctx:
         balance = await asyncio.wait_for(ctx.api.balance(), timeout=120)
@@ -314,6 +337,9 @@ def main(argv: list[str] | None = None) -> None:
     ins = sub.add_parser("inspect", help="capture les vraies réponses JSON (lecture seule)")
     ins.add_argument("--out", default=None)
     sub.add_parser("collection", help="collection à compléter : possédées / manquantes (lecture seule)")
+    mk = sub.add_parser("market", help="où sont les fins imminentes dans le marché (lecture seule)")
+    mk.add_argument("--pages", type=int, default=4)
+    mk.add_argument("--sort", default="ending_soon")
     pk = sub.add_parser("packs", help="paquets ouverts récemment (lecture seule)")
     pk.add_argument("--hours", type=int, default=24)
     tr = sub.add_parser("trends", help="mesure des signaux de tendance (lecture seule)")
@@ -345,6 +371,8 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_inspect())
     elif command == "collection":
         asyncio.run(collection_status(settings))
+    elif command == "market":
+        asyncio.run(market_status(settings, max(1, min(args.pages, 10)), args.sort))
     elif command == "packs":
         asyncio.run(packs_status(settings, args.hours))
     elif command == "trends":

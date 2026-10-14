@@ -35,8 +35,8 @@ from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers.collection import collection_key
 
 COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, pas revendues
-# Taille de la page du marché lue à chaque passage : agrandie si elle ne couvre pas la fenêtre de mise.
-MARKET_LIMITS = (50, 100, 200)
+# Le site refuse plus de 50 enchères par page (403 dès limit=100, relevé du 15/10/2026).
+MARKET_LIMIT = 50
 
 
 @dataclass(frozen=True)
@@ -228,8 +228,7 @@ class AuctionSniper(Worker):
         # ventes de ces cartes déjà signalées dans les logs : id -> issue journalisée (None = repérée).
         self._collection_wanted: set[str] = set()
         self._collection_logged: dict[str, str | None] = {}
-        self._market_limit = MARKET_LIMITS[0]
-        self._market_capped = False
+        self._market_warned_at: datetime | None = None
         await self._load_collection()
         await self._refresh_engaged()
         await self._check_config()
@@ -284,25 +283,16 @@ class AuctionSniper(Worker):
         return random.uniform(self.settings.sniper_poll_min_seconds, self.settings.sniper_poll_max_seconds)
 
     async def _market(self, window: int, now: datetime) -> list[Auction]:
-        """Enchères qui finissent bientôt, en une requête. Si la page s'arrête avant la fin de la
-        fenêtre de mise (par ex. remplie d'enchères déjà terminées), la suivante est plus grande."""
-        limit = self._market_limit
-        auctions, more = await self.api.market_page(sort="ending_soon", limit=limit)
+        """Enchères qui finissent bientôt. Signale (une fois par heure) une page qui n'atteint pas
+        la fenêtre de mise, par ex. remplie d'enchères déjà terminées."""
+        auctions, more = await self.api.market_page(sort="ending_soon", limit=MARKET_LIMIT)
         left = [a.seconds_left(now) for a in auctions]
-        beyond = next((i for i, s in enumerate(left) if s > window), None)
-        ended = sum(s <= 0 for s in left)
-        if beyond is None and more and limit < MARKET_LIMITS[-1]:
-            self._market_limit = MARKET_LIMITS[MARKET_LIMITS.index(limit) + 1]
-            self.log.info("marché : aucune des %d enchères lues ne finit dans plus de %d s (%d déjà terminées) : "
-                          "lecture de %d enchères par passage", len(auctions), window, ended, self._market_limit)
-        elif beyond is None and more and len(auctions) < limit and not self._market_capped:
-            self._market_capped = True
-            self.log.warning("marché : le site ne renvoie que %d enchères sur %d demandées, la fenêtre de mise "
-                             "n'est pas couverte (%d déjà terminées)", len(auctions), limit, ended)
-        elif beyond is not None and limit > MARKET_LIMITS[0]:
-            smaller = MARKET_LIMITS[MARKET_LIMITS.index(limit) - 1]
-            if beyond < smaller // 2:  # la page plus petite suffirait largement
-                self._market_limit = smaller
+        if more and not any(sec > window for sec in left) and (
+                self._market_warned_at is None or now - self._market_warned_at > timedelta(hours=1)):
+            self._market_warned_at = now
+            self.log.warning("marché : aucune des %d enchères lues ne finit dans plus de %d s (%d déjà terminées) : "
+                             "les fins imminentes sont hors de la page", len(auctions), window,
+                             sum(sec <= 0 for sec in left))
         return auctions
 
     async def _play(self, auctions: list[Auction], params: SnipeParams, now: datetime) -> None:
