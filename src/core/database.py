@@ -513,6 +513,43 @@ class Database:
                                    "(SELECT COUNT(*) FROM listings WHERE status = 'uncertain')"),
         }
 
+    async def recap_stats(self, since: datetime) -> dict[str, int]:
+        """Activité depuis `since`, pour le récap périodique."""
+        s = iso(since)
+
+        async def one(sql: str, params: tuple = (s,)) -> int:
+            row = await self._one(sql, params)
+            return int(row[0] or 0) if row else 0
+
+        position = "reason NOT LIKE 'collection%'"
+        return {
+            "boosters": await one("SELECT COUNT(*) FROM pack_opens WHERE opened_at >= ?"),
+            "cards": await one("SELECT COUNT(*) FROM pulls WHERE opened_at >= ?"),
+            "notable": await one("SELECT COUNT(*) FROM pulls WHERE opened_at >= ? AND (rarity IN ('UR', 'L') "
+                                 "OR is_shiny = 1)"),
+            "observed": await one("SELECT COUNT(*) FROM observed_sales WHERE ended_at >= ?"),
+            "bids_real": await one(f"SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 0 AND {position}"),
+            "bids_sim": await one(f"SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 1 AND {position}"),
+            "bids_collection": await one("SELECT COUNT(*) FROM bids WHERE placed_at >= ? "
+                                         "AND reason LIKE 'collection%'"),
+            "won": await one(f"SELECT COUNT(*) FROM bids WHERE settled_at >= ? AND status IN ('won', 'sim_won') "
+                             f"AND {position}"),
+            "won_collection": await one("SELECT COUNT(*) FROM bids WHERE settled_at >= ? "
+                                        "AND status IN ('won', 'sim_won') AND reason LIKE 'collection%'"),
+            "held": await one(f"SELECT COUNT(*) FROM bids WHERE {HELD} AND {position}", ()),
+            "posted": await one("SELECT COUNT(*) FROM listings WHERE posted_at >= ? AND status <> 'simulated' "
+                                "AND dry_run = 0"),
+            "sold": await one("SELECT COUNT(*) FROM listings WHERE settled_at >= ? AND status = 'sold'"),
+            "sold_wb": await one("SELECT COALESCE(SUM(sale_price), 0) FROM listings WHERE settled_at >= ? "
+                                 "AND status = 'sold'"),
+            "unsold": await one("SELECT COUNT(*) FROM listings WHERE settled_at >= ? AND status = 'unsold'"),
+            "sim_sold": await one("SELECT COUNT(*) FROM listings WHERE settled_at >= ? AND status = 'sim_sold'"),
+            "sim_unsold": await one("SELECT COUNT(*) FROM listings WHERE settled_at >= ? AND status = 'sim_unsold'"),
+            "signals_google": await one("SELECT COUNT(*) FROM trend_signals WHERE signal_at >= ? AND source = 'google'"),
+            "signals_wiki": await one("SELECT COUNT(*) FROM trend_signals WHERE signal_at >= ? "
+                                      "AND source = 'wikipedia'"),
+        }
+
     async def reset_simulation(self, *, apply: bool) -> dict[str, int]:
         """Mises et ventes simulées (positions, reventes, collection en simulation) : compte, et efface avec
         `apply`. Les mises et ventes réelles, les ventes observées et le reste de l'historique sont gardés."""

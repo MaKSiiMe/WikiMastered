@@ -32,6 +32,7 @@ class Topic(Enum):
     PACKS = "🎴 Paquets"          # ouvertures de boosters
     TRENDS = "📈 Tendances"       # signaux Wikipédia et Google Trends
     REPORT = "📊 Bilan"           # bilan du soir
+    RECAP = "🩺 Récap"            # récap périodique des workers
 
 
 # Limites des embeds Discord
