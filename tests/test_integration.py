@@ -112,11 +112,15 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
 
     def handler(request):
         path = request.url.path
+        if path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if path == "/api/marketplace" and "mine" in request.url.params:
+            return httpx.Response(200, json={"auctions": [], "selling": []})
         if path == "/api/marketplace":
             assert request.url.params["sort"] == "ending_soon"
             return httpx.Response(200, json={"auctions": [auction, {"broken": True}], "hasMore": False})
-        if path.endswith("/sales"):
-            return httpx.Response(200, json={"summary": {"C": {"average": 40, "count": 8}}})
+        if path.endswith("/sales") and "scope" not in request.url.params:
+            return httpx.Response(200, json={"recent": [{"final_price": p} for p in (200, 190, 210, 50, 205)]})
         raise AssertionError(f"route inattendue {path}")
 
     client, notifier = make_client(tmp_path, handler)
@@ -129,9 +133,53 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
     await sniper.step()
     bid = await db.last_bid(auction["id"])
     assert bid["status"] == "simulated" and bid["amount"] == 7  # max(ceil(6,6), 7)
-    assert "deal" in bid["reason"]
+    assert bid["reference_price"] == 200  # médiane des ventes récentes
+    assert "revente" in bid["reason"]
     await sniper.step()  # pas de seconde simulation sur la même enchère
-    assert sum(1 for level, title in notifier.sent if title == "Enchère simulée") == 1
+    assert not any("simulée" in title for _, title in notifier.sent)  # pas de message par enchère
+    sniper._next_digest = datetime.now(timezone.utc)
+    sniper._flush_digest(datetime.now(timezone.utc))
+    assert ("INFO", "Sniper : enchères simulées (1)") in notifier.sent
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_sniper_respects_concurrent_bid_limit(tmp_path):
+    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+
+    def auction(i: int, base: int) -> dict:
+        return {
+            "id": f"33333333-3333-3333-3333-{i:012d}",
+            "card": {"id": f"44444444-4444-4444-4444-{i:012d}", "wikipedia_title": f"Carte {i}", "rarity": "SR"},
+            "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active", "end_at": end,
+            "base_amount": base, "current_bid": None, "current_bidder_id": None,
+        }
+
+    market = [auction(i, base) for i, base in enumerate([14, 3, 9, 5, 12, 2, 7])]
+    manual = {**auction(99, 1), "end_at": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()}
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"auctions": [manual], "selling": []})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(404, json={"error": "aucune vente"})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": market, "hasMore": False})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, sniper_rarity_caps={"SR": 15}, portfolio_max_positions=10)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    await sniper.step()
+    rows = await db._all("SELECT amount FROM bids WHERE status = 'simulated' ORDER BY amount")
+    # 1 enchère manuelle déjà en cours -> 4 places ; les plus grosses marges (15 - mise) d'abord.
+    assert [r["amount"] for r in rows] == [2, 3, 5, 7]
+    assert sniper.free_slots(datetime.now(timezone.utc)) == 0
     await db.close()
 
 
@@ -219,4 +267,64 @@ async def test_listings_respect_concurrent_limit(tmp_path):
     rows = await db._all("SELECT status, post_at FROM listings ORDER BY id")
     assert rows[0]["status"] == "posted" and rows[1]["status"] == "scheduled"
     assert datetime.fromisoformat(rows[1]["post_at"]) > now + timedelta(hours=12)  # reportée
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_portfolio_simulated_buy_then_resale(tmp_path):
+    """Scénario complet en DRY_RUN : mise, gain simulé, mise en vente, revente simulée, bénéfice."""
+    from src.workers.inventory_manager import InventoryManager
+
+    auction_id = "33333333-3333-3333-3333-333333333333"
+    state = {"ended": False}
+
+    def auction(**kw) -> dict:
+        end = datetime.now(timezone.utc) + (timedelta(seconds=-120) if state["ended"] else timedelta(seconds=8))
+        return {"id": auction_id, "card": {"id": "c1", "wikipedia_title": "Mème", "rarity": "C"},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
+                "end_at": end.isoformat(), "base_amount": 100, "current_bid": None, "current_bidder_id": None, **kw}
+
+    def handler(request):
+        path = request.url.path
+        if path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if path == "/api/marketplace" and "mine" in request.url.params:
+            return httpx.Response(200, json={"auctions": [], "selling": []})
+        if path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": [] if state["ended"] else [auction()], "hasMore": False})
+        if path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if path.endswith("/sales"):
+            return httpx.Response(200, json={"recent": [{"final_price": 400}] * 5})
+        if path == f"/api/marketplace/{auction_id}":
+            return httpx.Response(200, json={"auction": auction(status="settled_unsold")})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, position_list_at_peak=False, listing_min_duration_minutes=60)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    ctx = Context(client.settings, client, api, db, notifier, PriceService(api, db, 30))
+    sniper, inv = AuctionSniper(ctx), InventoryManager(ctx)
+    await sniper.setup()
+    await inv.setup()
+
+    await sniper.step()                       # budget ~540, estimation 400 : mise 100 acceptée
+    assert (await db.last_bid(auction_id))["status"] == "simulated"
+    state["ended"] = True
+    await db._exec("UPDATE bids SET end_at = ?", ((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),))
+    await sniper._settle()                    # personne n'a misé : achat simulé remporté
+    assert (await db.last_bid(auction_id))["status"] == "sim_won"
+    assert (await db.positions_summary())["count"] == 1
+
+    await inv.manage_positions()              # revente programmée au prix estimé
+    await db._exec("UPDATE listings SET post_at = ?", ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),))
+    await inv.post_due_listings()
+    listing = (await db._all("SELECT * FROM listings"))[0]
+    assert listing["status"] == "simulated" and listing["base_amount"] == 400 and listing["bid_id"]
+    await db._exec("UPDATE listings SET target_end = ?", ((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),))
+    await inv.settle_listings()               # revente simulée : position close, bénéfice +300
+    report = await db.report(datetime.now(timezone.utc) - timedelta(days=1))
+    assert report["profit_simulated"] == 300 and report["positions_held"] == 0
+    assert ("INFO", "Revente simulée") in notifier.sent
     await db.close()

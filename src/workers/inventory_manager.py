@@ -2,7 +2,9 @@
 
 - Vente : doublons dont la cote moyenne (même rareté) dépasse SELL_MIN_VALUE, même C/PC.
   Fin d'enchère programmée dans LISTING_END_WINDOW (20:00-22:30, Paris).
-- Arbitrage : les cartes gagnées la nuit sont remises en vente avec une fin vers 21:00.
+- Positions : chaque carte achetée par le sniper est remise en vente en priorité (avant
+  les doublons), au prix estimé ; invendue, elle est remise à prix réduit, puis gardée.
+  Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
 - Défausse : doublons sans valeur, seulement si aucun palier de succès de taille de
   collection n'est proche (ACHIEVEMENT_MILESTONES), par lots de 50 [WR discard.js].
 - Jamais touchés : favoris, shiny, exemplaires en échange ou déjà en vente.
@@ -16,17 +18,18 @@ from __future__ import annotations
 import random
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 
 from src.config import RARITY_RANK, Settings
-from src.core.client import UncertainMutation
+from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import utcnow
-from src.core.models import DiscardResult, OwnedCard
+from src.core.models import DiscardResult, MyBids, OwnedCard
 from src.core.pricing import Quote
 from src.core.timeutils import now_local, random_in_window
 from src.workers.base import Context, Worker
 
 INVENTORY_PRICE_MAX_AGE = timedelta(hours=12)
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------- logique pure
@@ -104,6 +107,11 @@ def achievement_guard(count: int, n_discard: int, milestones: list[int], margin:
     return allowed, f"{count} exemplaires, {target} ; on ne repasse pas sous {reached}"
 
 
+def parse_selling(mine: MyBids) -> list:
+    from src.core.models import Auction, parse_items
+    return parse_items(Auction, mine.selling, label="vente")
+
+
 def plan_listing_time(now: datetime, start: time, end: time, durations: list[int], min_duration: int,
                       rng: random.Random | None = None) -> tuple[datetime, int, datetime]:
     """(heure de publication, durée en minutes, fin visée) pour finir dans la fenêtre [start, end]."""
@@ -130,7 +138,9 @@ class InventoryManager(Worker):
         self._next_scan = utcnow() + timedelta(minutes=2)
 
     async def step(self) -> float:
+        await self.manage_positions()
         await self.post_due_listings()
+        await self.settle_listings()
         if (self.settings.auto_list or self.settings.auto_discard) and utcnow() >= self._next_scan:
             self._next_scan = utcnow() + timedelta(minutes=self.settings.inventory_interval_minutes)
             await self.run_cycle(list_cards=self.settings.auto_list, discard=self.settings.auto_discard)
@@ -156,31 +166,49 @@ class InventoryManager(Worker):
         groups, excluded, quotes, total = await self.snapshot()
         report: dict = {}
         if list_cards:
-            # Les reventes d'arbitrage passent en premier : les places de vente sont limitées.
-            report["relisted"] = await self.schedule_arbitrage(groups, excluded)
             report["listed"] = await self.schedule_sales(select_for_sale(groups, quotes, excluded, self.settings))
         if discard:
             report["discard"] = await self.discard(groups, quotes, excluded, total)
         return report
 
-    # ------------------------------------------------------------- ventes
-    async def _schedule(self, owned: OwnedCard, price: int, reason: str, start: time, end: time) -> bool:
+    # ------------------------------------------------------------ places
+    async def slot_usage(self) -> tuple[int, int]:
+        """(ventes en cours, maximum). En DRY_RUN, les ventes simulées occupent aussi une place."""
+        selling, maximum = await self.api.listing_slots()
+        if self.settings.dry_run:
+            selling += await self.db.simulated_active_listings(utcnow())
+        return selling, maximum
+
+    async def free_slots(self) -> int:
+        """Places libres pour des doublons : les positions à revendre sont servies d'abord."""
+        selling, maximum = await self.slot_usage()
+        reserved = await self.db.pending_listings_count() + len(await self.db.positions_to_list())
+        return max(0, maximum - selling - reserved)
+
+    def _window(self, at_peak: bool) -> tuple[time, time]:
         s = self.settings
+        if at_peak:
+            return s.listing_end_window_start, s.listing_end_window_end
+        soon = now_local() + timedelta(minutes=s.listing_min_duration_minutes + 1)
+        return soon.time(), (soon + timedelta(minutes=30)).time()
+
+    async def _schedule(self, *, owned_id: str, card_id: str, title: str, rarity: str | None, price: int,
+                        reason: str, at_peak: bool = True, bid_id: int | None = None, relist_count: int = 0) -> bool:
+        s = self.settings
+        start, end = self._window(at_peak)
         post_at, minutes, target = plan_listing_time(now_local(), start, end, s.listing_duration_options,
                                                      s.listing_min_duration_minutes)
         listing_id = await self.db.schedule_listing(
-            owned_card_id=owned.id, card_id=owned.catalog_id, title=owned.title, rarity=owned.rarity,
-            base_amount=price, duration_minutes=minutes, post_at=post_at, target_end=target, reason=reason,
+            owned_card_id=owned_id, card_id=card_id, title=title, rarity=rarity, base_amount=price,
+            duration_minutes=minutes, post_at=post_at, target_end=target, reason=reason, bid_id=bid_id,
+            relist_count=relist_count,
         )
         if listing_id:
             self.log.info("vente programmée : %s (%s) %d WB, publication %s, fin %s",
-                          owned.title, owned.rarity, price, f"{post_at:%d/%m %H:%M}", f"{target:%d/%m %H:%M}")
+                          title, rarity, price, f"{post_at:%d/%m %H:%M}", f"{target:%d/%m %H:%M}")
         return bool(listing_id)
 
-    async def free_slots(self) -> int:
-        selling, maximum = await self.api.listing_slots()
-        return max(0, maximum - selling - await self.db.pending_listings_count())
-
+    # ------------------------------------------------------- ventes de doublons
     async def schedule_sales(self, candidates: list[SaleCandidate]) -> int:
         s = self.settings
         count = 0
@@ -188,40 +216,50 @@ class InventoryManager(Worker):
         if candidates and not slots:
             self.log.info("aucune place de vente libre (%d candidat(s) en attente)", len(candidates))
         for c in candidates[:slots]:
-            if await self._schedule(c.owned, c.price, f"cote {c.average:.0f}", s.listing_end_window_start,
-                                    s.listing_end_window_end):
+            if await self._schedule(owned_id=c.owned.id, card_id=c.owned.catalog_id, title=c.owned.title,
+                                    rarity=c.owned.rarity, price=c.price, reason=f"cote {c.average:.0f}"):
                 count += 1
         if count:
-            self.notifier.info("Ventes programmées", f"{count} carte(s) mises en vente avec fin entre "
+            self.notifier.info("Ventes programmées", f"{count} doublon(s) mis en vente avec fin entre "
                                f"{s.listing_end_window_start:%H:%M} et {s.listing_end_window_end:%H:%M}.")
         return count
 
-    async def schedule_arbitrage(self, groups: dict[str, list[OwnedCard]], excluded: set[str]) -> int:
+    # --------------------------------------------------------------- positions
+    async def manage_positions(self) -> None:
+        """Programme la revente des cartes achetées par le sniper (2 par passage au plus)."""
         s = self.settings
-        count = 0
-        center = datetime.combine(now_local().date(), s.arbitrage_relist_end_time)
-        start, end = (center - timedelta(minutes=10)).time(), (center + timedelta(minutes=10)).time()
-        slots = await self.free_slots()
-        for bid in await self.db.won_unlisted_night_bids():
-            if count >= slots:
-                break
-            copies = [c for c in groups.get(bid["card_id"], []) if not c.starred and c.id not in excluded
-                      and c.rarity == bid["rarity"]]
-            if not copies:
+        for row in (await self.db.positions_to_list())[:2]:
+            owned_id = f"sim-{row['id']}" if row["dry_run"] else await self._find_copy(row)
+            if not owned_id:
                 continue
-            quote = await self.ctx.prices.quote(bid["card_id"], bid["rarity"])
-            price = max(round((quote.average or 0) * s.arbitrage_markup), bid["amount"] + 1)
-            if await self._schedule(copies[-1], price, f"arbitrage (acheté {bid['amount']})", start, end):
-                excluded.add(copies[-1].id)
-                await self.db.update_bid(bid["id"], relisted=1)
-                count += 1
-        return count
+            try:
+                quote = await self.ctx.prices.quote(row["card_id"], row["rarity"], wait=False)
+                estimate = quote.average
+            except (RateLimited, ApiError):
+                estimate = None
+            estimate = estimate or row["reference_price"] or row["amount"]
+            price = max(round(estimate * s.position_list_ratio), row["amount"] + 1)
+            await self._schedule(owned_id=owned_id, card_id=row["card_id"], title=row["title"], rarity=row["rarity"],
+                                 price=price, reason=f"position (achetée {row['amount']})",
+                                 at_peak=s.position_list_at_peak, bid_id=row["id"])
 
+    async def _find_copy(self, row) -> str | None:
+        """Exemplaire acheté : le plus récent de cette carte dans la collection."""
+        page = await self.api.collection_page(0, sort="rarity", q=row["title"])
+        taken = await self.db.scheduled_owned_ids()
+        copies = [r for r in page.rows() if r.catalog_id == row["card_id"] and r.id not in taken]
+        if not copies:
+            self.log.warning("position %s : exemplaire introuvable dans la collection (réessai)", row["title"])
+            return None
+        copies.sort(key=lambda r: r.obtained_at or _EPOCH, reverse=True)
+        return copies[0].id
+
+    # --------------------------------------------------------- publication
     async def post_due_listings(self) -> None:
         due = await self.db.due_listings(utcnow())
         if not due:
             return
-        selling, maximum = await self.api.listing_slots()
+        selling, maximum = await self.slot_usage()
         for row in due:
             if selling >= maximum:
                 await self._postpone(row)
@@ -233,16 +271,23 @@ class InventoryManager(Worker):
                 left = (datetime.fromisoformat(row["target_end"]) - utcnow()).total_seconds() // 60
                 minutes = int(max(self.settings.listing_min_duration_minutes, left))
             label = f"{row['title']} ({row['rarity']}) à {row['base_amount']} WB"
-            try:
-                result = await self.api.create_listing(row["owned_card_id"], row["base_amount"], minutes)
-            except UncertainMutation as exc:
-                await self.db.update_listing(row["id"], status="uncertain", error=str(exc))
-                raise
-            if result.dry_run:
-                await self.db.update_listing(row["id"], status="simulated", posted_at=utcnow(), dry_run=1)
+            if row["dry_run"] or row["owned_card_id"].startswith("sim-"):
+                result = None
+            else:
+                try:
+                    result = await self.api.create_listing(row["owned_card_id"], row["base_amount"], minutes)
+                except UncertainMutation as exc:
+                    await self.db.update_listing(row["id"], status="uncertain", error=str(exc))
+                    raise
+            target_end = utcnow() + timedelta(minutes=minutes)
+            if result is None or result.dry_run:
+                await self.db.update_listing(row["id"], status="simulated", posted_at=utcnow(), dry_run=1,
+                                             duration_minutes=minutes, target_end=target_end)
                 self.notifier.info("Mise en vente simulée", label, durée=f"{minutes} min")
             elif result.ok:
-                await self.db.update_listing(row["id"], status="posted", posted_at=utcnow(), duration_minutes=minutes)
+                auction_id = await self._listing_auction_id(result.payload, row["card_id"])
+                await self.db.update_listing(row["id"], status="posted", posted_at=utcnow(), duration_minutes=minutes,
+                                             target_end=target_end, auction_id=auction_id)
                 self.notifier.info("Carte mise en vente", label, durée=f"{minutes} min")
             else:
                 payload = result.payload if isinstance(result.payload, dict) else {}
@@ -250,15 +295,75 @@ class InventoryManager(Worker):
                 await self.db.update_listing(row["id"], status="failed", error=str(error)[:300])
                 self.notifier.warning("Mise en vente refusée", f"{label} : {error}")
 
+    async def _listing_auction_id(self, payload, card_id: str) -> str | None:
+        """Identifiant de l'enchère créée : dans la réponse, sinon dans mes ventes en cours."""
+        if isinstance(payload, dict):
+            for candidate in (payload.get("auction"), payload.get("listing"), payload):
+                if isinstance(candidate, dict) and isinstance(candidate.get("id"), str):
+                    return candidate["id"]
+        try:
+            mine = MyBids.model_validate(await self.ctx.client.get("my_bids"))
+        except ApiError:
+            return None
+        selling = [a for a in parse_selling(mine) if a.catalog_id == card_id]
+        return max(selling, key=lambda a: a.end_at).id if selling else None
+
     async def _postpone(self, row) -> None:
         """Plus de place de vente : on vise la même fenêtre de fin, le jour suivant."""
         s = self.settings
-        post_at, minutes, target = plan_listing_time(now_local() + timedelta(days=1), s.listing_end_window_start,
-                                                     s.listing_end_window_end, s.listing_duration_options,
-                                                     s.listing_min_duration_minutes)
+        start, end = self._window(row["bid_id"] is None or s.position_list_at_peak)
+        post_at, minutes, target = plan_listing_time(now_local() + timedelta(days=1), start, end,
+                                                     s.listing_duration_options, s.listing_min_duration_minutes)
         await self.db.update_listing(row["id"], post_at=max(post_at, now_local()), duration_minutes=minutes,
                                      target_end=target)
         self.log.info("ventes pleines : %s reportée, fin visée %s", row["title"], f"{target:%d/%m %H:%M}")
+
+    # ------------------------------------------------------------- résultats
+    async def settle_listings(self) -> None:
+        for row in await self.db.listings_to_settle(utcnow() - timedelta(minutes=2)):
+            bid = await self.db.get_bid(row["bid_id"]) if row["bid_id"] else None
+            label = f"{row['title']} ({row['rarity']})"
+            if row["status"] == "simulated":
+                # Hypothèse optimiste : vendue à son prix de départ.
+                await self.db.update_listing(row["id"], status="sim_sold", sale_price=row["base_amount"],
+                                             settled_at=utcnow())
+                if bid:
+                    await self.db.close_position(bid["id"], row["base_amount"])
+                    self.notifier.info("Revente simulée", f"{label} : achetée {bid['amount']}, vendue "
+                                       f"{row['base_amount']} WB ({row['base_amount'] - bid['amount']:+d})")
+                continue
+            if not row["auction_id"]:
+                await self.db.update_listing(row["id"], status="ended", settled_at=utcnow())
+                if bid:
+                    await self.db.close_position(bid["id"], None)
+                    self.notifier.warning("Revente à vérifier", f"{label} : enchère introuvable, vérifie sur le site.")
+                continue
+            auction = await self.api.auction(row["auction_id"])
+            if auction.status == "active":
+                await self.db.update_listing(row["id"], target_end=auction.end_at)  # prolongée
+                continue
+            if auction.status == "settled_sold":
+                price = auction.final_price or auction.current_bid or row["base_amount"]
+                await self.db.update_listing(row["id"], status="sold", sale_price=price, settled_at=utcnow())
+                if bid:
+                    await self.db.close_position(bid["id"], price)
+                    self.notifier.success("Revente réussie", f"{label} : achetée {bid['amount']}, vendue {price} WB "
+                                          f"({price - bid['amount']:+d})")
+                continue
+            await self.db.update_listing(row["id"], status="unsold", settled_at=utcnow())
+            if not bid:
+                continue
+            if row["relist_count"] < self.settings.position_max_relists:
+                price = max(1, round(row["base_amount"] * self.settings.position_relist_discount))
+                await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
+                                     rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
+                                     at_peak=self.settings.position_list_at_peak, bid_id=bid["id"],
+                                     relist_count=row["relist_count"] + 1)
+                self.log.info("%s invendue, remise en vente à %d WB", label, price)
+            else:
+                await self.db.close_position(bid["id"], None)
+                self.notifier.warning("Position invendue", f"{label} : invendue après "
+                                      f"{row['relist_count'] + 1} essai(s), carte gardée.")
 
     # ------------------------------------------------------------ défausse
     async def discard(self, groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
@@ -322,7 +427,6 @@ async def cli(ctx: Context, action: str, apply: bool) -> None:
         return
     report = await worker.run_cycle(list_cards=action == "list", discard=action == "discard")
     if action == "list":
-        print(f"{report.get('listed', 0)} vente(s) et {report.get('relisted', 0)} revente(s) d'arbitrage programmées ;"
-              " elles seront publiées par le bot en marche (docker compose).")
+        print(f"{report.get('listed', 0)} vente(s) programmée(s) ; elles seront publiées par le bot en marche.")
     else:
         print(report.get("discard"))

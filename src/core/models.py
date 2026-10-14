@@ -66,6 +66,7 @@ class OwnedCard(_Model):
     starred: bool = False
     snapshot_rarity: str | None = None
     user_id: str | None = None
+    obtained_at: datetime | None = None
 
     @property
     def catalog_id(self) -> str:
@@ -160,6 +161,26 @@ class SalesSummary(_Model):
     wikipedia_title: str | None = None
 
 
+class SaleRow(_Model):
+    final_price: int | None = None
+    snapshot_rarity: str | None = None
+    is_shiny: bool = False
+    settled_at: datetime | None = None
+
+
+class SalesHistory(_Model):
+    """/api/marketplace/cards/{id}/sales [WP market.js] : `recent` d'abord, sinon `sales`."""
+    recent: list[Any] = []
+    sales: list[Any] = []
+
+    def rows(self) -> list[SaleRow]:
+        return parse_items(SaleRow, self.recent or self.sales, label="vente")
+
+    @property
+    def total(self) -> int:
+        return len(self.sales) or len(self.recent)
+
+
 class Balance(_Model):
     balance: int
 
@@ -221,6 +242,9 @@ class MyBids(_Model):
     """/api/marketplace?mine=1 : réponse réelle du 14/10/2026 = { auctions, selling, hasMore }."""
     auctions: list[Any] = []
     selling: list[Any] = []
+
+    def bid_items(self) -> list[Auction]:
+        return parse_items(Auction, self.auctions, label="enchère")
 
 
 class MyListingsInfo(_Model):

@@ -12,11 +12,12 @@ from src.config import Settings
 from src.core.client import user_id_from_cookie
 from src.core.endpoints import Endpoints
 from src.core.models import Auction, CollectionPage, OwnedCard, PackOpenResult, min_next_bid
-from src.core.pricing import Quote
+from src.core.models import SaleRow
+from src.core.pricing import Quote, recent_estimates
 from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
 from src.tools.parse_curl import parse_curl, to_endpoint
-from src.workers.auction_sniper import decide, in_snipe_window, snipe_params
+from src.workers.auction_sniper import decide, in_snipe_window, portfolio_state, snipe_params
 from src.workers.inventory_manager import (
     achievement_guard, group_by_card, plan_listing_time, select_for_discard, select_for_sale,
 )
@@ -98,24 +99,43 @@ def test_pack_wait_from_last_regen():
 
 
 # --------------------------------------------------------------------- sniper
-def test_rarity_cap_and_deal_rules():
-    s = settings(sniper_rarity_caps={"SR": 15}, sniper_deal_ratio_max=0.45)
+def test_rarity_cap_rule_is_collection_only():
+    s = settings(sniper_rarity_caps={"SR": 15})
     params = snipe_params(s, night=False)
-    assert decide(auction(base_amount=12), params, None, 3).ceiling == 15
+    decision = decide(auction(base_amount=12), params, None, 3)
+    assert decision.ceiling == 15 and decision.collection
     assert decide(auction(base_amount=20), params, None, 3) is None
-    # C sans plafond : seul l'écart de cote compte.
-    common = auction(card={"id": "c", "wikipedia_title": "x", "rarity": "C"}, base_amount=9)
-    assert decide(common, params, Quote(20.0, 5), 3).ceiling == 9      # floor(20 × 0,45) = 9
-    assert decide(common, params, Quote(19.0, 5), 3) is None          # 8 < 9
-    assert decide(common, params, Quote(40.0, 1), 3) is None          # pas assez de ventes
-    assert decide(common, params, Quote(20.0, None), 3).ceiling == 9  # compte non PRO : nombre inconnu
+
+
+def test_portfolio_decision_needs_real_profit():
+    s = settings()  # pas de plafond par rareté par défaut
+    params = snipe_params(s, night=False)
+    pf = portfolio_state(s, balance=3000, held_count=0, held_real_cost=0, held_sim_cost=0,
+                         engaged_real=0, engaged_sim=0, bot_engaged_count=0)
+    assert pf.position_budget == 540 and pf.min_profit == 135      # 3000 × 0,9 / 5 ; 25 %
+    card = {"id": "c", "wikipedia_title": "x", "rarity": "C"}
+    assert decide(auction(card=card, base_amount=9), params, Quote(20.0, 5), 3, pf) is None  # +11 : trop petit
+    big = decide(auction(card=card, base_amount=200), params, Quote(400.0, None), 3, pf)
+    assert big and big.ceiling == 265 and big.profit == 200             # min(280, 400-135, 540)
+    assert decide(auction(card=card, base_amount=300), params, Quote(400.0, 5), 3, pf) is None
+    assert decide(auction(card=card, base_amount=200), params, Quote(400.0, 1), 3, pf) is None  # 1 vente
+
+
+def test_portfolio_counts_engaged_capital():
+    s = settings()
+    pf = portfolio_state(s, balance=1000, held_count=4, held_real_cost=1500, held_sim_cost=0,
+                         engaged_real=500, engaged_sim=0, bot_engaged_count=2)
+    # Le capital engagé compte : budget calculé sur 3000, pas sur le solde de 1000.
+    assert pf.capital == 3000 and pf.position_budget == 540 and pf.available == 950
+    assert not pf.can_open  # 4 positions + 2 enchères = 6 = maximum
 
 
 def test_night_mode_is_more_aggressive():
-    s = settings()
+    s = settings(sniper_rarity_caps={"UR": 40}, sniper_daily_budget=300, night_budget_bonus=200)
     day, night = snipe_params(s, False), snipe_params(s, True)
     assert night.deal_ratio > day.deal_ratio and night.window_seconds > day.window_seconds
     assert night.rarity_caps["UR"] > day.rarity_caps["UR"] and night.budget > day.budget
+    assert snipe_params(settings(), True).budget == 0  # pas de budget quotidien par défaut
 
 
 def test_never_bid_on_own_or_leading_auction():
@@ -131,6 +151,11 @@ def test_night_window_crossing_midnight():
 
 
 # ------------------------------------------------------------------ inventaire
+def test_recent_sales_median_beats_stale_average():
+    rows = [SaleRow(final_price=p, settled_at=NOW - timedelta(days=i)) for i, p in enumerate([500, 480, 30, 520, 510, 20, 15])]
+    assert recent_estimates(rows, 5)["*"] == (500.0, 7)  # 5 dernières : 500 480 30 520 510
+
+
 def test_sale_and_discard_selection_keeps_one_and_protects():
     s = settings(sell_min_value=15, discard_max_value=2, discard_rarities=["C"])
     rows = [owned("a1", "A"), owned("a2", "A"), owned("a3", "A", starred=True),
