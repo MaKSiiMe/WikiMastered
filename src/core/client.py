@@ -231,6 +231,7 @@ class WikiMastersClient:
         self._next_slot = 0.0
         self._pause_until = 0.0
         self._failures = 0
+        self._server_error_route: str | None = None  # route d'un 500 récent, sans succès depuis
         self._degraded_alerted = False
         # time.monotonic() compte depuis le démarrage de la machine : « jamais » = -inf, pas 0.
         self._last_rate_alert = float("-inf")
@@ -536,6 +537,17 @@ class WikiMastersClient:
             )
         return delay
 
+    def _route_server_error(self, name: str, status: int) -> None:
+        """Erreur serveur isolée : seule cette route attend, les autres workers (sniper) continuent."""
+        self._server_error_route = name
+        _, failures = self._route_pause.get(name, (0.0, 0))
+        failures = min(failures + 1, 10)
+        delay = min(self.settings.backoff_max_seconds, self.settings.backoff_base_seconds * 2 ** (failures - 1))
+        delay += random.uniform(0, delay * 0.2)
+        self._route_pause[name] = (time.monotonic() + delay, failures)
+        log.warning("Route %s en pause %.0f s (HTTP %d, échec #%d) ; les autres routes continuent",
+                    name, delay, status, failures)
+
     def route_paused_for(self, name: str) -> float:
         until, _ = self._route_pause.get(name, (0.0, 0))
         return max(0.0, until - time.monotonic())
@@ -544,6 +556,7 @@ class WikiMastersClient:
         if self._failures >= 3 and self._degraded_alerted:
             self.notifier.info("Serveurs WikiMasters de nouveau joignables")
         self._failures = 0
+        self._server_error_route = None
         self._degraded_alerted = False
         self._persist_cookies()
 
@@ -680,6 +693,11 @@ class WikiMastersClient:
             attempts += 1
             if kind == "client" or attempts >= self.settings.http_get_max_attempts:
                 raise ApiError(resp.status_code, payload, name)
+            if kind == "server" and self._failures == 0 and self._server_error_route in (None, name):
+                # Un 500 sur une seule route (souvent la cote d'une carte) ne fige pas tout le bot ;
+                # des 500 sur deux routes, sans succès entre les deux, déclenchent la pause générale.
+                self._route_server_error(name, resp.status_code)
+                continue
             self._backoff(f"{name}: HTTP {resp.status_code}", limited=kind == "rate",
                           retry_after=_retry_after_seconds(resp))
 

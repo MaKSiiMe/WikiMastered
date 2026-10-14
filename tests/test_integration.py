@@ -261,6 +261,36 @@ async def test_route_rate_limit_does_not_freeze_other_routes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_lone_server_error_pauses_only_its_route(tmp_path):
+    from src.core.client import RateLimited
+
+    def handler(request):
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(500, json={"error": "boom"})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(502, text="<html>Bad gateway</html>")
+        return httpx.Response(200, json={"balance": 3})
+
+    client, _ = make_client(tmp_path, handler, backoff_base_seconds=60)
+    with pytest.raises(RateLimited):
+        await client.get("sales_summary", card_id="x", wait=False)
+    assert client.route_paused_for("sales_summary") > 50
+    assert client._failures == 0  # pas de pause générale : le sniper continue
+    assert await asyncio.wait_for(WikiMastersAPI(client).balance(), timeout=1) == 3
+    with pytest.raises(RateLimited):
+        await client.get("sales_summary", card_id="x", wait=False)  # toujours en pause, sans requête
+
+    # Des 500 sur deux routes sans succès entre les deux : panne générale, tout le bot attend.
+    client, _ = make_client(tmp_path, handler, backoff_base_seconds=60)
+    with pytest.raises(RateLimited):
+        await client.get("sales_summary", card_id="x", wait=False)
+    task = asyncio.create_task(client.get("market_page"))
+    await asyncio.sleep(0.05)
+    assert client._failures == 1 and not task.done()
+    task.cancel()
+
+
+@pytest.mark.asyncio
 async def test_listings_respect_concurrent_limit(tmp_path):
     from src.workers.inventory_manager import InventoryManager
 
