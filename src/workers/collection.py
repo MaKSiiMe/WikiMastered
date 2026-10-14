@@ -12,8 +12,9 @@
   possédée qui n'en a pas, comme le fait l'éditeur d'étiquettes du site (tables Supabase `tags`
   et `user_card_tags` [WP tags.js]). Avec PROTECTED_TAGS=date, cet exemplaire n'est jamais vendu.
 
-Les titres attendus sont ceux de Wikipédia (« 1er janvier », « 14 octobre ») : non vérifié
-sur les cartes du site. `python -m src.main collection` montre ce qui est reconnu.
+Les titres attendus sont ceux de Wikipédia (« 1er janvier », « 14 octobre »), vérifiés sur les
+cartes du site ; seuls les titres exacts comptent (pas « 14 août en sport » ni « 10 mai 1981 »).
+`python -m src.main collection` montre ce qui est reconnu.
 """
 
 from __future__ import annotations
