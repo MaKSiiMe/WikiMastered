@@ -92,6 +92,7 @@ python -m src.main report                       # envoie le bilan du jour sur Di
 python -m src.main trends --days 7              # les tendances auraient-elles rapporté ? (détail)
 python -m src.main packs                        # paquets ouverts ces dernières 24 h
 python -m src.main collection                   # collection à compléter : possédées / manquantes
+python -m src.main reset-simulation [--apply]   # efface les mises et ventes simulées (données réelles gardées)
 ```
 
 Dans Portainer : *Containers* > `wikimastered` > *Console*. Avec Docker Compose : préfixe par `docker compose exec wikimastered`.
