@@ -43,6 +43,9 @@ async def test_signals_measured_against_later_sales(tmp_path):
     assert stats["wikipedia"].no_data == 1
     text = await trends_text(db, 10, 147, now)
     assert "Bénéfice médian +150 WB, 1/2 gagnant(s)" in text and "trop tôt pour conclure" in text
+    short = await trends_text(db, 10, 147, now, detailed=False)
+    assert short == ("Google Trends : 2 mesuré(s), médiane +150 WB, 1 gagnant(s) → trop tôt pour conclure\n"
+                     "Wikipédia : aucun signal mesuré.")
     await db.close()
 
 
@@ -68,3 +71,16 @@ async def test_sources_compared_day_by_day(tmp_path):
     assert "**Jour par jour**" in text and "en commun : 1" in text
     assert "Cartes signalées par les deux sources : Greta Thunberg" in text
     await db.close()
+
+
+def test_trend_alerts_silent_by_default():
+    from types import SimpleNamespace
+
+    from src.workers.trend_common import flush
+
+    sent = []
+    notifier = SimpleNamespace(info=lambda *a, **k: sent.append(a[0]))
+    flush(SimpleNamespace(settings=SimpleNamespace(trends_notify=False), notifier=notifier), "Tendances Google", ["x"])
+    assert sent == []
+    flush(SimpleNamespace(settings=SimpleNamespace(trends_notify=True), notifier=notifier), "Tendances Google", ["x"])
+    assert sent == ["Tendances Google : 1 carte(s) en vente"]

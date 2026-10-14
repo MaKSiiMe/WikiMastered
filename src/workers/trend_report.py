@@ -117,9 +117,13 @@ async def day_line(db: Database, now: datetime) -> str:
             + (", ".join(common[:5]) if common else "aucune") + ".")
 
 
-async def trends_text(db: Database, days: int, min_profit: int, now: datetime) -> str:
+async def trends_text(db: Database, days: int, min_profit: int, now: datetime, *, detailed: bool = True) -> str:
+    """Les tendances auraient-elles rapporté ? Sans `detailed` : une ligne par source (bilan Discord)."""
     since = now - timedelta(days=days)
     measured = await measure_signals(db, since, now)
+    if not detailed:
+        return "\n".join(_short_line(label, measured.get(source, SourceStats()), min_profit)
+                         for source, label in SOURCES.items())
     lines = [f"**Mesure des tendances ({days} derniers jours)**",
              f"Gagnant = bénéfice ≥ {min_profit} WB (achat en surenchérissant, revente au prix observé ensuite)."]
     for source, label in SOURCES.items():
@@ -146,6 +150,20 @@ async def trends_text(db: Database, days: int, min_profit: int, now: datetime) -
             lines.append("  Signal pas rentable pour l'instant.")
     lines += await _by_day(db, since, now, min_profit)
     return "\n".join(lines)
+
+
+def _short_line(label: str, stats: SourceStats, min_profit: int) -> str:
+    n = len(stats.profits)
+    if not n:
+        return f"{label} : aucun signal mesuré."
+    hits = stats.hits(min_profit)
+    if n < 10:
+        verdict = "trop tôt pour conclure"
+    elif hits * 2 >= n and statistics.median(stats.profits) > 0:
+        verdict = "prometteur"
+    else:
+        verdict = "pas rentable"
+    return f"{label} : {n} mesuré(s), médiane {statistics.median(stats.profits):+.0f} WB, {hits} gagnant(s) → {verdict}"
 
 
 async def _by_day(db: Database, since: datetime, now: datetime, min_profit: int) -> list[str]:

@@ -205,6 +205,9 @@ class Settings(BaseSettings):
     trends_search_limit: int = 15
     trends_max_price: int = 0   # 0 = budget d'une position (solde × ratio / places)
     trends_auto_buy: bool = False
+    # Cartes signalées par les tendances : seulement dans les logs et le bilan, sauf avec TRENDS_NOTIFY=true
+    # (un message Discord par passage : toutes les heures pour Wikipédia, toutes les 20 min pour Google).
+    trends_notify: bool = False
     trends_auto_buy_max: int = 20
     # --- Module G : collection (cartes gardées, jamais revendues) ---------------------
     collection_sets: CsvList = Field(default_factory=list)    # « jours » = les 366 jours de l'année
