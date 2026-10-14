@@ -497,6 +497,10 @@ class Database:
                               "WHERE source = ? AND first_seen >= ?", (source, iso(since)))
         return (int(row["n"]), int(row["m"])) if row else (0, 0)
 
+    async def terms_since(self, source: str, since: datetime) -> list[aiosqlite.Row]:
+        return await self._all("SELECT term, first_seen, matched FROM trend_terms WHERE source = ? AND first_seen >= ?",
+                               (source, iso(since)))
+
     async def observed_final(self, auction_id: str) -> int | None:
         row = await self._one("SELECT price FROM observed_sales WHERE auction_id = ?", (auction_id,))
         return int(row["price"]) if row else None

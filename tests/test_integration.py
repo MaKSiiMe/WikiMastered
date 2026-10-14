@@ -632,3 +632,30 @@ async def test_google_trends_feed_to_market_signals(tmp_path):
     assert searches == ["squid game saison 3", "décharge"]  # termes déjà vus : pas recherchés deux fois
     assert await db.terms_stats("google", datetime.now(timezone.utc) - timedelta(hours=1)) == (2, 1)
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_trend_alert_one_line_per_card(tmp_path):
+    from src.workers.trend_common import scan_market
+
+    end = datetime.now(timezone.utc) + timedelta(hours=2)
+
+    def sale(aid, current, hours):
+        return {"id": aid, "card": {"id": "greta", "wikipedia_title": "Greta Thunberg", "rarity": "UR"},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
+                "end_at": (end + timedelta(hours=hours)).isoformat(), "base_amount": 10, "current_bid": current,
+                "current_bidder_id": None}
+
+    def handler(request):
+        return httpx.Response(200, json={"auctions": [sale("g1", 400, 0), sale("g2", 150, 3), sale("g3", 275, 1)],
+                                         "hasMore": False})
+
+    client, notifier = make_client(tmp_path, handler)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    ctx = Context(client.settings, client, api, db, notifier, PriceService(api, db, 30))
+    lines = await scan_market(ctx, source="wikipedia", term="Greta Thunberg", detail="vues x123", max_price=590)
+    assert len(lines) == 1 and "3 ventes, mise min 165 à 441 WB" in lines[0] and "première fin" in lines[0]
+    assert len(await db._all("SELECT * FROM trend_signals")) == 3  # chaque vente reste un signal mesuré
+    await db.close()
