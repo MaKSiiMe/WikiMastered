@@ -383,6 +383,37 @@ class Database:
                                (card_id,))
         return [r["price"] for r in rows[:limit]], len(rows)
 
+    async def observed_prices_since(self, card_id: str, since: datetime, limit: int) -> list[int]:
+        rows = await self._all("SELECT price FROM observed_sales WHERE card_id = ? AND ended_at >= ? "
+                               "ORDER BY ended_at DESC LIMIT ?", (card_id, iso(since), limit))
+        return [r["price"] for r in rows]
+
+    async def validation_stats(self, since: datetime, min_sales: int) -> dict[str, int]:
+        """Chiffres pour juger la simulation : marché observé et résultat des positions depuis le début."""
+        async def one(sql: str, params: Iterable[Any] = ()) -> int:
+            row = await self._one(sql, params)
+            return int(row[0] or 0) if row else 0
+
+        positions = "status IN ('won', 'sim_won') AND reason NOT LIKE 'collection%'"
+        return {
+            "observed_today": await one("SELECT COUNT(*) FROM observed_sales WHERE ended_at >= ?", (iso(since),)),
+            "observed_total": await one("SELECT COUNT(*) FROM observed_sales"),
+            "cards_priced": await one("SELECT COUNT(*) FROM (SELECT card_id FROM observed_sales GROUP BY card_id "
+                                      "HAVING COUNT(*) >= ?)", (min_sales,)),
+            "sim_bought": await one(f"SELECT COUNT(*) FROM bids WHERE dry_run = 1 AND {positions}"),
+            "sim_sold": await one(f"SELECT COUNT(*) FROM bids WHERE dry_run = 1 AND {positions} AND closed = 1 "
+                                  "AND sale_price IS NOT NULL"),
+            "sim_profit": await one(f"SELECT SUM(sale_price - amount) FROM bids WHERE dry_run = 1 AND {positions} "
+                                    "AND closed = 1 AND sale_price IS NOT NULL"),
+            "sim_kept": await one(f"SELECT COUNT(*) FROM bids WHERE dry_run = 1 AND {positions} AND closed = 1 "
+                                  "AND sale_price IS NULL"),
+            "sim_kept_cost": await one(f"SELECT SUM(amount) FROM bids WHERE dry_run = 1 AND {positions} "
+                                       "AND closed = 1 AND sale_price IS NULL"),
+            "sim_held": await one(f"SELECT COUNT(*) FROM bids WHERE dry_run = 1 AND {positions} AND closed = 0"),
+            "uncertain": await one("SELECT (SELECT COUNT(*) FROM bids WHERE status = 'uncertain') + "
+                                   "(SELECT COUNT(*) FROM listings WHERE status = 'uncertain')"),
+        }
+
     async def prune_auctions(self, before: datetime) -> None:
         await self._exec("DELETE FROM auctions_seen WHERE end_at < ?", (iso(before),))
 

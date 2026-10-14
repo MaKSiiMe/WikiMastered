@@ -16,6 +16,7 @@ automatiques ne tournent que si AUTO_LIST / AUTO_DISCARD sont activés.
 from __future__ import annotations
 
 import random
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
@@ -30,6 +31,7 @@ from src.workers.base import Context, Worker
 
 INVENTORY_PRICE_MAX_AGE = timedelta(hours=12)
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une revente simulée
 
 
 # ---------------------------------------------------------------- logique pure
@@ -332,7 +334,10 @@ class InventoryManager(Worker):
             bid = await self.db.get_bid(row["bid_id"]) if row["bid_id"] else None
             label = f"{row['title']} ({row['rarity']})"
             if row["status"] == "simulated":
-                # Hypothèse optimiste : vendue à son prix de départ.
+                if not await self._simulated_sale(row):
+                    await self.db.update_listing(row["id"], status="sim_unsold", settled_at=utcnow())
+                    await self._unsold(row, bid, label)
+                    continue
                 await self.db.update_listing(row["id"], status="sim_sold", sale_price=row["base_amount"],
                                              settled_at=utcnow())
                 if bid:
@@ -359,19 +364,32 @@ class InventoryManager(Worker):
                                           f"({price - bid['amount']:+d})")
                 continue
             await self.db.update_listing(row["id"], status="unsold", settled_at=utcnow())
-            if not bid:
-                continue
-            if row["relist_count"] < self.settings.position_max_relists:
-                price = max(1, round(row["base_amount"] * self.settings.position_relist_discount))
-                await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
-                                     rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
-                                     at_peak=self.settings.position_list_at_peak, bid_id=bid["id"],
-                                     relist_count=row["relist_count"] + 1)
-                self.log.info("%s invendue, remise en vente à %d WB", label, price)
-            else:
-                await self.db.close_position(bid["id"], None)
-                self.notifier.warning("Position invendue", f"{label} : invendue après "
-                                      f"{row['relist_count'] + 1} essai(s), carte gardée.")
+            await self._unsold(row, bid, label)
+
+    async def _simulated_sale(self, row) -> bool:
+        """Une vente simulée aboutit si la carte s'est vendue au moins à ce prix de départ récemment.
+
+        Personne ne mise sous le prix de départ : si les ventes observées de ces derniers jours
+        sont plus basses (tendance retombée) ou absentes, la vente simulée reste invendue."""
+        prices = await self.db.observed_prices_since(row["card_id"], utcnow() - SIM_MARKET_WINDOW,
+                                                     self.settings.price_recent_sales)
+        return bool(prices) and statistics.median(prices) >= row["base_amount"]
+
+    async def _unsold(self, row, bid, label: str) -> None:
+        """Invendue : remise en vente à prix réduit, puis carte gardée (réel comme simulé)."""
+        if not bid:
+            return
+        if row["relist_count"] < self.settings.position_max_relists:
+            price = max(1, round(row["base_amount"] * self.settings.position_relist_discount))
+            await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
+                                 rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
+                                 at_peak=self.settings.position_list_at_peak, bid_id=bid["id"],
+                                 relist_count=row["relist_count"] + 1)
+            self.log.info("%s invendue, remise en vente à %d WB", label, price)
+        else:
+            await self.db.close_position(bid["id"], None)
+            self.notifier.warning("Position invendue", f"{label} : invendue après "
+                                  f"{row['relist_count'] + 1} essai(s), carte gardée.")
 
     # ------------------------------------------------------------ défausse
     async def discard(self, groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
