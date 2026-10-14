@@ -25,11 +25,11 @@ from src.config import RARITY_RANK, Settings
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import utcnow
 from src.core.models import DiscardResult, MyBids, OwnedCard
-from src.core.pricing import Quote
+from src.core.pricing import ANY, Quote
 from src.core.timeutils import now_local, random_in_window
 from src.workers.base import Context, Worker
 
-INVENTORY_PRICE_MAX_AGE = timedelta(hours=12)
+INVENTORY_PRICE_MAX_AGE = timedelta(days=3)  # la cote d'un doublon bouge peu
 POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la carte
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une revente simulée
@@ -72,7 +72,8 @@ def select_for_sale(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[s
     out: list[SaleCandidate] = []
     for card_id, copies in groups.items():
         for row in spare_copies(copies, s.sell_keep_copies, excluded):
-            q = quotes.get(card_id, {}).get(row.rarity or "")
+            card_quotes = quotes.get(card_id, {})
+            q = card_quotes.get(row.rarity or "") or card_quotes.get(ANY)
             if q and q.average is not None and q.average >= s.sell_min_value:
                 out.append(SaleCandidate(row, q.average, max(1, round(q.average * s.sell_price_multiplier))))  # type: ignore[arg-type]
     out.sort(key=lambda c: c.average, reverse=True)
@@ -148,9 +149,15 @@ class InventoryManager(Worker):
         await self.manage_positions()
         await self.post_due_listings()
         await self.settle_listings()
-        if (self.settings.auto_list or self.settings.auto_discard) and utcnow() >= self._next_scan:
-            self._next_scan = utcnow() + timedelta(minutes=self.settings.inventory_interval_minutes)
-            await self.run_cycle(list_cards=self.settings.auto_list, discard=self.settings.auto_discard)
+        s = self.settings
+        if (s.auto_list or s.auto_discard) and utcnow() >= self._next_scan:
+            self._next_scan = utcnow() + timedelta(minutes=s.inventory_interval_minutes)
+            # Lire 8 000 exemplaires coûte ~175 requêtes : seulement s'il y a une place de vente à remplir.
+            list_cards = s.auto_list and await self.free_slots() > 0
+            if list_cards or s.auto_discard:
+                await self.run_cycle(list_cards=list_cards, discard=s.auto_discard)
+            else:
+                self.log.info("ventes pleines : pas de recherche de doublons à vendre")
         return 30.0
 
     # ------------------------------------------------------------ analyse
@@ -164,11 +171,25 @@ class InventoryManager(Worker):
         to_price = [cid for cid, copies in groups.items() if spare_copies(copies, min(self.settings.sell_keep_copies,
                     max(1, self.settings.discard_keep_copies)), excluded)]
         self.log.info("collection : %d exemplaires, %d cartes, %d à coter", len(rows), len(groups), len(to_price))
+        # La route des cotes est limitée par le site : au plus SELL_PRICE_LOOKUPS_PER_RUN nouvelles cotes
+        # par passage (cartes aux plus nombreux doublons d'abord). Les autres : cache ou ventes observées.
+        # Le cache (3 jours) se remplit ainsi au fil des passages.
+        to_price.sort(key=lambda cid: len(groups[cid]), reverse=True)
         quotes: dict[str, dict[str, Quote]] = {}
-        for i, card_id in enumerate(to_price, 1):
-            quotes[card_id] = await self.ctx.prices.quotes(card_id, max_age=INVENTORY_PRICE_MAX_AGE)
-            if i % 25 == 0:
-                self.log.info("cotes : %d/%d", i, len(to_price))
+        budget = self.settings.sell_price_lookups_per_run
+        looked_up = 0
+        for card_id in to_price:
+            fresh = await self.ctx.prices.is_fresh(card_id, INVENTORY_PRICE_MAX_AGE)
+            if fresh or looked_up < budget:
+                looked_up += not fresh
+                try:
+                    quotes[card_id] = await self.ctx.prices.quotes(card_id, max_age=INVENTORY_PRICE_MAX_AGE)
+                    continue
+                except (RateLimited, ApiError) as exc:
+                    self.log.debug("cote indisponible pour %s (%s)", card_id, exc)
+            quotes[card_id] = await self.ctx.prices.observed_quote(card_id)
+        known = sum(1 for q in quotes.values() if q)
+        self.log.info("cotes : %d demandée(s) au site, %d carte(s) cotée(s) sur %d", looked_up, known, len(to_price))
         return groups, excluded, quotes, len(rows)
 
     async def run_cycle(self, *, list_cards: bool, discard: bool) -> dict:

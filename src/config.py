@@ -151,6 +151,7 @@ class Settings(BaseSettings):
     sell_keep_copies: int = 1
     sell_price_multiplier: float = 1.0
     sell_max_listings_per_run: int = 5
+    sell_price_lookups_per_run: int = 60  # cotes demandées au site par passage (route limitée) ; le reste : ventes observées
     listing_end_window_start: time = time(20, 0)
     listing_end_window_end: time = time(22, 30)
     # Durées proposées par le formulaire de vente du site [KZ features/ranking.js].
