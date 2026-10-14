@@ -750,3 +750,44 @@ async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path):
     assert opener.blocked is None
     assert (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60 >= 14.9  # retour au rythme normal
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_human_checks_are_recorded_with_their_context(tmp_path):
+    from src.workers.pack_opener import PackOpener, checks_report
+
+    state = {"verify": False}
+
+    def handler(request):
+        if state["verify"]:
+            return httpx.Response(200, json={"human_verification_required": True, "packs_remaining": 8})
+        return httpx.Response(200, json={"cards": [{"id": "c1", "wikipedia_title": "Ada", "rarity": "C"}],
+                                         "packs_remaining": 0})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, pack_between_opens_min_seconds=0,
+                                   pack_between_opens_max_seconds=0)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await opener.setup()
+
+    async def attempt():
+        opener._next_open = datetime.now(timezone.utc)
+        await opener.step()
+
+    state["verify"] = True
+    await attempt()  # 1re vérification, juste après le démarrage
+    await attempt()  # même vérification, toujours en attente : pas de doublon
+    state["verify"] = False
+    await attempt()  # levée, 1 booster
+    await attempt()  # 1 booster de plus
+    state["verify"] = True
+    await attempt()  # 2e vérification
+    rows = await db.pack_checks()
+    assert len(rows) == 2 and rows[0]["cleared_at"] and rows[1]["cleared_at"] is None
+    report = await checks_report(db)
+    assert report[0] == "2 vérification(s), dont 2 dans les 15 min après un démarrage du bot"
+    assert report[1].startswith("Entre deux vérifications : médiane 2 (de 2 à 2) booster(s)")
+    assert "2 booster(s) et 0 min depuis la précédente" in report[3] and report[3].endswith("en attente")
+    await db.close()

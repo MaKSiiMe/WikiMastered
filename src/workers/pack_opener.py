@@ -79,6 +79,7 @@ class PackOpener(Worker):
         # Première ouverture quelques minutes après le démarrage, puis toutes les 15 à 90 min.
         self._next_open = utcnow() + timedelta(minutes=random.uniform(1, 10))
         self._retry_soon = False  # la dernière tentative a échoué : réessayer dans 5 à 10 min
+        self._started_at = utcnow()  # démarrage du bot, noté avec chaque vérification humaine
 
     def _schedule_next(self) -> None:
         s = self.settings
@@ -152,6 +153,7 @@ class PackOpener(Worker):
                 return
             if self.state.verification_required and result.ok:
                 self.notifier.success("Paquets : vérification levée", "Les ouvertures reprennent.", live=self.live)
+                await self.db.clear_pack_check()
             self.state.verification_required, self.state.verification_since = False, None
 
             if pack.rate_limit_daily:
@@ -214,6 +216,7 @@ class PackOpener(Worker):
                 "(le stock plafonne à 10 paquets).",
                 live=self.live,
             )
+            await self.db.record_pack_check(self._started_at)
         self.state.verification_required = True
         self.state.verification_since = self.state.verification_since or utcnow()
         await self._save()
@@ -241,6 +244,54 @@ class PackOpener(Worker):
                 highlights.append((card, shiny))
         self.log.info("paquet ouvert : %s", ", ".join(f"{c.rarity}:{c.wikipedia_title}" for c, _ in pulled))
         return highlights
+
+
+# Une vérification demandée peu après un démarrage du bot compte comme « après un démarrage ».
+AFTER_START = timedelta(minutes=15)
+
+
+async def checks_report(db) -> list[str]:
+    """Vérifications humaines : quand, combien de boosters et de temps depuis la précédente, démarrage proche."""
+    rows = await db.pack_checks()
+    if not rows:
+        return ["Aucune vérification humaine enregistrée."]
+    parse = lambda v: datetime.fromisoformat(v) if v else None  # noqa: E731
+    lines, packs, gaps, after_start = [], [], [], 0
+    previous = None
+    for r in rows:
+        asked, cleared, started = parse(r["requested_at"]), parse(r["cleared_at"]), parse(r["bot_started_at"])
+        since_start = asked - started if started else None
+        fresh = since_start is not None and since_start <= AFTER_START
+        after_start += fresh
+        detail = []
+        if previous is not None and previous["cleared_at"]:
+            # Boosters ouverts entre la levée de la précédente et celle-ci.
+            n = await db.packs_opened_between(previous["cleared_at"], r["requested_at"])
+            gap = asked - parse(previous["cleared_at"])
+            packs.append(n)
+            gaps.append(gap)
+            detail.append(f"{n} booster(s) et {_duration(gap)} depuis la précédente")
+        if since_start is not None:
+            detail.append(f"{_duration(since_start)} après le démarrage du bot")
+        detail.append(f"faite en {_duration(cleared - asked)}" if cleared else "en attente")
+        lines.append(f"  {asked.astimezone(timeutils.PARIS):%d/%m %H:%M}  " + ", ".join(detail))
+        previous = r
+    head = [f"{len(rows)} vérification(s), dont {after_start} dans les {AFTER_START.seconds // 60} min "
+            "après un démarrage du bot"]
+    if packs:
+        head.append(f"Entre deux vérifications : {_spread(packs)} booster(s), "
+                    f"{_duration(sorted(gaps)[len(gaps) // 2])} (médiane)")
+    return head + lines[-20:]
+
+
+def _spread(values: list[int]) -> str:
+    ordered = sorted(values)
+    return f"médiane {ordered[len(ordered) // 2]} (de {ordered[0]} à {ordered[-1]})"
+
+
+def _duration(delta: timedelta) -> str:
+    minutes = int(delta.total_seconds() // 60)
+    return f"{minutes // 60} h {minutes % 60:02d}" if minutes >= 60 else f"{minutes} min"
 
 
 def highlight_line(card: Card, shiny: bool) -> str:
