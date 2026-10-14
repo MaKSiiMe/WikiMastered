@@ -182,7 +182,8 @@ class WikiMastersClient:
         self._pause_until = 0.0
         self._failures = 0
         self._degraded_alerted = False
-        self._last_rate_alert = 0.0
+        # time.monotonic() compte depuis le démarrage de la machine : « jamais » = -inf, pas 0.
+        self._last_rate_alert = float("-inf")
         # Limitations propres à une route (ex. 403 + Retry-After sur les cotes) : nom -> (fin, échecs)
         self._route_pause: dict[str, tuple[float, int]] = {}
         self._route_alerted: dict[str, float] = {}
@@ -327,7 +328,7 @@ class WikiMastersClient:
         self._route_pause[name] = (time.monotonic() + delay, failures)
         log.warning("Route %s limitée par le site : pause %.0f s (échec #%d)", name, delay, failures)
         now = time.monotonic()
-        if now - self._route_alerted.get(name, 0.0) > 3600:
+        if now - self._route_alerted.get(name, float("-inf")) > 3600:
             self._route_alerted[name] = now
             self.notifier.warning(
                 f"Route limitée : {name}",

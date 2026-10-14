@@ -473,3 +473,53 @@ async def test_protected_tags_are_never_sold_or_discarded(tmp_path):
     _, excluded, _, _ = await inv.snapshot()
     assert excluded == {"o2"}  # étiquette « date » : jamais vendue ni défaussée (casse ignorée)
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_first_rate_limit_alert_even_right_after_boot(tmp_path, monkeypatch):
+    """time.monotonic() part du démarrage de la machine : l'alerte part même 5 s après le boot."""
+    import src.core.client as client_module
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
+    monkeypatch.setattr(client_module.time, "monotonic", lambda: 5.0)
+    client._backoff("balance: HTTP 429", limited=True)
+    client._route_backoff("sales_summary", 0)
+    assert ("CRITICAL", "Limitation de requêtes (429)") in notifier.sent
+    assert ("WARNING", "Route limitée : sales_summary") in notifier.sent
+
+
+@pytest.mark.asyncio
+async def test_daily_budget_applies_in_dry_run(tmp_path):
+    """La simulation respecte SNIPER_DAILY_BUDGET et prévient s'il est sous le budget d'une position."""
+    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+    market = [{"id": f"33333333-3333-3333-3333-{i:012d}", "card": {"id": f"c{i}", "wikipedia_title": f"C{i}",
+               "rarity": "C"}, "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
+               "end_at": end, "base_amount": 100, "current_bid": None, "current_bidder_id": None} for i in range(3)]
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": market, "hasMore": False})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, sniper_daily_budget=250)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    for i in range(3):
+        await seed_observed(db, f"c{i}", [400, 410, 390])
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    assert ("WARNING", "Sniper : budget du jour trop petit") in notifier.sent
+    await sniper.step()
+    rows = await db._all("SELECT amount FROM bids WHERE status = 'simulated'")
+    assert len(rows) == 2  # 100 + 100 ; la troisième dépasserait 250
+    assert ("INFO", "Sniper : budget du jour atteint") in notifier.sent
+    await db.close()

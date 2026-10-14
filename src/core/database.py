@@ -238,13 +238,15 @@ class Database:
             (iso(before), limit),
         )
 
-    async def committed_since(self, since: datetime) -> int:
-        """WikiBidous engagés : enchères en tête non réglées + enchères gagnées depuis `since`."""
+    async def committed_since(self, since: datetime, dry_run: bool = False) -> int:
+        """WikiBidous engagés : enchères en tête non réglées + enchères gagnées depuis `since`.
+
+        En DRY_RUN, ce sont les mises simulées (en cours ou remportées) qui comptent."""
         row = await self._one(
-            "SELECT COALESCE(SUM(amount), 0) AS s FROM bids b WHERE dry_run = 0 AND placed_at >= ? "
-            "AND status IN ('placed', 'won', 'uncertain') AND id = "
+            "SELECT COALESCE(SUM(amount), 0) AS s FROM bids b WHERE dry_run = ? AND placed_at >= ? "
+            "AND status IN ('placed', 'won', 'uncertain', 'simulated', 'sim_won') AND id = "
             "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)",
-            (iso(since),),
+            (int(dry_run), iso(since)),
         )
         return int(row["s"]) if row else 0
 

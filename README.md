@@ -26,7 +26,7 @@ Aucune route n'est inventée. Toutes viennent du code des extensions communautai
 
 Ce qui reste **inconnu**, donc configurable plutôt que deviné :
 
-- **Durées de vente acceptées** (`LISTING_DURATION_OPTIONS`). Par défaut, le bot calcule une durée libre pour finir dans la fenêtre 20:00–22:30. Si le site la refuse, relève les valeurs proposées par le formulaire de vente.
+- **Durées de vente acceptées par l'API.** Le bot n'utilise que celles du formulaire du site (`LISTING_DURATION_OPTIONS` : 10, 30, 60, 180, 360, 720, 1440 min). Aucune vente réelle n'a encore confirmé que l'API accepte les plus longues.
 - **Route de statut des paquets.** Le site lit Supabase `profiles`. Sans cette route, le stock est déduit des réponses d'ouverture. Tu peux en déclarer une sous le nom `pack_status`.
 - **Paliers de succès de collection** (`ACHIEVEMENT_MILESTONES`) et s'ils comptent les exemplaires ou les cartes distinctes. Sans eux, aucune défausse n'est faite.
 - **Module E.** Les exemplaires gardent une `snapshot_rarity` : une carte achetée Commune pourrait rester Commune après la resynchronisation du jeu. C'est pourquoi le module se contente d'alertes par défaut (`TRENDS_AUTO_BUY=false`).
@@ -62,7 +62,7 @@ docker compose exec wikimastered python -m src.main inspect   # compare les vrai
 | `WIKIMEDIA_USER_AGENT` | Ton contact (URL ou e-mail), exigé par la politique de l'API Wikimedia |
 | `DRY_RUN` | Laisse `true` tant que tu n'as pas validé les alertes `[DRY RUN]` |
 
-Optionnels mais conseillés : `ACHIEVEMENT_MILESTONES` (pour pouvoir défausser), `SNIPER_RARITY_CAPS`, `SNIPER_DAILY_BUDGET`, `DISCORD_ALERT_WEBHOOK_URL` et `DISCORD_MENTION`. La liste complète, commentée, est dans [.env.example](.env.example).
+Optionnels mais conseillés : `ACHIEVEMENT_MILESTONES` (pour pouvoir défausser), `DISCORD_ALERT_WEBHOOK_URL` et `DISCORD_MENTION`. Laisse `SNIPER_RARITY_CAPS` vide (le prix suit les tendances, pas la rareté). `SNIPER_DAILY_BUDGET` doit rester à 0 ou dépasser largement le budget d'une position (~540 WB), sinon il bloque les achats. La liste complète, commentée, est dans [.env.example](.env.example).
 
 Plus rapide : dans DevTools, clic droit sur une requête `/api/…` > *Copier* > *Copier comme cURL (bash)*, puis :
 

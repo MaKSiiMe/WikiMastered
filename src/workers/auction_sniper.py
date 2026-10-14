@@ -190,9 +190,24 @@ class AuctionSniper(Worker):
         self._manual_cards: set[str] = set()
         self._sale_slots: tuple[datetime, int, int] | None = None  # (lu à, max, ventes en cours)
         await self._refresh_engaged()
+        await self._check_config()
         if not self.api.user_id:
             self.notifier.warning("Sniper : identifiant joueur inconnu",
                                   "Renseigne WM_USER_ID pour ne jamais enchérir sur tes propres ventes.")
+
+    async def _check_config(self) -> None:
+        """Signale au démarrage les réglages qui contredisent la stratégie orientée capital."""
+        s = self.settings
+        if s.sniper_rarity_caps or s.sniper_shiny_cap:
+            self.notifier.warning("Sniper : achats par rareté actifs",
+                                  "SNIPER_RARITY_CAPS / SNIPER_SHINY_CAP achètent des cartes gardées, jamais "
+                                  "revendues. Retire ces variables si tu ne le veux pas.")
+        if s.sniper_daily_budget:
+            budget = (await self.portfolio(utcnow())).position_budget
+            if s.sniper_daily_budget < budget:
+                self.notifier.warning("Sniper : budget du jour trop petit",
+                                      f"SNIPER_DAILY_BUDGET={s.sniper_daily_budget} < budget d'une position "
+                                      f"(~{budget} WB) : la plupart des achats seront bloqués. Mets 0 ou plus.")
 
     async def step(self) -> float:
         self._ticks += 1
@@ -376,10 +391,11 @@ class AuctionSniper(Worker):
     async def _affordable(self, amount: int, params: SnipeParams, portfolio: Portfolio) -> bool:
         if amount > portfolio.available:
             return False
-        if not params.budget or self.settings.dry_run:
+        if not params.budget:
             return True
+        # Appliqué aussi en DRY_RUN : la simulation doit montrer un budget trop serré.
         today = now_local().date()
-        committed = await self.db.committed_since(local_dt(today, time(0, 0)))
+        committed = await self.db.committed_since(local_dt(today, time(0, 0)), self.settings.dry_run)
         if committed + amount > params.budget:
             if self._budget_warned_day != str(today):
                 self._budget_warned_day = str(today)
