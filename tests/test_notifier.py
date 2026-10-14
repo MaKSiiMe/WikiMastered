@@ -60,3 +60,24 @@ def test_dry_run_prefix():
     n = DiscordNotifier(MAIN, dry_run=True)
     assert n.embed(_Message(Level.INFO, "Enchère", ""))["title"] == "[DRY RUN] Enchère"
     assert n.embed(_Message(Level.INFO, "Boosters", "", live=True))["title"] == "Boosters"
+
+
+def test_report_sections():
+    from src.main import as_section, report_sections
+
+    stats = {"balance": 3120, "boosters_ouverts": 6, "cards_pulled": 30, "shiny_pulled": 1, "bids_placed": 0,
+             "bids_simulated": 42, "auctions_won": 0, "spent_won": 0, "listings_posted": 2, "listings_scheduled": 1,
+             "doublons_vendus": 4, "doublons_recette": 96, "discarded": 0, "positions_sold": 0, "profit": 0,
+             "profit_simulated": 310, "positions_held": 3, "capital_in_positions": 820}
+    description, sections = report_sections(stats, {"UR": 1, "C": 20, "R": 9}, live_bids=False)
+    assert description == "Solde : **3120 WB**"
+    blocks = dict(sections)
+    assert blocks["Paquets"] == "6 booster(s), 30 carte(s)\nC 20 · R 9 · UR 1\n✨ 1 shiny"  # ordre des raretés
+    assert blocks["Sniper"] == "42 mise(s) simulée(s)"
+    assert "4 doublon(s) vendu(s) pour 96 WB" in blocks["Ventes"]
+    assert "Bénéfice simulé : +310 WB" in blocks["Positions"]
+    assert report_sections({**stats, "balance": "?"}, {}, live_bids=True)[0] == "Solde : inconnu"
+
+    assert as_section("**Collection** : 33/366 — il manque : 2 janvier") == ("Collection", "33/366 — il manque : 2 janvier")
+    assert as_section("**Validation de la simulation**\nMarché observé : 3") == ("Validation de la simulation",
+                                                                                 "Marché observé : 3")
