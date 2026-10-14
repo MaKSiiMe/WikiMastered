@@ -71,15 +71,28 @@ class Portfolio:
         return self.open_positions < self.max_positions
 
 
+def position_cap(s: Settings, sale_slots: int | None, manual_sales: int) -> int:
+    """Positions autorisées : places de vente que tes ventes manuelles laissent au bot, plus un tampon.
+
+    Acheter plus que ce qu'on peut remettre en vente immobilise le capital pour rien."""
+    if sale_slots is None:
+        return s.portfolio_max_positions
+    free_for_bot = max(0, sale_slots - manual_sales)
+    if free_for_bot == 0:
+        return 0
+    return min(s.portfolio_max_positions, free_for_bot + s.portfolio_buffer)
+
+
 def portfolio_state(s: Settings, *, balance: int, held_count: int, held_real_cost: int, held_sim_cost: int,
-                    engaged_real: int, engaged_sim: int, bot_engaged_count: int) -> Portfolio:
+                    engaged_real: int, engaged_sim: int, bot_engaged_count: int,
+                    max_positions: int | None = None) -> Portfolio:
     # Les mises réelles et positions réelles ont déjà quitté le solde : on les rajoute au capital.
     capital = balance + held_real_cost + engaged_real
     available = balance - held_sim_cost - engaged_sim - s.sniper_min_balance_reserve
     budget = int(capital * s.portfolio_capital_ratio / max(1, s.portfolio_slots))
     min_profit = max(s.portfolio_min_profit, int(budget * s.portfolio_min_profit_ratio))
-    return Portfolio(capital, max(0, available), budget, min_profit,
-                     held_count + bot_engaged_count, s.portfolio_max_positions)
+    return Portfolio(capital, max(0, available), budget, min_profit, held_count + bot_engaged_count,
+                     s.portfolio_max_positions if max_positions is None else max_positions)
 
 
 @dataclass(frozen=True)
@@ -164,8 +177,11 @@ class AuctionSniper(Worker):
         self._bot_engaged: set[str] = set(self._leading)
         self._digest: list[str] = []
         self._next_digest = utcnow() + timedelta(minutes=self.settings.notify_digest_minutes)
-        if self.settings.sniper_max_concurrent_bids > 0:
-            await self._refresh_engaged()
+        # Tes mises manuelles (collections) : enchères et cartes que le bot ne touche jamais.
+        self._manual_auctions: set[str] = set()
+        self._manual_cards: set[str] = set()
+        self._sale_slots: tuple[datetime, int, int] | None = None  # (lu à, max, ventes en cours)
+        await self._refresh_engaged()
         if not self.api.user_id:
             self.notifier.warning("Sniper : identifiant joueur inconnu",
                                   "Renseigne WM_USER_ID pour ne jamais enchérir sur tes propres ventes.")
@@ -183,7 +199,7 @@ class AuctionSniper(Worker):
         if self._ticks % 10 == 5:
             await self.db.harvest_ended_auctions(now - timedelta(seconds=30))
         await self._track_outbids(auctions, me)
-        if self._ticks % 20 == 0 and self.settings.sniper_max_concurrent_bids > 0:
+        if self._ticks % 20 == 0:
             await self._refresh_engaged()
 
         in_window_now = [a for a in auctions if in_snipe_window(a, me, params.window_seconds, now)]
@@ -249,6 +265,7 @@ class AuctionSniper(Worker):
             self.settings, balance=await self._current_balance(), held_count=held["count"],
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
             engaged_real=engaged_real, engaged_sim=engaged_sim, bot_engaged_count=bot_engaged,
+            max_positions=await self._sale_capacity(now),
         )
 
     async def _current_balance(self) -> int:
@@ -264,10 +281,36 @@ class AuctionSniper(Worker):
         return max(0, limit - len(self._engaged)) if limit > 0 else 1_000_000
 
     async def _refresh_engaged(self) -> None:
-        """Ajoute les enchères en cours vues par le serveur (y compris tes mises manuelles)."""
+        """Relit tes enchères en cours : décompte (si limite) et repérage de tes mises manuelles."""
+        if self.settings.sniper_max_concurrent_bids <= 0 and not self.settings.sniper_avoid_my_bids:
+            return
+        manual_auctions, manual_cards = set(), set()
         for a in await self.api.my_bids():
-            if a.status == "active":
+            if a.status != "active":
+                continue
+            if self.settings.sniper_max_concurrent_bids > 0:
                 self._engaged[a.id] = a.end_at
+            if a.id not in self._bot_engaged and await self.db.last_bid(a.id) is None:
+                manual_auctions.add(a.id)
+                manual_cards.add(a.catalog_id)
+        self._manual_auctions, self._manual_cards = manual_auctions, manual_cards
+
+    def is_manual_interest(self, auction: Auction) -> bool:
+        """Carte que tu cherches toi-même (tu mises dessus) : le bot ne l'achète pas pour la revendre."""
+        return self.settings.sniper_avoid_my_bids and (
+            auction.id in self._manual_auctions or auction.catalog_id in self._manual_cards)
+
+    async def _sale_capacity(self, now: datetime) -> int | None:
+        """Positions autorisées d'après les places de vente (relu toutes les 5 min)."""
+        if self._sale_slots is None or now - self._sale_slots[0] > timedelta(minutes=5):
+            try:
+                selling, maximum = await self.api.listing_slots()
+            except ApiError:
+                return None
+            self._sale_slots = (now, maximum, selling)
+        _, maximum, selling = self._sale_slots
+        manual_sales = max(0, selling - await self.db.posted_listings_count())
+        return position_cap(self.settings, maximum, manual_sales)
 
     def _flush_digest(self, now: datetime) -> None:
         if now < self._next_digest:
@@ -299,6 +342,8 @@ class AuctionSniper(Worker):
 
     async def _evaluate(self, auction: Auction, params: SnipeParams, portfolio: Portfolio) -> Decision | None:
         last = await self.db.last_bid(auction.id)
+        if last is None and self.is_manual_interest(auction):
+            return None
         if last is not None:
             if last["status"] in ("uncertain", "simulated"):
                 return None

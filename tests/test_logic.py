@@ -17,7 +17,7 @@ from src.core.pricing import Quote, combine, recent_estimates
 from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
 from src.tools.parse_curl import parse_curl, to_endpoint
-from src.workers.auction_sniper import decide, in_snipe_window, portfolio_state, snipe_params
+from src.workers.auction_sniper import decide, in_snipe_window, portfolio_state, position_cap, snipe_params
 from src.workers.inventory_manager import (
     achievement_guard, group_by_card, plan_listing_time, select_for_discard, select_for_sale,
 )
@@ -119,6 +119,14 @@ def test_portfolio_decision_needs_real_profit():
     assert big and big.ceiling == 265 and big.profit == 200             # min(280, 400-135, 540)
     assert decide(auction(card=card, base_amount=300), params, Quote(400.0, 5), 3, pf) is None
     assert decide(auction(card=card, base_amount=200), params, Quote(400.0, 1), 3, pf) is None  # 1 vente
+
+
+def test_positions_follow_free_sale_slots():
+    s = settings()
+    assert position_cap(s, 5, 4) == 2   # 4 ventes manuelles : 1 place pour le bot + 1 en attente
+    assert position_cap(s, 5, 5) == 0   # toutes les places prises : aucun achat pour revendre
+    assert position_cap(s, 5, 0) == 6   # plafond absolu PORTFOLIO_MAX_POSITIONS
+    assert position_cap(s, None, 0) == 6
 
 
 def test_portfolio_counts_engaged_capital():

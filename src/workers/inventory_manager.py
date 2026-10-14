@@ -152,6 +152,8 @@ class InventoryManager(Worker):
         groups = group_by_card(rows)
         excluded = await self.api.protected_owned_ids({r.id for r in rows})
         excluded |= await self.db.scheduled_owned_ids()
+        protected = {t.casefold() for t in self.settings.protected_tags}
+        excluded |= {r.id for r in rows if r.tag_names & protected}
         to_price = [cid for cid, copies in groups.items() if spare_copies(copies, min(self.settings.sell_keep_copies,
                     max(1, self.settings.discard_keep_copies)), excluded)]
         self.log.info("collection : %d exemplaires, %d cartes, %d à coter", len(rows), len(groups), len(to_price))

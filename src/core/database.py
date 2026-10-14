@@ -304,6 +304,11 @@ class Database:
             (iso(before),),
         )
 
+    async def posted_listings_count(self) -> int:
+        """Ventes réelles du bot en cours sur le site."""
+        row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE status = 'posted'")
+        return int(row["n"]) if row else 0
+
     async def simulated_active_listings(self, now: datetime) -> int:
         row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE status = 'simulated' AND target_end > ?",
                               (iso(now),))

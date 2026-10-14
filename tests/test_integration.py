@@ -125,6 +125,8 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
             return httpx.Response(200, json={"balance": 3000})
         if path == "/api/marketplace" and "mine" in request.url.params:
             return httpx.Response(200, json={"auctions": [], "selling": []})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
         if path == "/api/marketplace":
             assert request.url.params["sort"] == "ending_soon"
             return httpx.Response(200, json={"auctions": [auction, {"broken": True}], "hasMore": False})
@@ -176,6 +178,9 @@ async def test_sniper_respects_concurrent_bid_limit(tmp_path):
             return httpx.Response(200, json={"bidding": [manual], "selling": [], "auctions": market})
         if request.url.path.endswith("/sales"):
             return httpx.Response(404, json={"error": "aucune vente"})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+
         if request.url.path == "/api/marketplace":
             return httpx.Response(200, json={"auctions": market, "hasMore": False})
         raise AssertionError(f"route inattendue {request.url}")
@@ -372,6 +377,13 @@ async def test_bids_unlimited_by_default(tmp_path):
         calls.append(request.url.path + "?" + str(request.url.query))
         if request.url.path == "/api/wikibidous":
             return httpx.Response(200, json={"balance": 3000})
+        if "mine" in request.url.params:
+            others = [{"id": f"55555555-5555-5555-5555-{i:012d}", "status": "active", "end_at": end,
+                       "card": {"id": f"autre-{i}", "wikipedia_title": f"Autre {i}", "rarity": "C"},
+                       "base_amount": 5} for i in range(94)]
+            return httpx.Response(200, json={"bidding": others, "selling": []})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
         if request.url.path == "/api/marketplace":
             return httpx.Response(200, json={"auctions": [{
                 "id": "33333333-3333-3333-3333-333333333333",
@@ -391,5 +403,73 @@ async def test_bids_unlimited_by_default(tmp_path):
     await sniper.setup()
     await sniper.step()
     assert (await db.last_bid("33333333-3333-3333-3333-333333333333"))["status"] == "simulated"
-    assert not any("mine=1" in c for c in calls)  # pas de lecture de mes enchères sans limite
+    assert len(sniper._manual_auctions) == 94  # repérées comme tes mises, sans bloquer le bot
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_sniper_never_takes_cards_you_bid_on(tmp_path):
+    """Tes mises manuelles (collections) : le bot ignore ces enchères et les autres ventes de la même carte."""
+    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+
+    def auction(aid: str, card: str) -> dict:
+        return {"id": aid, "card": {"id": card, "wikipedia_title": card, "rarity": "C"},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active", "end_at": end,
+                "base_amount": 100, "current_bid": None, "current_bidder_id": None}
+
+    mine = auction("aaaaaaaa-0000-0000-0000-000000000001", "collection")   # tu mises dessus
+    same = auction("aaaaaaaa-0000-0000-0000-000000000002", "collection")   # même carte, autre vente
+    other = auction("aaaaaaaa-0000-0000-0000-000000000003", "meme")
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [mine], "selling": []})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": [mine, same, other], "hasMore": False})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    for card in ("collection", "meme"):
+        await seed_observed(db, card, [400, 410, 390])
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    await sniper.step()
+    rows = await db._all("SELECT auction_id FROM bids")
+    assert [r["auction_id"] for r in rows] == [other["id"]]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_protected_tags_are_never_sold_or_discarded(tmp_path):
+    from src.workers.inventory_manager import InventoryManager
+
+    def row(oid, tags):
+        return {"id": oid, "card_id": "c1", "card": {"id": "c1", "wikipedia_title": "Date", "rarity": "C"},
+                "tags": [{"id": "t", "name": t} for t in tags]}
+
+    def handler(request):
+        if request.url.path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": [row("o1", []), row("o2", ["Date"]), row("o3", [])]})
+        if request.url.path == "/api/trades":
+            return httpx.Response(200, json={"trades": []})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(200, json={"summary": {"C": {"average": 50}}})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, protected_tags=["date"])
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    _, excluded, _, _ = await inv.snapshot()
+    assert excluded == {"o2"}  # étiquette « date » : jamais vendue ni défaussée (casse ignorée)
     await db.close()
