@@ -33,6 +33,9 @@ BLOCKS: list[tuple[str, tuple[str, ...]]] = [
 def health(worker: Worker, now: datetime, session_ok: bool) -> tuple[str, str | None]:
     """(ligne d'état, anomalie éventuelle) ; remet à zéro les erreurs comptées depuis le dernier récap."""
     errors, worker.recent_errors = worker.recent_errors, 0
+    blocked = getattr(worker, "blocked", None)
+    if blocked:
+        return f"⏸️ {blocked}", f"{worker.name} : {blocked}"
     if worker.last_ok is None and worker.next_due is None:
         return "pas encore passé", None
     late = session_ok and worker.next_due is not None and now - worker.next_due > STALE_AFTER

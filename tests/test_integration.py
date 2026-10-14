@@ -711,9 +711,11 @@ async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path):
         gap = (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60
         assert 4.9 <= gap <= 10
     assert [t for _, t in notifier.sent if "vérification" in t] == ["Paquets : vérification humaine demandée"]
+    assert opener.blocked and opener.blocked.startswith("vérification humaine en attente depuis ")
     state["verify"] = False
     opener._next_open = datetime.now(timezone.utc)
     await opener.step()
     assert ("SUCCESS", "Paquets : vérification levée") in notifier.sent
+    assert opener.blocked is None
     assert (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60 >= 14.9  # retour au rythme normal
     await db.close()
