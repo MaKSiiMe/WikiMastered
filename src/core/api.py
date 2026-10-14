@@ -36,24 +36,32 @@ class WikiMastersAPI:
     async def collection_page(self, page: int, sort: str = "added", q: str = "") -> CollectionPage:
         return CollectionPage.model_validate(await self.client.get("collection_page", page=page, sort=sort, q=q))
 
-    async def iter_collection(self) -> AsyncIterator[OwnedCard]:
-        """Parcourt toute la collection (pages de 50 à partir de 0) [WR api.js loadCollection]."""
+    async def iter_collection(self, q: str = "") -> AsyncIterator[OwnedCard]:
+        """Parcourt toute la collection (pages de 50 à partir de 0) [WR api.js loadCollection].
+
+        Lire 8 000 exemplaires prend plusieurs minutes : une carte gagnée ou vendue entre-temps décale
+        les pages. Un exemplaire revu est ignoré ; un exemplaire manqué ne sera simplement ni vendu ni
+        défaussé à ce passage (on ne vend jamais que des exemplaires vus, le dernier est toujours gardé)."""
         seen: set[str] = set()
+        repeated = 0
         for page in range(MAX_COLLECTION_PAGES):
-            result = await self.collection_page(page)
+            result = await self.collection_page(page, q=q)
             raw_count = len(result.collection)
             for row in result.rows():
                 if row.id in seen:
-                    # Un doublon entre pages signifie que la collection a bougé pendant la lecture.
-                    raise RuntimeError("la collection a changé pendant la lecture, réessayer plus tard")
+                    repeated += 1
+                    continue
                 seen.add(row.id)
                 yield row
             if raw_count < COLLECTION_PAGE_SIZE:
-                return
-        log.warning("Collection tronquée à %d pages", MAX_COLLECTION_PAGES)
+                break
+        else:
+            log.warning("Collection tronquée à %d pages", MAX_COLLECTION_PAGES)
+        if repeated:
+            log.info("collection modifiée pendant la lecture : %d exemplaire(s) revu(s) ignoré(s)", repeated)
 
-    async def load_collection(self) -> list[OwnedCard]:
-        return [row async for row in self.iter_collection()]
+    async def load_collection(self, q: str = "") -> list[OwnedCard]:
+        return [row async for row in self.iter_collection(q)]
 
     async def market_page(self, *, page: int = 1, sort: str = "ending_soon", q: str = "",
                           limit: int = 50) -> tuple[list[Auction], bool]:
