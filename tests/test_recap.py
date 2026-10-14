@@ -21,9 +21,9 @@ def test_next_recap_on_round_hours():
     assert next_recap(datetime(2026, 10, 14, 8, 0, tzinfo=PARIS), 4) == datetime(2026, 10, 14, 12, 0, tzinfo=PARIS)
 
 
-def worker(name, *, last_ok=None, next_due=None, errors=0, last_error="", lines=()):
+def worker(name, *, last_ok=None, next_due=None, errors=0, last_error="", lines=(), blocked=None):
     return SimpleNamespace(name=name, last_ok=last_ok, next_due=next_due, recent_errors=errors,
-                           last_error=last_error, recap=lambda: list(lines))
+                           last_error=last_error, recap=lambda: list(lines), blocked=blocked)
 
 
 @pytest.mark.asyncio
@@ -59,4 +59,18 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     assert "📈 Tendances" not in blocks  # worker absent : pas de bloc
     assert description.startswith("Depuis ")
     assert workers[2].recent_errors == 0  # erreurs remises à zéro après le récap
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_recap_flags_worker_waiting_for_you(tmp_path):
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    ctx = SimpleNamespace(settings=Settings(_env_file=None), db=db, client=SimpleNamespace(session_ok=True))
+    packs = worker("packs", last_ok=now, next_due=now + timedelta(minutes=7), blocked="vérification humaine en attente")
+    problem, _, sections = await build_recap(ctx, [packs], now - timedelta(hours=4), now - timedelta(days=1))
+    blocks = dict(sections)
+    assert problem and "packs : vérification humaine en attente" in blocks["À vérifier"]
+    assert "⏸️ vérification humaine en attente" in blocks["🎴 Paquets"] and "✅" not in blocks["🎴 Paquets"]
     await db.close()

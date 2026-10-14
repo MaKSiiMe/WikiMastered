@@ -86,8 +86,9 @@ class WikiMastersAPI:
     async def my_listings_raw(self) -> Any:
         return await self.client.get("my_listings")
 
-    async def listing_slots(self) -> tuple[int, int]:
-        """(ventes en cours, maximum simultané). Le site limite à 5 ventes (relevé du 14/10/2026)."""
+    async def listing_slots(self) -> tuple[int | None, int]:
+        """(ventes en cours, maximum simultané). Le site limite à 5 ventes (relevé du 14/10/2026).
+        Ventes en cours : None si le site ne les compte pas."""
         info = MyListingsInfo.model_validate(await self.my_listings_raw())
         return info.sellingCount, info.maxConcurrentAuctions or 5
 

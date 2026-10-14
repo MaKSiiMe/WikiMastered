@@ -24,6 +24,7 @@ from typing import Any
 from src.config import RARITY_RANK
 from src.core.database import utcnow
 from src.core.models import Card, PackOpenResult
+from src.core import timeutils
 from src.core.notifier import Topic
 from src.core.timeutils import next_local
 from src.workers.base import Worker
@@ -36,6 +37,7 @@ class PackState:
     remaining: int | None = None
     last_regen_at: datetime | None = None
     verification_required: bool = False
+    verification_since: datetime | None = None
     paused_until: datetime | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -49,6 +51,7 @@ class PackState:
             remaining=data.get("remaining"),
             last_regen_at=parse(data.get("last_regen_at")),
             verification_required=bool(data.get("verification_required")),
+            verification_since=parse(data.get("verification_since")),
             paused_until=parse(data.get("paused_until")),
         )
 
@@ -149,7 +152,7 @@ class PackOpener(Worker):
                 return
             if self.state.verification_required and result.ok:
                 self.notifier.success("Paquets : vérification levée", "Les ouvertures reprennent.", live=self.live)
-            self.state.verification_required = False
+            self.state.verification_required, self.state.verification_since = False, None
 
             if pack.rate_limit_daily:
                 resume = next_local(time(0, 0)) + timedelta(minutes=random.uniform(5, 30))
@@ -212,7 +215,16 @@ class PackOpener(Worker):
                 live=self.live,
             )
         self.state.verification_required = True
+        self.state.verification_since = self.state.verification_since or utcnow()
         await self._save()
+
+    @property
+    def blocked(self) -> str | None:
+        if not self.state.verification_required:
+            return None
+        since = (f" depuis {self.state.verification_since.astimezone(timeutils.PARIS):%d/%m %H:%M}"
+                 if self.state.verification_since else "")
+        return f"vérification humaine en attente{since} : fais-la sur la page Paquets"
 
     async def _record(self, pulled: list) -> list[tuple[Card, bool]]:
         """Enregistre les cartes d'un paquet ; renvoie les tirages remarquables (UR, L, Shiny)."""

@@ -230,6 +230,8 @@ class InventoryManager(Worker):
         """(ventes en cours, maximum). Si les ventes sont simulées, les ventes simulées occupent aussi une place ;
         si elles sont réelles (sniper seul simulé), les reventes simulées n'occupent pas tes vraies places."""
         selling, maximum = await self.api.listing_slots()
+        if selling is None:  # compteur absent : on compte les ventes publiées par le bot
+            selling = await self.db.posted_listings_count()
         if not self.listing_live:
             selling += await self.db.simulated_active_listings(utcnow())
         return selling, maximum

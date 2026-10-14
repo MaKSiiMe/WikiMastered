@@ -269,6 +269,8 @@ class MyBids(_Model):
 
 
 class MyListingsInfo(_Model):
-    """/api/marketplace/mine : seulement des compteurs (relevé du 14/10/2026)."""
-    sellingCount: int = 0
+    """/api/marketplace/mine : seulement des compteurs (relevé du 14/10/2026).
+
+    `sellingCount` vaut parfois null (relevé du 14/10/2026, après des ventes invendues)."""
+    sellingCount: int | None = None
     maxConcurrentAuctions: int | None = None

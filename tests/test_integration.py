@@ -261,6 +261,36 @@ async def test_route_rate_limit_does_not_freeze_other_routes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_lone_server_error_pauses_only_its_route(tmp_path):
+    from src.core.client import RateLimited
+
+    def handler(request):
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(500, json={"error": "boom"})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(502, text="<html>Bad gateway</html>")
+        return httpx.Response(200, json={"balance": 3})
+
+    client, _ = make_client(tmp_path, handler, backoff_base_seconds=60)
+    with pytest.raises(RateLimited):
+        await client.get("sales_summary", card_id="x", wait=False)
+    assert client.route_paused_for("sales_summary") > 50
+    assert client._failures == 0  # pas de pause générale : le sniper continue
+    assert await asyncio.wait_for(WikiMastersAPI(client).balance(), timeout=1) == 3
+    with pytest.raises(RateLimited):
+        await client.get("sales_summary", card_id="x", wait=False)  # toujours en pause, sans requête
+
+    # Des 500 sur deux routes sans succès entre les deux : panne générale, tout le bot attend.
+    client, _ = make_client(tmp_path, handler, backoff_base_seconds=60)
+    with pytest.raises(RateLimited):
+        await client.get("sales_summary", card_id="x", wait=False)
+    task = asyncio.create_task(client.get("market_page"))
+    await asyncio.sleep(0.05)
+    assert client._failures == 1 and not task.done()
+    task.cancel()
+
+
+@pytest.mark.asyncio
 async def test_listings_respect_concurrent_limit(tmp_path):
     from src.workers.inventory_manager import InventoryManager
 
@@ -289,6 +319,28 @@ async def test_listings_respect_concurrent_limit(tmp_path):
     rows = await db._all("SELECT status, post_at FROM listings ORDER BY id")
     assert rows[0]["status"] == "posted" and rows[1]["status"] == "scheduled"
     assert datetime.fromisoformat(rows[1]["post_at"]) > now + timedelta(hours=12)  # reportée
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_null_selling_count_falls_back_to_posted_listings(tmp_path):
+    from src.workers.inventory_manager import InventoryManager
+
+    def handler(request):
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": None, "maxConcurrentAuctions": 5})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    now = datetime.now(timezone.utc)
+    await db.schedule_listing(owned_card_id="o1", card_id="c", title="T", rarity="C", base_amount=20,
+                              duration_minutes=120, post_at=now, target_end=now + timedelta(hours=2), reason="test")
+    await db._exec("UPDATE listings SET status = 'posted'")
+    assert await inv.slot_usage() == (1, 5)
     await db.close()
 
 
@@ -689,9 +741,11 @@ async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path):
         gap = (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60
         assert 4.9 <= gap <= 10
     assert [t for _, t in notifier.sent if "vérification" in t] == ["Paquets : vérification humaine demandée"]
+    assert opener.blocked and opener.blocked.startswith("vérification humaine en attente depuis ")
     state["verify"] = False
     opener._next_open = datetime.now(timezone.utc)
     await opener.step()
     assert ("SUCCESS", "Paquets : vérification levée") in notifier.sent
+    assert opener.blocked is None
     assert (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60 >= 14.9  # retour au rythme normal
     await db.close()

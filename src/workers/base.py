@@ -79,6 +79,11 @@ class Worker:
             self.next_due = utcnow() + timedelta(seconds=max(0.0, delay))
             await asyncio.sleep(max(0.0, delay))
 
+    @property
+    def blocked(self) -> str | None:
+        """Raison pour laquelle le worker attend une action de ta part (affichée par le récap)."""
+        return None
+
     def recap(self) -> list[str]:
         """Lignes d'activité propres au worker pour le récap (compteurs remis à zéro ensuite)."""
         return []
