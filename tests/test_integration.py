@@ -23,6 +23,15 @@ ROOT = Path(__file__).resolve().parents[1]
 ME = "11111111-1111-1111-1111-111111111111"
 
 
+async def seed_observed(db: Database, card_id: str, prices: list[int]) -> None:
+    """Ventes déjà observées par le sniper pour cette carte."""
+    now = datetime.now(timezone.utc)
+    await db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at) VALUES (?, ?, 't', 'C', ?, ?)",
+        [(f"seed-{card_id}-{i}", card_id, p, (now - timedelta(hours=i + 1)).isoformat()) for i, p in enumerate(prices)])
+    await db.db.commit()
+
+
 class Recorder(DiscordNotifier):
     def __init__(self):
         super().__init__("", dry_run=True)
@@ -128,6 +137,7 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
     await db.connect()
     api = WikiMastersAPI(client)
     ctx = Context(client.settings, client, api, db, notifier, PriceService(api, db, 30))
+    await seed_observed(db, auction["card"]["id"], [200, 210, 195])
     sniper = AuctionSniper(ctx)
     await sniper.setup()
     await sniper.step()
@@ -162,7 +172,8 @@ async def test_sniper_respects_concurrent_bid_limit(tmp_path):
         if request.url.path == "/api/wikibidous":
             return httpx.Response(200, json={"balance": 3000})
         if "mine" in request.url.params:
-            return httpx.Response(200, json={"auctions": [manual], "selling": []})
+            # `auctions` = marché général (leurre) ; seules les enchères de `bidding` sont les miennes.
+            return httpx.Response(200, json={"bidding": [manual], "selling": [], "auctions": market})
         if request.url.path.endswith("/sales"):
             return httpx.Response(404, json={"error": "aucune vente"})
         if request.url.path == "/api/marketplace":
@@ -305,6 +316,7 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
     await db.connect()
     api = WikiMastersAPI(client)
     ctx = Context(client.settings, client, api, db, notifier, PriceService(api, db, 30))
+    await seed_observed(db, "c1", [400, 420, 390])
     sniper, inv = AuctionSniper(ctx), InventoryManager(ctx)
     await sniper.setup()
     await inv.setup()
@@ -327,4 +339,23 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
     report = await db.report(datetime.now(timezone.utc) - timedelta(days=1))
     assert report["profit_simulated"] == 300 and report["positions_held"] == 0
     assert ("INFO", "Revente simulée") in notifier.sent
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_ended_auctions_become_observed_sales(tmp_path):
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    end = now - timedelta(minutes=1)
+
+    def row(aid, bid, seen_before_end):
+        return {"auction_id": aid, "card_id": "gmmtv", "title": "GMMTV", "norm_title": "gmmtv", "rarity": "R",
+                "is_shiny": 0, "current_bid": bid, "base_amount": 34, "min_bid": 1, "end_at": end.isoformat(),
+                "seen_at": (end - timedelta(seconds=seen_before_end)).isoformat()}
+
+    await db.upsert_auctions([row("a1", 157, 3), row("a2", None, 3), row("a3", 90, 3600)])
+    assert await db.harvest_ended_auctions(now - timedelta(seconds=30)) == 1  # sans mise / vue trop tôt : ignorées
+    assert await db.observed_prices("gmmtv", 5) == ([157], 1)
+    assert await db._all("SELECT * FROM auctions_seen") == []
     await db.close()

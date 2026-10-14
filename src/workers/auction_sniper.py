@@ -176,8 +176,10 @@ class AuctionSniper(Worker):
         me = self.api.user_id
 
         auctions, _ = await self.api.market_page(sort="ending_soon")
-        if self._ticks % 5 == 1:
-            await self._remember(auctions, now)
+        # Chaque passage est mémorisé : le dernier prix vu avant la fin devient une vente observée.
+        await self._remember(auctions, now)
+        if self._ticks % 10 == 5:
+            await self.db.harvest_ended_auctions(now - timedelta(seconds=30))
         await self._track_outbids(auctions, me)
         if self._ticks % 20 == 0:
             await self._refresh_engaged()

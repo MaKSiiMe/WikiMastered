@@ -13,7 +13,7 @@ from src.core.client import user_id_from_cookie
 from src.core.endpoints import Endpoints
 from src.core.models import Auction, CollectionPage, OwnedCard, PackOpenResult, min_next_bid
 from src.core.models import SaleRow
-from src.core.pricing import Quote, recent_estimates
+from src.core.pricing import Quote, combine, recent_estimates
 from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
 from src.tools.parse_curl import parse_curl, to_endpoint
@@ -154,6 +154,13 @@ def test_night_window_crossing_midnight():
 def test_recent_sales_median_beats_stale_average():
     rows = [SaleRow(final_price=p, settled_at=NOW - timedelta(days=i)) for i, p in enumerate([500, 480, 30, 520, 510, 20, 15])]
     assert recent_estimates(rows, 5)["*"] == (500.0, 7)  # 5 dernières : 500 480 30 520 510
+
+
+def test_observed_sales_cap_the_stale_site_average():
+    assert combine([157], 1, 391.0) == Quote(157.0, 1)           # cas réel GMMTV
+    assert combine([500, 480, 520], 3, 300.0) == Quote(300.0, 3)  # plafonné par prudence
+    assert combine([], 0, 391.0) == Quote(391.0, 0)               # sans observation : pas fiable
+    assert not combine([], 0, 391.0).reliable(2)
 
 
 def test_sale_and_discard_selection_keeps_one_and_protects():

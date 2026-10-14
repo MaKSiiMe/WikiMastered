@@ -70,7 +70,7 @@ def select_for_sale(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[s
     for card_id, copies in groups.items():
         for row in spare_copies(copies, s.sell_keep_copies, excluded):
             q = quotes.get(card_id, {}).get(row.rarity or "")
-            if q and q.reliable(s.price_min_sales) and q.average >= s.sell_min_value:  # type: ignore[operator]
+            if q and q.average is not None and q.average >= s.sell_min_value:
                 out.append(SaleCandidate(row, q.average, max(1, round(q.average * s.sell_price_multiplier))))  # type: ignore[arg-type]
     out.sort(key=lambda c: c.average, reverse=True)
     return out

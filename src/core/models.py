@@ -239,12 +239,13 @@ class TradesList(_Model):
 
 
 class MyBids(_Model):
-    """/api/marketplace?mine=1 : réponse réelle du 14/10/2026 = { auctions, selling, hasMore }."""
-    auctions: list[Any] = []
+    """/api/marketplace?mine=1 (relevé du 14/10/2026) : `bidding` = mes enchères [KZ my-bids-logic.js],
+    `selling` = mes ventes. `auctions` est le marché général : il ne faut PAS s'en servir ici."""
+    bidding: list[Any] = []
     selling: list[Any] = []
 
     def bid_items(self) -> list[Auction]:
-        return parse_items(Auction, self.auctions, label="enchère")
+        return parse_items(Auction, self.bidding, label="enchère")
 
 
 class MyListingsInfo(_Model):

@@ -186,6 +186,8 @@ class WikiMastersClient:
         # Limitations propres à une route (ex. 403 + Retry-After sur les cotes) : nom -> (fin, échecs)
         self._route_pause: dict[str, tuple[float, int]] = {}
         self._route_alerted: dict[str, float] = {}
+        # Routes refusées alors que la session est valide (ex. réservées au PRO) : nom -> jusqu'à
+        self._route_forbidden: dict[str, float] = {}
         self._session_ok = asyncio.Event()
         self._session_ok.set()
         self._probe_task: asyncio.Task[None] | None = None
@@ -423,6 +425,8 @@ class WikiMastersClient:
         req = self.endpoints.build(name, **values)
         if req.is_mutation:
             raise ValueError(f"{name} est une écriture : utiliser mutate()")
+        if self._route_forbidden.get(name, 0.0) > time.monotonic():
+            raise ApiError(403, None, name, "route refusée par le site (mémorisé)")
         attempts = 0
         while True:
             await self._session_ok.wait()
@@ -454,6 +458,8 @@ class WikiMastersClient:
             if kind == "forbidden":
                 # 403 peut être un droit manquant (route PRO) : on ne fige tout que si la session est morte.
                 if name != "balance" and await self._probe():
+                    self._route_forbidden[name] = time.monotonic() + 6 * 3600
+                    log.info("route %s refusée (session valide) : ignorée pendant 6 h", name)
                     raise ApiError(403, payload, name, "accès refusé à cette route (session valide)")
                 self._on_auth_lost(name, 403)
                 continue
