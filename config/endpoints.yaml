@@ -38,11 +38,11 @@ endpoints:
     params: {sort: "{sort}"}
     defaults: {sort: added}
 
-  market_page:                  # [WR market-api.js] page>=1, sort: ending_soon | recent
-    method: GET                 # -> { auctions: [ {id, card{...}, seller_id, status, end_at,
-    path: /api/marketplace      #       base_amount, current_bid, current_bidder_id} ], hasMore }
-    params: {page: "{page}", limit: "{limit}", sort: "{sort}", q: "{q}"}
-    defaults: {page: 1, limit: 50, sort: ending_soon, q: ""}
+  market_page:                  # [WR market-api.js] page>=1, sort: ending_soon | recent ; rarity=UR (relevé
+    method: GET                 #   du 15/10/2026, limit 50 max) -> { auctions: [ {id, card{...}, seller_id,
+    path: /api/marketplace      #   status, end_at, base_amount, current_bid, current_bidder_id} ], hasMore }
+    params: {page: "{page}", limit: "{limit}", sort: "{sort}", q: "{q}", rarity: "{rarity}"}
+    defaults: {page: 1, limit: 50, sort: ending_soon, q: "", rarity: ""}
 
   auction_detail:               # [WR market-api.js, KZ bridge/marketplace.js] -> { auction: {...} }
     method: GET

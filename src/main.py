@@ -8,7 +8,7 @@
     python -m src.main trends [--days 7]        # les tendances auraient-elles rapporté ?
     python -m src.main packs [--hours 24]       # paquets ouverts récemment
     python -m src.main collection               # collection à compléter (jours de l'année…)
-    python -m src.main market [--pages 4]       # où sont les fins imminentes dans le marché
+    python -m src.main market [--pages 4] [--rarity UR]  # où sont les fins imminentes dans le marché
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from src.core.api import WikiMastersAPI
 from src.core.client import WikiMastersClient
 from src.core.database import Database
 from src.core.endpoints import Endpoints
+from src.core.models import MarketPage
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until
@@ -298,14 +299,26 @@ async def collection_status(settings: Settings) -> None:
             print(f"Étiquettes : {state['tag_error']}")
 
 
-async def market_status(settings: Settings, pages: int, sort: str) -> None:
-    """Lit quelques pages du marché (50 enchères, 3 s d'écart) et montre où sont les fins imminentes."""
+async def market_status(settings: Settings, pages: int, sort: str, rarity: str) -> None:
+    """Lit quelques pages du marché (50 enchères, 3 s d'écart) et montre où sont les fins imminentes,
+    avec les en-têtes de cache de la réponse (une réponse en cache peut dater de plusieurs secondes)."""
     async with build_context(settings) as ctx:
+        await ctx.client._maybe_refresh()
         for page in range(1, pages + 1):
             if page > 1:
                 await asyncio.sleep(3)
-            auctions, more = await ctx.api.market_page(page=page, sort=sort)
+            resp = await ctx.client._send(ctx.client.endpoints.build("market_page", page=page, sort=sort,
+                                                                     rarity=rarity))
             now = datetime.now(timezone.utc)
+            cache = {k: v for k, v in resp.headers.items()
+                     if k.lower() in ("age", "cache-control", "date", "etag", "last-modified", "expires")
+                     or "cache" in k.lower()}
+            if resp.status_code != 200:
+                print(f"page {page} : HTTP {resp.status_code} {resp.text[:200]}")
+                break
+            result = MarketPage.model_validate(resp.json())
+            auctions, more = result.items(), result.hasMore
+            print(f"page {page} : en-têtes {cache}")
             left = sorted(a.seconds_left(now) for a in auctions)
             statuses: dict[str, int] = {}
             for a in auctions:
@@ -340,6 +353,7 @@ def main(argv: list[str] | None = None) -> None:
     mk = sub.add_parser("market", help="où sont les fins imminentes dans le marché (lecture seule)")
     mk.add_argument("--pages", type=int, default=4)
     mk.add_argument("--sort", default="ending_soon")
+    mk.add_argument("--rarity", default="", help="C, PC, R, SR, UR, L…")
     pk = sub.add_parser("packs", help="paquets ouverts récemment (lecture seule)")
     pk.add_argument("--hours", type=int, default=24)
     tr = sub.add_parser("trends", help="mesure des signaux de tendance (lecture seule)")
@@ -372,7 +386,7 @@ def main(argv: list[str] | None = None) -> None:
     elif command == "collection":
         asyncio.run(collection_status(settings))
     elif command == "market":
-        asyncio.run(market_status(settings, max(1, min(args.pages, 10)), args.sort))
+        asyncio.run(market_status(settings, max(1, min(args.pages, 10)), args.sort, args.rarity.upper()))
     elif command == "packs":
         asyncio.run(packs_status(settings, args.hours))
     elif command == "trends":

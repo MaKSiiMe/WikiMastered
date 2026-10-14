@@ -64,9 +64,9 @@ class WikiMastersAPI:
         return [row async for row in self.iter_collection(q)]
 
     async def market_page(self, *, page: int = 1, sort: str = "ending_soon", q: str = "",
-                          limit: int = 50) -> tuple[list[Auction], bool]:
+                          limit: int = 50, rarity: str = "") -> tuple[list[Auction], bool]:
         result = MarketPage.model_validate(
-            await self.client.get("market_page", page=page, sort=sort, q=q, limit=limit)
+            await self.client.get("market_page", page=page, sort=sort, q=q, limit=limit, rarity=rarity)
         )
         return result.items(), result.hasMore
 
