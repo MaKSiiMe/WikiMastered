@@ -61,7 +61,8 @@ endpoints:
     method: GET                 #   (relevé réel du 14/10/2026 : 5 ventes simultanées max)
     path: /api/marketplace/mine
 
-  my_bids:                      # [KZ features/my-bids.js] -> { auctions: [...], selling: [...], hasMore }
+  my_bids:                      # [KZ features/my-bids.js] -> { bidding: [mes enchères], selling: [mes ventes],
+                                #   auctions: [marché général, à ignorer], hasMore }
     method: GET
     path: /api/marketplace
     params: {page: "1", limit: "{limit}", mine: "1"}

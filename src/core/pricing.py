@@ -1,12 +1,16 @@
-"""Estimation de la valeur de revente d'une carte, avec cache SQLite.
+"""Estimation de la valeur de revente d'une carte.
 
-Le prix suit surtout les tendances (actualité, pop culture, mèmes) plus que la rareté :
-l'estimation privilégie donc la **médiane des dernières ventes réelles**
-(/api/marketplace/cards/{id}/sales, [WP market.js]), plus réactive qu'une moyenne.
-Repli : la moyenne par rareté de ?scope=summary [KZ bridge/prices.js] ; pour un compte
-non PRO elle ne contient pas `count`, le nombre de ventes est alors inconnu.
+Le prix suit surtout les tendances (actualité, pop culture, mèmes) plus que la rareté, et
+la moyenne du site peut être très datée (relevé réel : GMMTV vendue 157 WB, moyenne 391).
+Sources, de la plus fiable à la moins fiable :
+1. **Ventes observées** par le sniper lui-même (table observed_sales) : médiane des
+   PRICE_RECENT_SALES dernières. Gratuit, sans requête, et à jour des tendances.
+2. Historique du site /api/marketplace/cards/{id}/sales [WP market.js] — refusé (403)
+   aux comptes non PRO, donc rarement disponible.
+3. Moyenne ?scope=summary [KZ bridge/prices.js], sans nombre de ventes hors PRO.
 
-Clés du cache : une rareté (C…L) quand les ventes la précisent, sinon "*" (toutes raretés).
+Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence).
+`count` = nombre de ventes observées : sans observation, l'estimation n'est pas fiable.
 """
 
 from __future__ import annotations
@@ -31,10 +35,20 @@ _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 @dataclass(frozen=True)
 class Quote:
     average: float | None  # estimation de revente (médiane récente ou moyenne)
-    count: int | None      # nombre de ventes connues ; None = inconnu (compte non PRO)
+    count: int | None      # ventes observées (0 = aucune) ; None = inconnu
 
     def reliable(self, min_sales: int) -> bool:
         return self.average is not None and (self.count is None or self.count >= min_sales)
+
+
+def combine(observed: list[int], n_observed: int, site_average: float | None) -> Quote:
+    """Médiane des ventes observées, plafonnée par la moyenne du site ; sinon la moyenne seule."""
+    if observed:
+        estimate = float(statistics.median(observed))
+        if site_average is not None:
+            estimate = min(estimate, site_average)
+        return Quote(estimate, n_observed)
+    return Quote(site_average, 0)
 
 
 def recent_estimates(rows: list[SaleRow], recent_n: int) -> dict[str, tuple[float | None, int | None]]:
@@ -75,16 +89,24 @@ class PriceService:
             if r in RARITIES and (s.average is None or s.average >= 0)
         }
 
-    async def quotes(self, card_id: str, *, max_age: timedelta | None = None, wait: bool = True) -> dict[str, Quote]:
-        max_age = max_age or self.default_ttl
+    async def _market(self, card_id: str, max_age: timedelta, wait: bool) -> dict[str, tuple[float | None, int | None]]:
         cached = await self.db.price_get(card_id)
         if cached and utcnow() - cached[0] <= max_age:
-            data = cached[1]
-        else:
-            data = await self._fetch(card_id, wait)
-            await self.db.price_put(card_id, data)
-        return {r: Quote(avg, None if cnt is None else int(cnt)) for r, (avg, cnt) in data.items()
-                if r in RARITIES or r == ANY}
+            return cached[1]
+        data = await self._fetch(card_id, wait)
+        await self.db.price_put(card_id, data)
+        return data
+
+    async def quotes(self, card_id: str, *, max_age: timedelta | None = None, wait: bool = True) -> dict[str, Quote]:
+        observed, n_observed = await self.db.observed_prices(card_id, self.recent_n)
+        try:
+            market = await self._market(card_id, max_age or self.default_ttl, wait)
+        except (RateLimited, ApiError):
+            if not observed:
+                raise
+            market = {}
+        keys = {r for r in market if r in RARITIES or r == ANY} or {ANY}
+        return {r: combine(observed, n_observed, market.get(r, (None, None))[0]) for r in keys}
 
     async def is_cached(self, card_id: str) -> bool:
         cached = await self.db.price_get(card_id)

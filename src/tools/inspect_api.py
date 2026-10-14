@@ -88,7 +88,7 @@ async def inspect(ctx: Context, out_dir: str | None = None) -> None:
         ("collection_page", {"page": 0}, CollectionPage, OwnedCard, "collection"),
         ("market_page", {}, MarketPage, Auction, "auctions"),
         ("active_trades", {}, TradesList, None, None),
-        ("my_bids", {}, MyBids, None, None),
+        ("my_bids", {}, MyBids, Auction, "bidding"),
         ("my_listings", {}, None, None, None),
     ]
     payloads: dict[str, Any] = {}
@@ -105,6 +105,8 @@ async def inspect(ctx: Context, out_dir: str | None = None) -> None:
             return
         payloads[name] = payload
         (out / f"{name}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        if isinstance(payload, dict):
+            print(f"  clés : {list(payload)}")
         print("\n".join(shape(payload)[:60]))
         for note in check(model, payload, item_model, items_key):
             print(f"  -> {note}")

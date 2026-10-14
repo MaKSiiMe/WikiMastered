@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS auctions_seen (
 );
 CREATE INDEX IF NOT EXISTS idx_auctions_title ON auctions_seen (norm_title);
 
+CREATE TABLE IF NOT EXISTS observed_sales (
+    auction_id TEXT PRIMARY KEY, card_id TEXT NOT NULL, title TEXT, rarity TEXT,
+    is_shiny INTEGER NOT NULL DEFAULT 0, price INTEGER NOT NULL, ended_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_observed_card ON observed_sales (card_id, ended_at);
+
 CREATE TABLE IF NOT EXISTS trend_alerts (
     auction_id TEXT PRIMARY KEY, article TEXT, alerted_at TEXT NOT NULL
 );
@@ -343,6 +349,34 @@ class Database:
         return await self._all(
             "SELECT * FROM auctions_seen WHERE norm_title = ? AND end_at > ?", (norm_title, iso(now))
         )
+
+    async def harvest_ended_auctions(self, before: datetime, max_gap_seconds: float = 120) -> int:
+        """Transforme les enchères vues juste avant leur fin en ventes observées.
+
+        Le dernier `current_bid` vu par le sniper (qui scrute les fins imminentes toutes
+        les ~3 s) approche le prix final. Une enchère sans mise n'est pas une vente."""
+        rows = await self._all("SELECT * FROM auctions_seen")
+        done, sales = [], []
+        for r in rows:
+            end, seen = parse_iso(r["end_at"]), parse_iso(r["seen_at"])
+            if end is None or end >= before:
+                continue
+            done.append((r["auction_id"],))
+            if r["current_bid"] and seen and (end - seen).total_seconds() <= max_gap_seconds:
+                sales.append((r["auction_id"], r["card_id"], r["title"], r["rarity"], r["is_shiny"],
+                              r["current_bid"], iso(end)))
+        await self.db.executemany(
+            "INSERT OR IGNORE INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)", sales)
+        await self.db.executemany("DELETE FROM auctions_seen WHERE auction_id = ?", done)
+        await self.db.commit()
+        return len(sales)
+
+    async def observed_prices(self, card_id: str, limit: int) -> tuple[list[int], int]:
+        """(prix des `limit` dernières ventes observées, plus récentes d'abord ; nombre total)."""
+        rows = await self._all("SELECT price FROM observed_sales WHERE card_id = ? ORDER BY ended_at DESC",
+                               (card_id,))
+        return [r["price"] for r in rows[:limit]], len(rows)
 
     async def prune_auctions(self, before: datetime) -> None:
         await self._exec("DELETE FROM auctions_seen WHERE end_at < ?", (iso(before),))

@@ -92,8 +92,8 @@ class Settings(BaseSettings):
 
     # --- Cotes ------------------------------------------------------------------
     price_cache_ttl_minutes: float = 180.0
-    price_min_sales: int = 3
-    price_recent_sales: int = 5  # estimation = médiane des N dernières ventes réelles
+    price_min_sales: int = 2     # ventes observées minimum avant d'acheter une carte
+    price_recent_sales: int = 5  # estimation = médiane des N dernières ventes observées
 
     # --- Module D : sniper ------------------------------------------------------
     sniper_poll_min_seconds: float = 2.5

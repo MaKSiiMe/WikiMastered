@@ -69,7 +69,7 @@ class WikiMastersAPI:
         return SalesSummary.model_validate(await self.client.get("sales_summary", card_id=card_id, wait=wait))
 
     async def my_bids(self) -> list[Auction]:
-        """Enchères sur lesquelles j'ai misé (/api/marketplace?mine=1, clé `auctions`)."""
+        """Enchères sur lesquelles j'ai misé (/api/marketplace?mine=1, clé `bidding`)."""
         return MyBids.model_validate(await self.client.get("my_bids")).bid_items()
 
     async def active_trades(self) -> TradesList:
