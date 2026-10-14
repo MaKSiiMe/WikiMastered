@@ -5,6 +5,7 @@
     python -m src.main inspect                  # capture et compare les vraies réponses JSON
     python -m src.main inventory scan|list|discard [--apply]
     python -m src.main report                   # envoie le bilan du jour sur Discord
+    python -m src.main trends [--days 7]        # les tendances auraient-elles rapporté ?
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from src.workers.google_trends import GoogleTrends
 from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
 from src.workers.pack_opener import PackOpener
+from src.workers.trend_report import trends_text
 from src.workers.wiki_trends import WikiTrends
 
 log = logging.getLogger("wikimastered")
@@ -83,9 +85,22 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
     text = f"Tirages par rareté : {rarities}"
     if ctx.settings.dry_run:
         text += "\n\n" + validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales))
+    if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine
+        text += "\n\n" + await trends_text(ctx.db, 7, await min_profit(ctx), datetime.now(timezone.utc))
     if send:
         ctx.notifier.info(f"Bilan du {now_local():%d/%m}", text, **stats)
     return stats
+
+
+async def min_profit(ctx: Context) -> int:
+    """Bénéfice exigé d'une position, d'après le solde actuel."""
+    s = ctx.settings
+    try:
+        balance = await asyncio.wait_for(ctx.api.balance(), timeout=60)
+    except Exception:  # noqa: BLE001
+        return s.portfolio_min_profit
+    budget = int(balance * s.portfolio_capital_ratio / max(1, s.portfolio_slots))
+    return max(s.portfolio_min_profit, int(budget * s.portfolio_min_profit_ratio))
 
 
 def validation_text(v: dict[str, int]) -> str:
@@ -188,6 +203,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("report", help="envoie le bilan du jour")
     ins = sub.add_parser("inspect", help="capture les vraies réponses JSON (lecture seule)")
     ins.add_argument("--out", default=None)
+    tr = sub.add_parser("trends", help="mesure des signaux de tendance (lecture seule)")
+    tr.add_argument("--days", type=int, default=7)
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
     inv.add_argument("action", choices=["scan", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
@@ -211,6 +228,11 @@ def main(argv: list[str] | None = None) -> None:
             async with build_context(settings) as ctx:
                 await inspect(ctx, args.out)
         asyncio.run(_inspect())
+    elif command == "trends":
+        async def _trends() -> None:
+            async with build_context(settings) as ctx:
+                print(await trends_text(ctx.db, args.days, await min_profit(ctx), datetime.now(timezone.utc)))
+        asyncio.run(_trends())
     elif command == "inventory":
         async def _inventory() -> None:
             async with build_context(settings) as ctx:

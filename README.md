@@ -101,6 +101,7 @@ python -m src.main inventory scan               # ce qui serait vendu / défauss
 python -m src.main inventory list --apply       # programme les ventes (fin 20:00-22:30)
 python -m src.main inventory discard --apply    # défausse, après vérification des paliers
 python -m src.main report                       # bilan du jour sur Discord
+python -m src.main trends --days 7              # mesure des signaux de tendance
 ```
 
 Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes programmées sont publiées par le bot en marche, à l'heure prévue.
@@ -132,6 +133,8 @@ Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes program
 **Tendances (E).** Le module prend le top fr.wikipedia de la veille : les données du jour ne sont publiées qu'avec environ un jour de retard. Un pic correspond à des vues ≥ 3 × la médiane des 30 jours précédents. Le prix d'une carte suit les tendances : si la carte d'un article en pic est en vente sous le budget d'une position (`TRENDS_MAX_PRICE`, 0 = ce budget), elle est signalée avec sa mise minimale et son estimation (ventes observées). Un seul message Discord par passage horaire, chaque vente n'est signalée qu'une fois. La rareté probable (projection des vues sur 30 jours, Légendaire à 20 000 vues) n'est plus qu'une information.
 
 **Google Trends (F).** Le flux RSS public de Google Trends France (`trends.google.com/trending/rss?geo=FR`) donne les 10 dernières recherches en forte hausse, le jour même, au lieu de la veille pour Wikipédia. Il est lu toutes les 20 min. Chaque nouveau terme (une fois par 24 h) est cherché au marché : même titre, ou titre contenu dans le terme, sur 2 mots au moins. Les cartes sous le budget d'une position sont signalées sur Discord, en un message par passage. Toutes les cartes trouvées, Wikipédia comprise, sont enregistrées comme signaux et mesurées chaque dimanche dans le bilan (voir « Mesure des tendances »).
+
+**Mesure des tendances.** Chaque dimanche, le bilan indique, pour Google Trends et pour Wikipédia, si les signaux de la semaine auraient rapporté. Le calcul suppose un achat en surenchérissant sur le prix final observé de la vente signalée, puis une revente à la médiane des ventes de la même carte observées dans les 7 jours suivants. Un signal est « gagnant » si le bénéfice atteint celui exigé d'une position (~147 WB). Avec au moins 10 signaux mesurés, le bilan conclut « prometteur » ou « pas rentable ». Le même calcul est disponible à tout moment avec `python -m src.main trends`.
 
 ## Données
 
