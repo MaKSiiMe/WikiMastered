@@ -90,6 +90,26 @@ Stack `wikimastered` > *Environment variables* > `DRY_RUN=false` > **Update the 
 
 Pour réactiver plus tard la vente ou la défausse automatiques : `AUTO_LIST=true` et `AUTO_DISCARD=true`. Ces deux options sont désactivées par défaut.
 
+## Session autonome (recommandé)
+
+Sans cette étape, le bot se met en pause dès que sa session expire, et attend que tu lui donnes un nouveau cookie. Avec elle, il renouvelle lui-même sa session, comme le fait ton navigateur.
+
+1. **Donne au bot sa propre session.** Le jeton de renouvellement ne sert qu'une fois. Si ton navigateur habituel et le bot partagent la même session, le premier qui la renouvelle invalide l'autre.
+   - Ouvre une **fenêtre de navigation privée** (ou un autre navigateur) et connecte-toi sur https://www.wiki-masters.com.
+   - Récupère le cookie comme à l'étape 1.
+   - **Ferme la fenêtre sans cliquer sur « Se déconnecter ».** Fermer une fenêtre privée efface le cookie de ton côté, mais la session reste valable pour le bot.
+   - Plus tard, évite aussi « Se déconnecter » dans ton navigateur habituel. Par défaut, Supabase ferme alors **toutes** les sessions du compte, celle du bot comprise. Ce comportement n'est pas encore vérifié sur ce site.
+2. **Récupère la clé publique Supabase**, dans la même fenêtre : DevTools (F12) > *Réseau* > filtre `supabase.co` > n'importe quelle requête > *En-têtes de requête* > valeur de `apikey` (une longue chaîne qui commence par `eyJ`). Cette clé est envoyée à tous les visiteurs du site : ce n'est pas un mot de passe.
+3. Dans la stack > *Environment variables* :
+   ```
+   WM_COOKIE=<le cookie de la fenêtre privée>
+   SUPABASE_ANON_KEY=<la valeur de apikey>
+   ```
+   puis **Update the stack**.
+4. Vérifie dans la *Console* : `python -m src.main check` doit afficher `renouvellement automatique actif`. Le message Discord « Bot démarré » l'indique aussi.
+
+Si Supabase refuse un jour le renouvellement, Discord affiche « Session : renouvellement refusé ». Refais alors les étapes 1 et 3.
+
 ## Entretien
 
 **Session expirée.** Discord affiche l'alerte « Session expirée » et le bot se met en pause. Récupère un nouveau cookie (étape 1), remplace `WM_COOKIE` dans la stack, puis **Update the stack**. Autre possibilité, sans redémarrage : dans la *Console*, lance

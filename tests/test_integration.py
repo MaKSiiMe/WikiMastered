@@ -42,9 +42,10 @@ class Recorder(DiscordNotifier):
 
 
 def make_client(tmp_path: Path, handler, **overrides) -> tuple[WikiMastersClient, Recorder]:
-    s = Settings(_env_file=None, data_dir=tmp_path, wm_cookie="a=b", wm_user_id=ME,
-                 http_min_spacing_seconds=0, http_jitter_seconds=0, backoff_base_seconds=0.01,
-                 backoff_rate_limit_base_seconds=0.01, **overrides)
+    s = Settings(_env_file=None, **{
+        "data_dir": tmp_path, "wm_cookie": "a=b", "wm_user_id": ME, "http_min_spacing_seconds": 0,
+        "http_jitter_seconds": 0, "backoff_base_seconds": 0.01, "backoff_rate_limit_base_seconds": 0.01,
+        **overrides})
     notifier = Recorder()
     client = WikiMastersClient(s, Endpoints.load(ROOT / "config" / "endpoints.yaml"), notifier)
     client._http = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=client._http.cookies)

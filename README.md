@@ -80,6 +80,8 @@ Sur 401/403, tous les workers se figent et une alerte critique part sur Discord.
 
 Les cookies rafraîchis par le serveur (`Set-Cookie`) sont conservés dans `data/session.json`. Ce fichier est ignoré dès que `WM_COOKIE` change dans `.env`.
 
+**Session autonome.** Avec `SUPABASE_ANON_KEY`, le bot renouvelle lui-même sa session Supabase un peu avant l'expiration du jeton d'accès, ou sur un 401. Il passe par l'API standard de Supabase (`/auth/v1/token`), la même que ton navigateur. La nouvelle session est écrite dans `data/session.json`. Une commande lancée dans la console reprend cette session, et le bot reprend celle qu'une commande aurait renouvelée : les deux processus ne se gênent pas. Une écriture refusée faute de session n'est jamais rejouée : le worker refait sa décision au passage suivant. Le bot doit avoir **sa propre session** : le jeton de renouvellement ne sert qu'une fois, et un navigateur qui partage la même session finirait par l'invalider. Marche à suivre : [docs/PORTAINER.md](docs/PORTAINER.md#session-autonome-recommandé).
+
 ## Corriger ou ajouter une route
 
 ```bash
