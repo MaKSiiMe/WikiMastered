@@ -191,7 +191,7 @@ class AuctionSniper(Worker):
         self._engaged: dict[str, datetime] = {}
         # Enchères engagées par le bot lui-même (pour le décompte des positions).
         self._bot_engaged: set[str] = set(self._leading)
-        self._digest: list[str] = []
+        self._digest: list[tuple[bool, str]] = []  # (simulée, résumé)
         self._next_digest = utcnow() + timedelta(minutes=self.settings.notify_digest_minutes)
         # Tes mises manuelles (collections) : enchères et cartes que le bot ne touche jamais.
         self._manual_auctions: set[str] = set()
@@ -304,7 +304,7 @@ class AuctionSniper(Worker):
             if await self.ctx.prices.is_cached(a.catalog_id):
                 continue
             try:
-                await self.ctx.prices.quote(a.catalog_id, a.rarity, wait=False)
+                await self.ctx.prices.quote(a.catalog_id, a.rarity, wait=False, shiny=a.shiny)
             except (RateLimited, ApiError):
                 pass
             return
@@ -312,13 +312,12 @@ class AuctionSniper(Worker):
     async def portfolio(self, now: datetime) -> Portfolio:
         held = await self.db.positions_summary()
         engaged_real = sum(amount for _, amount in self._leading.values())
-        engaged_sim = await self.db.simulated_engaged_cost(now)  # 0 s'il n'y a aucune mise simulée
-        bot_engaged = sum(1 for aid in self._bot_engaged if aid in self._engaged)
+        pending = await self.db.pending_bids()  # mises pas encore réglées, même après la fin de l'enchère
         cap, room = await self._sale_capacity(now)
         return portfolio_state(
             self.settings, balance=await self._current_balance(), held_count=held["count"],
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
-            engaged_real=engaged_real, engaged_sim=engaged_sim, bot_engaged_count=bot_engaged,
+            engaged_real=engaged_real, engaged_sim=pending["sim_cost"], bot_engaged_count=pending["positions"],
             max_positions=cap, sale_room=room,
         )
 
@@ -389,11 +388,18 @@ class AuctionSniper(Worker):
         self._next_digest = now + timedelta(minutes=self.settings.notify_digest_minutes)
         if not self._digest:
             return
-        lines, self._digest = self._digest, []
+        entries, self._digest = self._digest, []
+        simulated = sum(sim for sim, _ in entries)
+        real = len(entries) - simulated
+        mixed = simulated and real
+        lines = [f"{'[simulée] ' if mixed and sim else ''}{summary}" for sim, summary in entries]
         shown = "\n".join(lines[-15:])
         more = f"\n… et {len(lines) - 15} autre(s)" if len(lines) > 15 else ""
-        title = "Sniper : enchères simulées" if not self.settings.is_live("place_bid") else "Sniper : enchères placées"
-        self.notifier.info(f"{title} ({len(lines)})", shown + more)
+        if mixed:  # ex. mises de collection réelles, positions simulées (SIMULATE=sniper)
+            title = f"Sniper : {len(lines)} enchères ({real} placée(s), {simulated} simulée(s))"
+        else:
+            title = f"Sniper : enchères {'simulées' if simulated else 'placées'} ({len(lines)})"
+        self.notifier.info(title, shown + more)
 
     async def _remember(self, auctions: list[Auction], now: datetime) -> None:
         await self.db.upsert_auctions([{
@@ -424,7 +430,7 @@ class AuctionSniper(Worker):
                 return None
         # Sans attendre : si la route des cotes est limitée, l'enchère est simplement ignorée.
         try:
-            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False)
+            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
         except (RateLimited, ApiError):
             quote = None
         return decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
@@ -467,7 +473,7 @@ class AuctionSniper(Worker):
             await self.db.record_bid(**common, status="simulated")
             self._engaged[auction.id] = auction.end_at
             self._bot_engaged.add(auction.id)
-            self._report_bid("Enchère simulée", summary)
+            self._report_bid("Enchère simulée", summary, simulated=True)
             return True
 
         payload = result.payload if isinstance(result.payload, dict) else {}
@@ -499,12 +505,12 @@ class AuctionSniper(Worker):
                                                      decision.profit), params, retried=True)
         return False
 
-    def _report_bid(self, title: str, summary: str) -> None:
+    def _report_bid(self, title: str, summary: str, *, simulated: bool = False) -> None:
         self.log.info("%s : %s", title, summary)
         if self.settings.notify_each_bid:
             self.notifier.info(title, summary)
         else:
-            self._digest.append(summary)
+            self._digest.append((simulated, summary))
 
     async def _settle(self) -> None:
         """Résultat des enchères échues. En DRY_RUN : gagnée si personne n'a payé plus que notre mise."""

@@ -58,7 +58,7 @@ async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
                                    collection_sets=["jours"], collection_max_price=20)
     db = Database(tmp_path / "t.db")
     await db.connect()
-    await seed_observed(db, "card-Mème", [400, 410, 390])
+    await seed_observed(db, "card-Mème", [400, 410, 390], rarity="R")
     await db.kv_set("collection", {"owned": [], "missing": ["14 octobre"], "total": 366})
     api = WikiMastersAPI(client)
     sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
@@ -67,13 +67,21 @@ async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
     status = {r["auction_id"]: (r["status"], r["dry_run"]) for r in await db._all("SELECT * FROM bids")}
     assert status == {"pos": ("simulated", 1), "col": ("placed", 0)}
     assert posted == ["/api/marketplace/col/bid"]  # seule la mise de collection est partie
+    sniper._flush_digest(now + timedelta(days=1))
+    assert ("INFO", "Sniper : 2 enchères (1 placée(s), 1 simulée(s))") in notifier.sent
     assert client.user_id == ME
     await db.close()
 
 
 @pytest.mark.asyncio
-async def test_duplicates_fill_free_slots_during_the_day(tmp_path):
+async def test_duplicates_fill_free_slots_during_the_day(tmp_path, monkeypatch):
+    from src.core import timeutils
+    from src.workers import inventory_manager
     from src.workers.inventory_manager import InventoryManager
+
+    # En journée : le soir, une vente de 6 h finirait la nuit et viserait le lendemain soir.
+    morning = datetime.now(timeutils.PARIS).replace(hour=10, minute=0, second=0, microsecond=0)
+    monkeypatch.setattr(inventory_manager, "now_local", lambda: morning)
 
     slots = {"selling": 3}
     reads = []
@@ -103,7 +111,7 @@ async def test_duplicates_fill_free_slots_during_the_day(tmp_path):
     assert await inv.fill_free_slots() == 2  # 2 places libres sur 5 : les 2 doublons les mieux cotés
     rows = await db._all("SELECT card_id, post_at FROM listings ORDER BY base_amount DESC")
     assert [r["card_id"] for r in rows] == ["A", "B"]
-    soon = datetime.now(timezone.utc) + timedelta(hours=10)
+    soon = morning + timedelta(hours=10)
     assert all(datetime.fromisoformat(r["post_at"]) < soon for r in rows)  # pas d'attente jusqu'au soir
     slots["selling"] = 4  # une vente terminée libère une place (4 en cours + 2 programmées = plein)
     assert await inv.fill_free_slots() == 0

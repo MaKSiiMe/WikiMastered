@@ -113,6 +113,17 @@ HELD = "status IN ('won', 'sim_won') AND closed = 0"
 LISTING_OPEN = "('scheduled', 'posted', 'simulated', 'uncertain')"
 
 
+def _observed_filter(card_id: str, rarity: str | None, shiny: bool | None) -> tuple[str, tuple]:
+    where, params = "card_id = ?", [card_id]
+    if rarity is not None:
+        where += " AND rarity = ?"
+        params.append(rarity)
+    if shiny is not None:
+        where += " AND is_shiny = ?"
+        params.append(int(shiny))
+    return where, tuple(params)
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -318,10 +329,18 @@ class Database:
     async def close_position(self, bid_id: int, sale_price: int | None) -> None:
         await self.update_bid(bid_id, closed=1, sale_price=sale_price, sold_at=utcnow())
 
-    async def simulated_engaged_cost(self, now: datetime) -> int:
-        row = await self._one("SELECT COALESCE(SUM(amount), 0) AS s FROM bids WHERE status = 'simulated' "
-                              "AND end_at > ?", (iso(now),))
-        return int(row["s"]) if row else 0
+    async def pending_bids(self) -> dict[str, int]:
+        """Mises du bot pas encore réglées, enchère finie ou non : elles comptent tant que leur résultat
+        n'est pas relu (sinon, entre la fin de l'enchère et ce relevé, elles échappent aux plafonds).
+
+        `positions` : mises de positions (hors collection) ; `sim_cost` : WikiBidous des mises simulées."""
+        row = await self._one(
+            "SELECT COALESCE(SUM(reason NOT LIKE 'collection%'), 0) AS positions, "
+            "COALESCE(SUM(CASE WHEN status = 'simulated' THEN amount ELSE 0 END), 0) AS sim_cost "
+            "FROM bids b WHERE status IN ('placed', 'simulated', 'uncertain') "
+            "AND id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)")
+        return {"positions": int(row["positions"]), "sim_cost": int(row["sim_cost"])} if row else \
+            {"positions": 0, "sim_cost": 0}
 
     # --------------------------------------------------------------- ventes
     async def schedule_listing(self, *, owned_card_id: str, card_id: str, title: str, rarity: str | None,
@@ -442,15 +461,30 @@ class Database:
         await self.db.commit()
         return len(sales)
 
-    async def observed_prices(self, card_id: str, limit: int) -> tuple[list[int], int]:
-        """(prix des `limit` dernières ventes observées, plus récentes d'abord ; nombre total)."""
-        rows = await self._all("SELECT price FROM observed_sales WHERE card_id = ? ORDER BY ended_at DESC",
-                               (card_id,))
+    async def observed_prices(self, card_id: str, limit: int, rarity: str | None = None,
+                              shiny: bool | None = None) -> tuple[list[int], int]:
+        """(prix des `limit` dernières ventes observées, plus récentes d'abord ; nombre total).
+
+        Une même carte vaut très différemment selon sa rareté et si elle est shiny : `rarity`
+        et `shiny` limitent aux ventes comparables (None = sans filtre)."""
+        where, params = _observed_filter(card_id, rarity, shiny)
+        rows = await self._all(f"SELECT price FROM observed_sales WHERE {where} ORDER BY ended_at DESC", params)
         return [r["price"] for r in rows[:limit]], len(rows)
 
-    async def observed_prices_since(self, card_id: str, since: datetime, limit: int) -> list[int]:
-        rows = await self._all("SELECT price FROM observed_sales WHERE card_id = ? AND ended_at >= ? "
-                               "ORDER BY ended_at DESC LIMIT ?", (card_id, iso(since), limit))
+    async def observed_by_rarity(self, card_id: str, limit: int, shiny: bool = False) -> dict[str, tuple[list[int], int]]:
+        """Ventes observées d'une carte, par rareté : {rareté: (`limit` derniers prix, nombre)}."""
+        rows = await self._all("SELECT rarity, price FROM observed_sales WHERE card_id = ? AND is_shiny = ? "
+                               "AND rarity IS NOT NULL ORDER BY ended_at DESC", (card_id, int(shiny)))
+        groups: dict[str, list[int]] = {}
+        for r in rows:
+            groups.setdefault(r["rarity"], []).append(r["price"])
+        return {rarity: (prices[:limit], len(prices)) for rarity, prices in groups.items()}
+
+    async def observed_prices_since(self, card_id: str, since: datetime, limit: int, rarity: str | None = None,
+                                    shiny: bool | None = None) -> list[int]:
+        where, params = _observed_filter(card_id, rarity, shiny)
+        rows = await self._all(f"SELECT price FROM observed_sales WHERE {where} AND ended_at >= ? "
+                               "ORDER BY ended_at DESC LIMIT ?", (*params, iso(since), limit))
         return [r["price"] for r in rows]
 
     async def validation_stats(self, since: datetime, min_sales: int) -> dict[str, int]:
@@ -478,6 +512,21 @@ class Database:
             "uncertain": await one("SELECT (SELECT COUNT(*) FROM bids WHERE status = 'uncertain') + "
                                    "(SELECT COUNT(*) FROM listings WHERE status = 'uncertain')"),
         }
+
+    async def reset_simulation(self, *, apply: bool) -> dict[str, int]:
+        """Mises et ventes simulées (positions, reventes, collection en simulation) : compte, et efface avec
+        `apply`. Les mises et ventes réelles, les ventes observées et le reste de l'historique sont gardés."""
+        listings = ("owned_card_id LIKE 'sim-%' OR status IN ('simulated', 'sim_sold', 'sim_unsold') "
+                    "OR bid_id IN (SELECT id FROM bids WHERE dry_run = 1)")
+        counts = {
+            "mises": int((await self._one("SELECT COUNT(*) AS n FROM bids WHERE dry_run = 1"))["n"]),
+            "ventes": int((await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE {listings}"))["n"]),
+        }
+        if apply:
+            await self.db.execute(f"DELETE FROM listings WHERE {listings}")
+            await self.db.execute("DELETE FROM bids WHERE dry_run = 1")
+            await self.db.commit()
+        return counts
 
     async def prune_auctions(self, before: datetime) -> None:
         await self._exec("DELETE FROM auctions_seen WHERE end_at < ?", (iso(before),))

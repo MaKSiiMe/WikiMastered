@@ -23,12 +23,13 @@ ROOT = Path(__file__).resolve().parents[1]
 ME = "11111111-1111-1111-1111-111111111111"
 
 
-async def seed_observed(db: Database, card_id: str, prices: list[int]) -> None:
-    """Ventes déjà observées par le sniper pour cette carte."""
+async def seed_observed(db: Database, card_id: str, prices: list[int], rarity: str = "C") -> None:
+    """Ventes déjà observées par le sniper pour cette carte, dans cette rareté."""
     now = datetime.now(timezone.utc)
     await db.db.executemany(
-        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at) VALUES (?, ?, 't', 'C', ?, ?)",
-        [(f"seed-{card_id}-{i}", card_id, p, (now - timedelta(hours=i + 1)).isoformat()) for i, p in enumerate(prices)])
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at) VALUES (?, ?, 't', ?, ?, ?)",
+        [(f"seed-{card_id}-{i}", card_id, rarity, p, (now - timedelta(hours=i + 1)).isoformat())
+         for i, p in enumerate(prices)])
     await db.db.commit()
 
 
