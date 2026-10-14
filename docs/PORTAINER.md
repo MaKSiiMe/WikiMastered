@@ -118,6 +118,8 @@ Sans cette étape, le bot se met en pause dès que sa session expire, et attend 
 
 Si Supabase refuse un jour le renouvellement, Discord affiche « Session : renouvellement refusé ». Refais alors les étapes 1 et 3.
 
+Pourquoi un cookie au départ : le formulaire de connexion du site est protégé par une vérification anti-robot (Cloudflare Turnstile). Le bot ne se connecte donc jamais tout seul et ne contourne pas cette vérification. Il garde vivante la session que tu lui donnes, indéfiniment, sauf si elle est révoquée : déconnexion de toutes les sessions, changement de mot de passe, ou jeton consommé par un autre appareil.
+
 ## Entretien
 
 **Session expirée.** Discord affiche l'alerte « Session expirée » et le bot se met en pause. Récupère un nouveau cookie (étape 1), remplace `WM_COOKIE` dans la stack, puis **Update the stack**. Autre possibilité, sans redémarrage : dans la *Console*, lance
