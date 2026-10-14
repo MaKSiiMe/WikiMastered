@@ -63,3 +63,51 @@ async def test_duplicates_priced_within_quota(tmp_path):
     sales = select_for_sale(groups, quotes, excluded, client.settings)
     assert sorted((c.owned.catalog_id, c.price) for c in sales) == [("A", 80), ("A", 80), ("B", 65)]
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_live_writes_open_packs_despite_dry_run(tmp_path):
+    from src.core.database import Database
+    from src.core.pricing import PriceService
+    from src.workers.base import Context
+    from src.workers.pack_opener import PackOpener
+
+    sent = []
+
+    def handler(request):
+        sent.append(request.url.path)
+        return httpx.Response(200, json={"cards": [{"id": "c1", "wikipedia_title": "Ada", "rarity": "L"}],
+                                         "packs_remaining": 0})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=True, live_writes=["open_pack"],
+                                   pack_between_opens_min_seconds=0, pack_between_opens_max_seconds=0)
+    assert client.settings.is_live("open_pack") and not client.settings.is_live("place_bid")
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    assert (await api.place_bid("x", 5)).dry_run  # les mises restent simulées
+    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await opener.setup()
+    await opener._open_batch()
+    assert sent == ["/api/packs/open"]
+    assert len(await db.recent_pulls(__import__("datetime").datetime(2000, 1, 1))) == 1
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_live_messages_have_no_dry_run_prefix():
+    import json
+
+    from src.core.notifier import DiscordNotifier, Level, _Message
+
+    titles = []
+
+    def handler(request):
+        titles.append(json.loads(request.content)["embeds"][0]["title"])
+        return httpx.Response(204)
+
+    notifier = DiscordNotifier("https://discord.test/webhook", dry_run=True)
+    notifier._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    await notifier._deliver(_Message(Level.SUCCESS, "Tirage remarquable !", "", {}, live=True))
+    await notifier._deliver(_Message(Level.INFO, "Enchère simulée", ""))
+    assert titles == ["Tirage remarquable !", "[DRY RUN] Enchère simulée"]

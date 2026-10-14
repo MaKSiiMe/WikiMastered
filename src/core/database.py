@@ -211,6 +211,9 @@ class Database:
             (iso(utcnow()), card_id, owned_card_id, title, rarity, int(is_shiny), pageviews),
         )
 
+    async def recent_pulls(self, since: datetime) -> list[aiosqlite.Row]:
+        return await self._all("SELECT * FROM pulls WHERE opened_at >= ? ORDER BY opened_at DESC", (iso(since),))
+
     # ------------------------------------------------------------- enchères
     async def record_bid(self, *, auction_id: str, card_id: str, title: str, rarity: str | None,
                          is_shiny: bool, amount: int, reference_price: float | None, reason: str,

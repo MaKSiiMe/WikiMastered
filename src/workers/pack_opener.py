@@ -68,7 +68,8 @@ class PackOpener(Worker):
         s = self.settings
         self.period = timedelta(minutes=s.pack_regen_minutes)
         self.target = max(1, min(s.pack_open_min_stock, s.pack_max_stock))
-        self.state = PackState() if s.dry_run else PackState.from_json(await self.db.kv_get(STATE_KEY))
+        self.live = s.is_live("open_pack")  # DRY_RUN, sauf LIVE_WRITES=open_pack
+        self.state = PackState.from_json(await self.db.kv_get(STATE_KEY)) if self.live else PackState()
         # Première ouverture quelques minutes après le démarrage, puis toutes les 15 à 90 min.
         self._next_open = utcnow() + timedelta(minutes=random.uniform(1, 10))
 
@@ -80,7 +81,7 @@ class PackOpener(Worker):
         self.log.info("prochaine ouverture de paquets vers %s", f"{self._next_open.astimezone():%H:%M}")
 
     async def _save(self) -> None:
-        if not self.settings.dry_run:
+        if self.live:
             await self.db.kv_set(STATE_KEY, self.state.to_json())
 
     async def step(self) -> float:
@@ -138,7 +139,8 @@ class PackOpener(Worker):
             if pack.rate_limit_daily:
                 resume = next_local(time(0, 0)) + timedelta(minutes=random.uniform(5, 30))
                 self.state.paused_until = resume.astimezone(timezone.utc)
-                self.notifier.warning("Paquets : limite quotidienne atteinte", f"Reprise vers {resume:%d/%m %H:%M}.")
+                self.notifier.warning("Paquets : limite quotidienne atteinte", f"Reprise vers {resume:%d/%m %H:%M}.",
+                                      live=self.live)
                 await self._save()
                 return
 
@@ -182,6 +184,7 @@ class PackOpener(Worker):
                 "Paquets : vérification humaine demandée",
                 "WikiMasters demande une vérification. Ouvre la page Paquets dans ton navigateur et "
                 "fais-la toi-même ; aucun paquet n'a été consommé. Le bot réessaiera tout seul.",
+                live=self.live,
             )
         self.state.verification_required = True
         self.state.paused_until = recheck
@@ -198,6 +201,6 @@ class PackOpener(Worker):
             )
             if card.rarity in notify_rarities or (shiny and self.settings.pack_notify_shiny):
                 highlights.append(f"**{card.rarity}**{' ✨ Shiny' if shiny else ''} — {card.wikipedia_title}")
-        self.log.info("paquet : %s", ", ".join(f"{c.rarity}:{c.wikipedia_title}" for c, _ in pulled))
+        self.log.info("paquet ouvert : %s", ", ".join(f"{c.rarity}:{c.wikipedia_title}" for c, _ in pulled))
         if highlights:
-            self.notifier.success("Tirage remarquable !", "\n".join(highlights), stock=remaining)
+            self.notifier.success("Tirage remarquable !", "\n".join(highlights), stock=remaining, live=self.live)

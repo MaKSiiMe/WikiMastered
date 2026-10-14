@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     # --- Général -------------------------------------------------------------
     dry_run: bool = True
+    # Écritures réelles malgré DRY_RUN, par nom de route (ex. open_pack : ouvrir les paquets pour de vrai).
+    live_writes: CsvList = Field(default_factory=list)
     log_level: str = "INFO"
     timezone: str = "Europe/Paris"
     data_dir: Path = Path("data")
@@ -188,7 +190,7 @@ class Settings(BaseSettings):
     wikimedia_user_agent: str = "WikiMasteredBot/1.0 (self-hosted; configure WIKIMEDIA_USER_AGENT)"
 
     @field_validator(
-        "pack_notify_rarities", "discard_rarities", "listing_duration_options",
+        "pack_notify_rarities", "discard_rarities", "listing_duration_options", "live_writes",
         "achievement_milestones", mode="before",
     )
     @classmethod
@@ -212,6 +214,10 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
         return value
+
+    def is_live(self, endpoint: str) -> bool:
+        """Cette écriture part-elle vraiment au site ?"""
+        return not self.dry_run or endpoint in self.live_writes
 
     @property
     def session_file(self) -> Path:

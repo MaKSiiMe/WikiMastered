@@ -688,7 +688,7 @@ class WikiMastersClient:
             raise ValueError(f"{name} n'est pas une écriture")
         await self._session_ok.wait()
         await self._maybe_refresh()
-        if self.dry_run:
+        if not self.settings.is_live(name):
             log.info("[DRY RUN] %s %s %s", req.method, req.url, json.dumps(req.json, ensure_ascii=False))
             return MutationResult(0, None, dry_run=True)
         try:
