@@ -1,6 +1,7 @@
 """Module D : sniper d'enchères orienté capital, et arbitrage nocturne.
 
-Le site limite à 5 ventes et 5 enchères simultanées : le bot achète peu, mais gros.
+Le site limite à 5 ventes simultanées (les mises sont illimitées) : chaque carte achetée doit
+attendre une de ces 5 places pour être revendue, donc le bot achète peu, mais gros.
 - Une carte n'est achetée que pour être revendue (une « position ») : mise ≤ budget d'une
   position ≈ capital × PORTFOLIO_CAPITAL_RATIO / PORTFOLIO_SLOTS, et bénéfice attendu
   (estimation de revente − mise) ≥ max(PORTFOLIO_MIN_PROFIT, budget × PORTFOLIO_MIN_PROFIT_RATIO).
@@ -163,7 +164,8 @@ class AuctionSniper(Worker):
         self._bot_engaged: set[str] = set(self._leading)
         self._digest: list[str] = []
         self._next_digest = utcnow() + timedelta(minutes=self.settings.notify_digest_minutes)
-        await self._refresh_engaged()
+        if self.settings.sniper_max_concurrent_bids > 0:
+            await self._refresh_engaged()
         if not self.api.user_id:
             self.notifier.warning("Sniper : identifiant joueur inconnu",
                                   "Renseigne WM_USER_ID pour ne jamais enchérir sur tes propres ventes.")
@@ -181,7 +183,7 @@ class AuctionSniper(Worker):
         if self._ticks % 10 == 5:
             await self.db.harvest_ended_auctions(now - timedelta(seconds=30))
         await self._track_outbids(auctions, me)
-        if self._ticks % 20 == 0:
+        if self._ticks % 20 == 0 and self.settings.sniper_max_concurrent_bids > 0:
             await self._refresh_engaged()
 
         in_window_now = [a for a in auctions if in_snipe_window(a, me, params.window_seconds, now)]
@@ -258,7 +260,8 @@ class AuctionSniper(Worker):
         grace = timedelta(seconds=self.settings.sniper_settle_grace_seconds)
         self._engaged = {aid: end for aid, end in self._engaged.items() if end + grace > now}
         self._bot_engaged &= set(self._engaged) | set(self._leading)
-        return max(0, self.settings.sniper_max_concurrent_bids - len(self._engaged))
+        limit = self.settings.sniper_max_concurrent_bids
+        return max(0, limit - len(self._engaged)) if limit > 0 else 1_000_000
 
     async def _refresh_engaged(self) -> None:
         """Ajoute les enchères en cours vues par le serveur (y compris tes mises manuelles)."""

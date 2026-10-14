@@ -109,7 +109,7 @@ class Settings(BaseSettings):
     sniper_prefetch_seconds: float = 8.0
     sniper_allow_rebid: bool = True
     sniper_settle_grace_seconds: int = 30
-    sniper_max_concurrent_bids: int = 5
+    sniper_max_concurrent_bids: int = 0   # 0 = illimité (le site n'impose pas de limite aux mises)
 
     # Arbitrage nocturne
     night_start: time = time(2, 0)
