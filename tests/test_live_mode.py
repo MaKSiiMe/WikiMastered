@@ -72,8 +72,14 @@ async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_duplicates_fill_free_slots_during_the_day(tmp_path):
+async def test_duplicates_fill_free_slots_during_the_day(tmp_path, monkeypatch):
+    from src.core import timeutils
+    from src.workers import inventory_manager
     from src.workers.inventory_manager import InventoryManager
+
+    # En journée : le soir, une vente de 6 h finirait la nuit et viserait le lendemain soir.
+    morning = datetime.now(timeutils.PARIS).replace(hour=10, minute=0, second=0, microsecond=0)
+    monkeypatch.setattr(inventory_manager, "now_local", lambda: morning)
 
     slots = {"selling": 3}
     reads = []
@@ -103,7 +109,7 @@ async def test_duplicates_fill_free_slots_during_the_day(tmp_path):
     assert await inv.fill_free_slots() == 2  # 2 places libres sur 5 : les 2 doublons les mieux cotés
     rows = await db._all("SELECT card_id, post_at FROM listings ORDER BY base_amount DESC")
     assert [r["card_id"] for r in rows] == ["A", "B"]
-    soon = datetime.now(timezone.utc) + timedelta(hours=10)
+    soon = morning + timedelta(hours=10)
     assert all(datetime.fromisoformat(r["post_at"]) < soon for r in rows)  # pas d'attente jusqu'au soir
     slots["selling"] = 4  # une vente terminée libère une place (4 en cours + 2 programmées = plein)
     assert await inv.fill_free_slots() == 0
