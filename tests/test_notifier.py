@@ -81,3 +81,14 @@ def test_report_sections():
     assert as_section("**Collection** : 33/366 — il manque : 2 janvier") == ("Collection", "33/366 — il manque : 2 janvier")
     assert as_section("**Validation de la simulation**\nMarché observé : 3") == ("Validation de la simulation",
                                                                                  "Marché observé : 3")
+
+
+def test_card_links():
+    from src.core.models import Card
+    from src.workers.pack_opener import highlight_line
+
+    assert Card(id="1", wikipedia_title="14 octobre").page_url == "https://fr.wikipedia.org/wiki/14_octobre"
+    assert Card(id="1", wikipedia_title="X", wikipedia_url="https://en.wikipedia.org/wiki/X").page_url.startswith("https://en.")
+    assert Card(id="1").page_url is None
+    assert highlight_line(Card(id="1", wikipedia_title="Céline Dion", rarity="UR"), True) == \
+        "**UR** ✨ Shiny — [Céline Dion](https://fr.wikipedia.org/wiki/C%C3%A9line_Dion)"
