@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     # --- Général -------------------------------------------------------------
     dry_run: bool = True
+    # Écritures réelles malgré DRY_RUN, par nom de route (ex. open_pack : ouvrir les paquets pour de vrai).
+    live_writes: CsvList = Field(default_factory=list)
     log_level: str = "INFO"
     timezone: str = "Europe/Paris"
     data_dir: Path = Path("data")
@@ -151,6 +153,7 @@ class Settings(BaseSettings):
     sell_keep_copies: int = 1
     sell_price_multiplier: float = 1.0
     sell_max_listings_per_run: int = 5
+    sell_price_lookups_per_run: int = 60  # cotes demandées au site par passage (route limitée) ; le reste : ventes observées
     listing_end_window_start: time = time(20, 0)
     listing_end_window_end: time = time(22, 30)
     # Durées proposées par le formulaire de vente du site [KZ features/ranking.js].
@@ -178,6 +181,12 @@ class Settings(BaseSettings):
     trends_max_price: int = 0   # 0 = budget d'une position (solde × ratio / places)
     trends_auto_buy: bool = False
     trends_auto_buy_max: int = 20
+    # --- Module G : collection (cartes gardées, jamais revendues) ---------------------
+    collection_sets: CsvList = Field(default_factory=list)    # « jours » = les 366 jours de l'année
+    collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
+    collection_max_price: int = 50                              # mise maximale pour une carte manquante
+    collection_refresh_minutes: float = 360.0
+
     # --- Module F : Google Trends (flux RSS public) ------------------------------
     google_trends_url: str = "https://trends.google.com/trending/rss?geo={geo}"
     google_trends_geo: str = "FR"
@@ -187,7 +196,8 @@ class Settings(BaseSettings):
     wikimedia_user_agent: str = "WikiMasteredBot/1.0 (self-hosted; configure WIKIMEDIA_USER_AGENT)"
 
     @field_validator(
-        "pack_notify_rarities", "discard_rarities", "listing_duration_options",
+        "pack_notify_rarities", "discard_rarities", "listing_duration_options", "live_writes",
+        "collection_sets", "collection_titles",
         "achievement_milestones", mode="before",
     )
     @classmethod
@@ -211,6 +221,10 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
         return value
+
+    def is_live(self, endpoint: str) -> bool:
+        """Cette écriture part-elle vraiment au site ?"""
+        return not self.dry_run or endpoint in self.live_writes
 
     @property
     def session_file(self) -> Path:

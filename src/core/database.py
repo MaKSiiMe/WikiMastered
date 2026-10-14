@@ -211,6 +211,9 @@ class Database:
             (iso(utcnow()), card_id, owned_card_id, title, rarity, int(is_shiny), pageviews),
         )
 
+    async def recent_pulls(self, since: datetime) -> list[aiosqlite.Row]:
+        return await self._all("SELECT * FROM pulls WHERE opened_at >= ? ORDER BY opened_at DESC", (iso(since),))
+
     # ------------------------------------------------------------- enchères
     async def record_bid(self, *, auction_id: str, card_id: str, title: str, rarity: str | None,
                          is_shiny: bool, amount: int, reference_price: float | None, reason: str,
@@ -258,6 +261,21 @@ class Database:
             "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id) ORDER BY end_at LIMIT ?",
             (iso(before), limit),
         )
+
+    async def collection_cards(self, statuses: tuple[str, ...]) -> list[str]:
+        """Titres des achats « collection » du bot ayant ce statut."""
+        marks = ",".join("?" * len(statuses))
+        rows = await self._all(f"SELECT DISTINCT title FROM bids WHERE reason LIKE 'collection%' "
+                               f"AND status IN ({marks})", statuses)
+        return [r["title"] for r in rows if r["title"]]
+
+    async def collection_auctions_engaged(self, card_id: str) -> set[str]:
+        """Enchères « collection » en cours du bot pour cette carte (dernière mise en tête ou simulée)."""
+        rows = await self._all(
+            "SELECT auction_id FROM bids b WHERE card_id = ? AND reason LIKE 'collection%' "
+            "AND status IN ('placed', 'simulated', 'uncertain') AND id = "
+            "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)", (card_id,))
+        return {r["auction_id"] for r in rows}
 
     async def committed_since(self, since: datetime, dry_run: bool = False) -> int:
         """WikiBidous engagés : enchères en tête non réglées + enchères gagnées depuis `since`.

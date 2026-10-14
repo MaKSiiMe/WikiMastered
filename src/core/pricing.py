@@ -108,6 +108,15 @@ class PriceService:
         keys = {r for r in market if r in RARITIES or r == ANY} or {ANY}
         return {r: combine(observed, n_observed, market.get(r, (None, None))[0]) for r in keys}
 
+    async def observed_quote(self, card_id: str) -> dict[str, Quote]:
+        """Estimation sans aucune requête : ventes observées seules (vide si aucune)."""
+        observed, n = await self.db.observed_prices(card_id, self.recent_n)
+        return {ANY: combine(observed, n, None)} if observed else {}
+
+    async def is_fresh(self, card_id: str, max_age: timedelta) -> bool:
+        cached = await self.db.price_get(card_id)
+        return bool(cached and utcnow() - cached[0] <= max_age)
+
     async def is_cached(self, card_id: str) -> bool:
         cached = await self.db.price_get(card_id)
         return bool(cached and utcnow() - cached[0] <= self.default_ttl)

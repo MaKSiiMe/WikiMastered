@@ -6,6 +6,8 @@
     python -m src.main inventory scan|list|discard [--apply]
     python -m src.main report                   # envoie le bilan du jour sur Discord
     python -m src.main trends [--days 7]        # les tendances auraient-elles rapporté ?
+    python -m src.main packs [--hours 24]       # paquets ouverts récemment
+    python -m src.main collection               # collection à compléter (jours de l'année…)
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import contextlib
 import logging
 import signal
 import sys
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 
 from src.config import Settings, get_settings
@@ -29,6 +31,8 @@ from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
+from src.workers.collection import CollectionWorker, summary_line, targets
+from src.workers.collection import refresh as refresh_collection
 from src.workers.google_trends import GoogleTrends
 from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
@@ -85,6 +89,8 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
     text = f"Tirages par rareté : {rarities}"
     if ctx.settings.dry_run:
         text += "\n\n" + validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales))
+    if ctx.settings.collection_sets or ctx.settings.collection_titles:
+        text += "\n\n" + summary_line(await ctx.db.kv_get("collection"), targets(ctx))
     if ctx.settings.enable_google_trends or ctx.settings.enable_wiki_trends:
         text += "\n\n" + await day_line(ctx.db, datetime.now(timezone.utc))
     if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine
@@ -162,8 +168,12 @@ async def run_bot(settings: Settings) -> None:
             workers.append(WikiTrends(ctx))
         if settings.enable_google_trends:
             workers.append(GoogleTrends(ctx))
+        if settings.collection_sets or settings.collection_titles:
+            workers.append(CollectionWorker(ctx))
 
-        mode = "DRY RUN (aucune écriture)" if settings.dry_run else "RÉEL"
+        mode = "RÉEL" if not settings.dry_run else (
+            f"DRY RUN (écritures réelles : {', '.join(settings.live_writes)})" if settings.live_writes
+            else "DRY RUN (aucune écriture)")
         names = ", ".join(w.name for w in workers) or "aucun"
         log.info("Démarrage en mode %s — workers : %s — joueur %s", mode, names, ctx.client.user_id or "?")
         ctx.notifier.info("Bot démarré", f"Mode {mode}\nWorkers : {names}\nSession : {ctx.client.session_status()}")
@@ -189,6 +199,41 @@ async def run_bot(settings: Settings) -> None:
         ctx.notifier.warning("Bot arrêté")
 
 
+async def packs_status(settings: Settings, hours: int) -> None:
+    """Paquets ouverts ces dernières heures (lecture de la base, aucune requête)."""
+    async with build_context(settings) as ctx:
+        rows = await ctx.db.recent_pulls(datetime.now(timezone.utc) - timedelta(hours=hours))
+        if not settings.is_live("open_pack"):
+            print("DRY_RUN : les paquets ne sont PAS ouverts. Ajoute LIVE_WRITES=open_pack pour les ouvrir quand même.")
+        if not rows:
+            print(f"Aucune carte tirée ces {hours} dernières heures.")
+            return
+        by_rarity: dict[str, int] = {}
+        for r in rows:
+            by_rarity[r["rarity"] or "?"] = by_rarity.get(r["rarity"] or "?", 0) + 1
+        last = datetime.fromisoformat(rows[0]["opened_at"]).astimezone()
+        print(f"{len(rows)} carte(s) tirée(s) en {hours} h, dernière ouverture le {last:%d/%m à %H:%M}")
+        print("Par rareté : " + " ".join(f"{k}:{v}" for k, v in sorted(by_rarity.items())))
+        for r in rows[:15]:
+            when = datetime.fromisoformat(r["opened_at"]).astimezone()
+            print(f"  {when:%d/%m %H:%M}  {r['rarity'] or '?':>2}{' ✨' if r['is_shiny'] else '  '} {r['title']}")
+
+
+async def collection_status(settings: Settings) -> None:
+    """Relit la collection à compléter et affiche possédées / manquantes."""
+    async with build_context(settings) as ctx:
+        if not (settings.collection_sets or settings.collection_titles):
+            print("Aucune collection configurée : ajoute COLLECTION_SETS=jours (et COLLECTION_MAX_PRICE).")
+            return
+        state = await refresh_collection(ctx)
+        by_key = targets(ctx)
+        print(summary_line(state, by_key).replace("**", ""))
+        print("Manquantes : " + (", ".join(by_key.get(k, k) for k in state["missing"]) or "aucune"))
+        if state["unmatched"]:
+            print("Titres trouvés mais non reconnus (format différent ?) : " + ", ".join(state["unmatched"]))
+        print(f"Mise maximale par carte manquante : {settings.collection_max_price} WB")
+
+
 async def check_session(settings: Settings) -> None:
     async with build_context(settings) as ctx:
         balance = await asyncio.wait_for(ctx.api.balance(), timeout=120)
@@ -205,6 +250,9 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("report", help="envoie le bilan du jour")
     ins = sub.add_parser("inspect", help="capture les vraies réponses JSON (lecture seule)")
     ins.add_argument("--out", default=None)
+    sub.add_parser("collection", help="collection à compléter : possédées / manquantes (lecture seule)")
+    pk = sub.add_parser("packs", help="paquets ouverts récemment (lecture seule)")
+    pk.add_argument("--hours", type=int, default=24)
     tr = sub.add_parser("trends", help="mesure des signaux de tendance (lecture seule)")
     tr.add_argument("--days", type=int, default=7)
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
@@ -230,6 +278,10 @@ def main(argv: list[str] | None = None) -> None:
             async with build_context(settings) as ctx:
                 await inspect(ctx, args.out)
         asyncio.run(_inspect())
+    elif command == "collection":
+        asyncio.run(collection_status(settings))
+    elif command == "packs":
+        asyncio.run(packs_status(settings, args.hours))
     elif command == "trends":
         async def _trends() -> None:
             async with build_context(settings) as ctx:

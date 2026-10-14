@@ -32,6 +32,7 @@ class _Message:
     title: str
     description: str
     fields: dict[str, Any] = field(default_factory=dict)
+    live: bool = False  # action réelle malgré DRY_RUN (ex. paquets via LIVE_WRITES) : pas de préfixe
 
 
 class DiscordNotifier:
@@ -57,27 +58,27 @@ class DiscordNotifier:
             self._task.cancel()
         await self._http.aclose()
 
-    def send(self, level: Level, title: str, description: str = "", **fields: Any) -> None:
+    def send(self, level: Level, title: str, description: str = "", *, live: bool = False, **fields: Any) -> None:
         log_fn = log.warning if level in (Level.WARNING, Level.CRITICAL) else log.info
         log_fn("[%s] %s %s", level.name, title, description.replace("\n", " | "))
         if not self._webhook:
             return
         try:
-            self._queue.put_nowait(_Message(level, title, description, fields))
+            self._queue.put_nowait(_Message(level, title, description, fields, live))
         except asyncio.QueueFull:
             log.error("File Discord pleine, message perdu : %s", title)
 
-    def info(self, title: str, description: str = "", **fields: Any) -> None:
-        self.send(Level.INFO, title, description, **fields)
+    def info(self, title: str, description: str = "", *, live: bool = False, **fields: Any) -> None:
+        self.send(Level.INFO, title, description, live=live, **fields)
 
-    def success(self, title: str, description: str = "", **fields: Any) -> None:
-        self.send(Level.SUCCESS, title, description, **fields)
+    def success(self, title: str, description: str = "", *, live: bool = False, **fields: Any) -> None:
+        self.send(Level.SUCCESS, title, description, live=live, **fields)
 
-    def warning(self, title: str, description: str = "", **fields: Any) -> None:
-        self.send(Level.WARNING, title, description, **fields)
+    def warning(self, title: str, description: str = "", *, live: bool = False, **fields: Any) -> None:
+        self.send(Level.WARNING, title, description, live=live, **fields)
 
-    def critical(self, title: str, description: str = "", **fields: Any) -> None:
-        self.send(Level.CRITICAL, title, description, **fields)
+    def critical(self, title: str, description: str = "", *, live: bool = False, **fields: Any) -> None:
+        self.send(Level.CRITICAL, title, description, live=live, **fields)
 
     async def _run(self) -> None:
         while True:
@@ -92,7 +93,7 @@ class DiscordNotifier:
     async def _deliver(self, msg: _Message) -> None:
         critical = msg.level is Level.CRITICAL
         url = self._alert_webhook if critical else self._webhook
-        title = f"[DRY RUN] {msg.title}" if self._dry_run else msg.title
+        title = f"[DRY RUN] {msg.title}" if self._dry_run and not msg.live else msg.title
         embed = {
             "title": title[:256],
             "description": msg.description[:4000],
