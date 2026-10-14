@@ -25,6 +25,7 @@ from src.config import Settings
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import utcnow
 from src.core.models import Auction, BidResult
+from src.core.notifier import Topic
 from src.core.pricing import Quote
 from src.core.text import normalize_title
 from src.core.timeutils import in_window, local_dt, now_local
@@ -172,6 +173,7 @@ def is_own(auction: Auction, me: str | None) -> bool:
 
 class AuctionSniper(Worker):
     name = "sniper"
+    topic = Topic.SNIPER
     alert_after_errors = 20
 
     async def setup(self) -> None:

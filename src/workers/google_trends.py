@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import httpx
 
 from src.core.database import utcnow
+from src.core.notifier import Topic
 from src.workers.base import Worker
 from src.workers.trend_common import flush, position_budget, scan_market
 
@@ -49,6 +50,7 @@ def parse_feed(xml: str) -> list[SearchTrend]:
 
 class GoogleTrends(Worker):
     name = "gtrends"
+    topic = Topic.TRENDS
 
     async def setup(self) -> None:
         self.http = httpx.AsyncClient(timeout=20, follow_redirects=True,

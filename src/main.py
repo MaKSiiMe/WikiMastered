@@ -26,7 +26,7 @@ from src.core.api import WikiMastersAPI
 from src.core.client import WikiMastersClient
 from src.core.database import Database
 from src.core.endpoints import Endpoints
-from src.core.notifier import DiscordNotifier
+from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until
 from src.workers.auction_sniper import AuctionSniper
@@ -62,7 +62,7 @@ def setup_logging(settings: Settings) -> None:
 async def build_context(settings: Settings):
     set_timezone(settings.timezone)
     notifier = DiscordNotifier(settings.discord_webhook_url, settings.discord_alert_webhook_url,
-                               settings.discord_mention, settings.dry_run)
+                               settings.discord_mention, settings.dry_run, footer=f"Mode {settings.mode_label}")
     notifier.start()
     endpoints = Endpoints.load(settings.endpoints_file, settings.wm_base_url)
     client = WikiMastersClient(settings, endpoints, notifier)
