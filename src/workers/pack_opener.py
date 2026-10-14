@@ -5,6 +5,10 @@ Le stock (1 paquet / 10 min, 10 max) est déduit des champs `packs_remaining` et
 de statut REST n'est documentée : si tu en déclares une (`pack_status` dans
 config/endpoints.yaml), elle est utilisée pour éviter les ouvertures à vide.
 
+Rythme : une session d'ouverture toutes les 15 à 90 min, tirées au hasard, et des paquets
+espacés de 5 à 15 s. Le site semble demander une vérification humaine quand les actions
+s'enchaînent trop vite : le bot imite un rythme humain.
+
 Vérification humaine : quand le site renvoie `human_verification_required`, le bot
 s'arrête et te prévient. Il ne tente jamais de la contourner ; fais-la dans ton navigateur.
 """
@@ -65,7 +69,15 @@ class PackOpener(Worker):
         self.period = timedelta(minutes=s.pack_regen_minutes)
         self.target = max(1, min(s.pack_open_min_stock, s.pack_max_stock))
         self.state = PackState() if s.dry_run else PackState.from_json(await self.db.kv_get(STATE_KEY))
-        self._jitter: float | None = None
+        # Première ouverture quelques minutes après le démarrage, puis toutes les 15 à 90 min.
+        self._next_open = utcnow() + timedelta(minutes=random.uniform(1, 10))
+
+    def _schedule_next(self) -> None:
+        s = self.settings
+        minutes = random.uniform(s.pack_interval_min_minutes, max(s.pack_interval_min_minutes,
+                                                                  s.pack_interval_max_minutes))
+        self._next_open = utcnow() + timedelta(minutes=minutes)
+        self.log.info("prochaine ouverture de paquets vers %s", f"{self._next_open.astimezone():%H:%M}")
 
     async def _save(self) -> None:
         if not self.settings.dry_run:
@@ -76,18 +88,14 @@ class PackOpener(Worker):
         if self.state.paused_until and now < self.state.paused_until:
             return min(600.0, (self.state.paused_until - now).total_seconds())
 
+        if now < self._next_open:
+            return min(600.0, (self._next_open - now).total_seconds())
         await self._refresh_status()
         wait = seconds_until_stock(self.state, self.target, self.period, now)
         if wait > 0:
-            self._jitter = None
             return min(wait, 600.0)
-        if self._jitter is None:
-            # Stock disponible : délai aléatoire avant d'ouvrir, tiré une fois par cycle.
-            self._jitter = random.uniform(self.settings.pack_delay_min_seconds, self.settings.pack_delay_max_seconds)
-            return self._jitter
-
-        self._jitter = None
         await self._open_batch()
+        self._schedule_next()
         return 1.0
 
     async def _refresh_status(self) -> None:

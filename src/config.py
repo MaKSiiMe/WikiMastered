@@ -87,10 +87,12 @@ class Settings(BaseSettings):
     pack_regen_minutes: float = 10.0
     pack_max_stock: int = 10
     pack_open_min_stock: int = 1
-    pack_delay_min_seconds: float = 15.0
-    pack_delay_max_seconds: float = 60.0
-    pack_between_opens_min_seconds: float = 2.0
-    pack_between_opens_max_seconds: float = 6.0
+    # Rythme humain, pour éviter les vérifications : une session d'ouverture toutes les 15 à 90 min
+    # (stock plafonné à 10, régénéré en 100 min : rien n'est perdu), paquets espacés de 5 à 15 s.
+    pack_interval_min_minutes: float = 15.0
+    pack_interval_max_minutes: float = 90.0
+    pack_between_opens_min_seconds: float = 5.0
+    pack_between_opens_max_seconds: float = 15.0
     pack_notify_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
     pack_notify_shiny: bool = True
     pack_verification_recheck_minutes: float = 30.0
@@ -104,6 +106,8 @@ class Settings(BaseSettings):
     sniper_poll_min_seconds: float = 2.5
     sniper_poll_max_seconds: float = 4.0
     sniper_window_seconds: int = 20
+    # Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais.
+    sniper_min_seconds_left: int = 11
     # Achat « collection » par rareté : désactivé (le prix suit les tendances, pas la rareté).
     sniper_rarity_caps: dict[str, int] = Field(default_factory=dict)
     sniper_shiny_cap: int = 0
@@ -122,7 +126,7 @@ class Settings(BaseSettings):
     night_end: time = time(7, 30)
     night_deal_ratio_max: float = 0.80
     night_caps_multiplier: float = 1.3
-    night_window_seconds: int = 45
+    night_window_seconds: int = 20
     night_budget_bonus: int = 0
 
     # --- Capital : positions achetées pour être revendues ----------------------------
@@ -170,7 +174,7 @@ class Settings(BaseSettings):
     trends_min_daily_views: int = 2000
     trends_rarity_thresholds: dict[str, int] = Field(default_factory=lambda: {"L": 20000})
     trends_search_limit: int = 15
-    trends_max_price: int = 30
+    trends_max_price: int = 0   # 0 = budget d'une position (solde × ratio / places)
     trends_auto_buy: bool = False
     trends_auto_buy_max: int = 20
     wikimedia_user_agent: str = "WikiMasteredBot/1.0 (self-hosted; configure WIKIMEDIA_USER_AGENT)"

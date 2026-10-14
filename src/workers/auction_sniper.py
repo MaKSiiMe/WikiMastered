@@ -151,11 +151,12 @@ def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales
     return Decision(amount, ceiling, best.reason, best.reference, best.profit)
 
 
-def in_snipe_window(auction: Auction, me: str | None, window: int, now: datetime) -> bool:
+def in_snipe_window(auction: Auction, me: str | None, window: int, now: datetime, min_left: int = 0) -> bool:
+    """Fenêtre de mise : entre `window` et `min_left` secondes avant la fin (au-dessous, le site prolonge)."""
     left = auction.seconds_left(now)
     return (
         auction.status == "active"
-        and 0 < left <= window
+        and max(0, min_left) < left <= window
         and (me is None or ((auction.seller_id or "").lower() != me and (auction.current_bidder_id or "").lower() != me))
     )
 
@@ -225,7 +226,8 @@ class AuctionSniper(Worker):
         if self._ticks % 20 == 0:
             await self._refresh_engaged()
 
-        in_window_now = [a for a in auctions if in_snipe_window(a, me, params.window_seconds, now)]
+        in_window_now = [a for a in auctions if in_snipe_window(a, me, params.window_seconds, now,
+                                                                self.settings.sniper_min_seconds_left)]
         if in_window_now:
             await self._play(in_window_now, params, now)
         else:
@@ -264,6 +266,10 @@ class AuctionSniper(Worker):
                     queued = open_now >= portfolio.sale_room
                     if queued and (decision.profit or 0) < max(portfolio.min_profit, portfolio.queue_min_profit):
                         continue
+            # Le temps a passé depuis la lecture du marché (cotes, solde…) : on revérifie juste avant de miser.
+            if auction.seconds_left() <= self.settings.sniper_min_seconds_left:
+                self.log.debug("%s : trop tard pour miser sans prolonger l'enchère", auction.title)
+                continue
             if not await self._affordable(decision.amount, params, portfolio):
                 continue
             if await self._bid(auction, decision, params) and not rebid:

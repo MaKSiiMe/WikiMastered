@@ -6,8 +6,9 @@
    (/metrics/pageviews/per-article/..., mis en cache SQLite).
 3. Projection des vues sur 30 jours -> rareté probable (TRENDS_RARITY_THRESHOLDS,
    seul le palier Légendaire = 20 000 vues est connu).
-4. Recherche de la carte au marché ; alerte si elle est encore vendue sous sa rareté
-   probable et à petit prix.
+4. Recherche de la carte au marché. Le prix suit les tendances : une carte dont l'article
+   explose est signalée si elle est en vente sous le budget d'une position, avec son
+   estimation (ventes observées). Un seul message Discord par passage.
 
 ⚠️ Les exemplaires possédés gardent une `snapshot_rarity` [WR content.js] : une carte
 achetée Commune pourrait le rester même si le catalogue la passe Légendaire. Vérifie ce
@@ -17,6 +18,7 @@ point sur le site avant d'activer TRENDS_AUTO_BUY.
 from __future__ import annotations
 
 import statistics
+from datetime import datetime
 from dataclasses import dataclass
 from datetime import date, timedelta
 from urllib.parse import quote
@@ -26,6 +28,7 @@ import httpx
 from src.config import RARITY_RANK, Settings
 from src.core.database import utcnow
 from src.core.text import normalize_title
+from src.core import timeutils
 from src.workers.base import Worker
 
 WIKIMEDIA = "https://wikimedia.org/api/rest_v1/metrics/pageviews"
@@ -83,10 +86,22 @@ class WikiTrends(Worker):
     async def step(self) -> float:
         trends = await self.find_trends()
         self.log.info("%d article(s) en forte hausse", len(trends))
+        max_price = await self.max_price()
+        lines: list[str] = []
         for trend in trends[: self.settings.trends_search_limit]:
-            await self.check_market(trend)
+            lines += await self.check_market(trend, max_price)
+        if lines:
+            shown = "\n".join(lines[:15]) + (f"\n… et {len(lines) - 15} autre(s)" if len(lines) > 15 else "")
+            self.notifier.info(f"Tendances Wikipédia : {len(lines)} carte(s) en vente", shown)
         await self.db.prune_auctions(utcnow() - timedelta(days=1))
         return self.settings.trends_interval_minutes * 60
+
+    async def max_price(self) -> int:
+        """TRENDS_MAX_PRICE, ou par défaut le budget d'une position (solde × ratio / places)."""
+        s = self.settings
+        if s.trends_max_price > 0:
+            return s.trends_max_price
+        return int(await self.api.balance() * s.portfolio_capital_ratio / max(1, s.portfolio_slots))
 
     async def _wm_get(self, url: str) -> dict | None:
         resp = await self.http.get(url)
@@ -135,8 +150,10 @@ class WikiTrends(Worker):
         trends.sort(key=lambda t: t.ratio, reverse=True)
         return trends
 
-    async def check_market(self, trend: Trend) -> None:
+    async def check_market(self, trend: Trend, max_price: int) -> list[str]:
+        """Ventes en cours de la carte d'un article en pic ; renvoie une ligne par nouvelle alerte."""
         s = self.settings
+        lines: list[str] = []
         target = normalize_title(trend.title)
         expected = expected_rarity(trend.projected_30d, s.trends_rarity_thresholds)
         auctions, _ = await self.api.market_page(sort="ending_soon", q=trend.title)
@@ -147,15 +164,18 @@ class WikiTrends(Worker):
                 continue
             if me and (a.seller_id or "").lower() == me:
                 continue
-            undervalued = expected is not None and a.rarity_rank < RARITY_RANK[expected]
-            if not undervalued or a.min_bid > s.trends_max_price or await self.db.trend_alerted(a.id):
+            if a.min_bid > max_price or await self.db.trend_alerted(a.id):
                 continue
             await self.db.mark_trend_alert(a.id, trend.article)
-            fields = dict(vues_hier=f"{trend.views:,}".replace(",", " "), pic=f"x{trend.ratio:.1f}",
-                          projection_30j=f"{trend.projected_30d:,}".replace(",", " "),
-                          rareté_actuelle=a.rarity, rareté_probable=expected, mise_min=a.min_bid,
-                          fin=f"{a.end_at:%d/%m %H:%M} UTC")
-            self.notifier.critical(f"Tendance : {trend.title}", "Carte en vente sous sa rareté probable.", **fields)
+            observed, n = await self.db.observed_prices(a.catalog_id, s.price_recent_sales)
+            estimate = (f"estimation ~{statistics.median(observed):.0f} WB ({n} vente(s) vue(s))" if observed
+                        else "aucune vente observée")
+            rarity = a.rarity or "?"
+            if expected is not None and a.rarity_rank < RARITY_RANK[expected]:
+                rarity += f" (rareté probable {expected})"
+            end = a.end_at.astimezone(timeutils.PARIS) if isinstance(a.end_at, datetime) else a.end_at
+            lines.append(f"**{a.title}** {rarity} — vues x{trend.ratio:.1f} hier — mise min {a.min_bid} WB, "
+                         f"{estimate} — fin {end:%d/%m %H:%M}")
             if s.trends_auto_buy and a.min_bid <= s.trends_auto_buy_max:
                 result = await self.api.place_bid(a.id, a.min_bid)
                 await self.db.record_bid(
@@ -164,3 +184,4 @@ class WikiTrends(Worker):
                     dry_run=result.dry_run, status="simulated" if result.dry_run else ("placed" if result.ok else "rejected"),
                     end_at=a.end_at, note=str(result.payload)[:300] if not result.ok else "",
                 )
+        return lines
