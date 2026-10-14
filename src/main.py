@@ -21,7 +21,7 @@ import sys
 from datetime import datetime, time, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 
-from src.config import Settings, get_settings
+from src.config import RARITY_RANK, Settings, get_settings
 from src.core.api import WikiMastersAPI
 from src.core.client import WikiMastersClient
 from src.core.database import Database
@@ -85,19 +85,59 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
         stats["balance"] = await asyncio.wait_for(ctx.api.balance(), timeout=60)
     except Exception:  # noqa: BLE001 - le bilan part même sans solde
         stats["balance"] = "?"
-    rarities = " ".join(f"{r}:{n}" for r, n in sorted(stats.pop("pulls_by_rarity").items())) or "—"
-    text = f"Tirages par rareté : {rarities}"
+    pulls = stats.pop("pulls_by_rarity")
+    description, sections = report_sections(stats, pulls, live_bids=ctx.settings.is_live("place_bid"))
+    extra = []
     if not ctx.settings.is_live("place_bid"):  # sniper simulé : on juge la simulation
-        text += "\n\n" + validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales))
+        extra.append(validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales)))
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
-        text += "\n\n" + summary_line(await ctx.db.kv_get("collection"), targets(ctx))
+        extra.append(summary_line(await ctx.db.kv_get("collection"), targets(ctx)))
     if ctx.settings.enable_google_trends or ctx.settings.enable_wiki_trends:
-        text += "\n\n" + await day_line(ctx.db, datetime.now(timezone.utc))
-    if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine
-        text += "\n\n" + await trends_text(ctx.db, 7, await min_profit(ctx), datetime.now(timezone.utc))
+        extra.append(await day_line(ctx.db, datetime.now(timezone.utc)))
+    sections += [as_section(text) for text in extra]
     if send:
-        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", text, **stats)
+        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", description, topic=Topic.REPORT, sections=sections)
+        if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine, à part car longue
+            text = await trends_text(ctx.db, 7, await min_profit(ctx), datetime.now(timezone.utc))
+            title, _, body = text.partition("\n")
+            ctx.notifier.info(title.strip("*"), body, topic=Topic.REPORT)
     return stats
+
+
+def report_sections(stats: dict, pulls: dict[str, int], *, live_bids: bool) -> tuple[str, list[tuple[str, str]]]:
+    """Bilan du soir : le solde en tête, puis un bloc par activité de la journée."""
+    balance = stats["balance"]
+    description = f"Solde : **{balance} WB**" if isinstance(balance, int) else "Solde : inconnu"
+    rarities = " · ".join(f"{r} {n}" for r, n in sorted(pulls.items(), key=lambda p: RARITY_RANK.get(p[0], -1)))
+    packs = f"{stats['boosters_ouverts']} booster(s), {stats['cards_pulled']} carte(s)"
+    if rarities:
+        packs += f"\n{rarities}"
+    if stats["shiny_pulled"]:
+        packs += f"\n✨ {stats['shiny_pulled']} shiny"
+    bids = (f"{stats['bids_placed']} mise(s) placée(s)" if live_bids
+            else f"{stats['bids_simulated']} mise(s) simulée(s)")
+    if stats["auctions_won"]:
+        bids += f"\n{stats['auctions_won']} gagnée(s) pour {stats['spent_won']} WB"
+    sales = [f"{stats['doublons_vendus']} doublon(s) vendu(s) pour {stats['doublons_recette']} WB"]
+    if stats["listings_posted"] or stats["listings_scheduled"]:
+        sales.append(f"{stats['listings_posted']} mise(s) en vente, {stats['listings_scheduled']} programmée(s)")
+    if stats["discarded"]:
+        sales.append(f"{stats['discarded']} carte(s) défaussée(s)")
+    positions = [f"{stats['positions_held']} détenue(s), {stats['capital_in_positions']} WB immobilisés"]
+    if stats["positions_sold"]:
+        positions.append(f"{stats['positions_sold']} revendue(s), bénéfice {stats['profit']:+d} WB")
+    if stats["profit_simulated"]:
+        positions.append(f"Bénéfice simulé : {stats['profit_simulated']:+d} WB")
+    return description, [("Paquets", packs), ("Sniper", bids), ("Ventes", "\n".join(sales)),
+                         ("Positions", "\n".join(positions))]
+
+
+def as_section(text: str) -> tuple[str, str]:
+    """« **Titre** : texte » ou « **Titre**\ntexte » devient un bloc (titre, texte)."""
+    if text.startswith("**"):
+        head, _, rest = text[2:].partition("**")
+        return head, rest.removeprefix(" :").strip() or "—"
+    return "Divers", text
 
 
 async def min_profit(ctx: Context) -> int:
