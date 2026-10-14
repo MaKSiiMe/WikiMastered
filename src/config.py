@@ -118,7 +118,10 @@ class Settings(BaseSettings):
     pack_between_opens_max_seconds: float = 15.0
     pack_notify_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
     pack_notify_shiny: bool = True
-    pack_verification_recheck_minutes: float = 30.0
+    # Ouverture échouée (vérification humaine, refus, limitation) : nouvel essai rapide, pour ne pas
+    # laisser le stock atteindre 10 (au-delà, les paquets sont perdus).
+    pack_retry_min_minutes: float = 5.0
+    pack_retry_max_minutes: float = 10.0
 
     # --- Cotes ------------------------------------------------------------------
     price_cache_ttl_minutes: float = 180.0
