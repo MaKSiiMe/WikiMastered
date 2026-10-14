@@ -111,3 +111,89 @@ async def test_live_messages_have_no_dry_run_prefix():
     await notifier._deliver(_Message(Level.SUCCESS, "Tirage remarquable !", "", {}, live=True))
     await notifier._deliver(_Message(Level.INFO, "Enchère simulée", ""))
     assert titles == ["Tirage remarquable !", "[DRY RUN] Enchère simulée"]
+
+
+def test_year_days_and_title_keys():
+    from src.workers.collection import collection_key, year_days
+
+    days = year_days()
+    assert len(days) == 366 and days[0] == "1er janvier" and "29 février" in days and days[-1] == "31 décembre"
+    assert collection_key("1er Janvier") == collection_key("1 janvier") == "1 janvier"
+    assert collection_key("14 Octobre") == "14 octobre"
+
+
+@pytest.mark.asyncio
+async def test_collection_refresh_finds_owned_days(tmp_path):
+    from src.core.database import Database
+    from src.core.pricing import PriceService
+    from src.workers.base import Context
+    from src.workers.collection import refresh
+
+    def handler(request):
+        q = request.url.params.get("q", "")
+        rows = {"janvier": [copy("o1", "d1", "1er janvier"), copy("o2", "d1", "1er janvier"),
+                            copy("o3", "r1", "Révolution de janvier"), copy("o4", "d3", "3 Janvier")],
+                "octobre": [copy("o5", "d14", "14 octobre"), copy("o6", "x", "14 octobre 1066")]}.get(q, [])
+        return httpx.Response(200, json={"collection": rows})
+
+    client, notifier = make_client(tmp_path, handler, collection_sets=["jours"])
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    state = await refresh(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    assert state["owned"] == ["1 janvier", "14 octobre", "3 janvier"] and len(state["missing"]) == 363
+    assert state["unmatched"] == ["14 octobre 1066"]
+    assert (await db.kv_get("collection"))["total"] == 366
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_sniper_completes_collection_one_auction_at_a_time(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from src.core.database import Database
+    from src.core.pricing import PriceService
+    from src.workers.auction_sniper import AuctionSniper
+    from src.workers.base import Context
+
+    now = datetime.now(timezone.utc)
+
+    def sale(aid, title, base, seconds):
+        return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "R"},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
+                "end_at": (now + timedelta(seconds=seconds)).isoformat(), "base_amount": base,
+                "current_bid": None, "current_bidder_id": None}
+
+    market = [sale("a1", "14 octobre", 20, 15), sale("a2", "14 octobre", 10, 16), sale("a3", "2 mars", 80, 15),
+              sale("a4", "3 mars", 30, 15)]
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": market, "hasMore": False})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, collection_sets=["jours"], collection_max_price=50)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    await db.kv_set("collection", {"owned": ["3 mars"], "missing": ["14 octobre", "2 mars"], "total": 366})
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    await sniper.step()
+    rows = await db._all("SELECT auction_id, amount, reason FROM bids")
+    # 14 octobre : une seule des deux ventes ; 2 mars : 80 > 50 WB ; 3 mars : déjà possédé.
+    assert len(rows) == 1 and rows[0]["auction_id"] in ("a1", "a2") and rows[0]["reason"].startswith("collection")
+    await sniper.step()
+    assert len(await db._all("SELECT * FROM bids")) == 1  # pas de mise sur l'autre vente du 14 octobre
+    await db._exec("UPDATE bids SET status = 'sim_won', closed = 1")
+    await sniper._load_collection()
+    assert "14 octobre" not in sniper._collection_missing  # gagnée : plus recherchée
+    await db.close()

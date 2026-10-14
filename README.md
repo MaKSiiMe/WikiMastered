@@ -11,6 +11,7 @@ Il parle directement aux routes JSON du site, sans navigateur.
 | D | `src/workers/auction_sniper.py` | Sniper orienté capital : achète gros pour revendre, arbitrage nocturne |
 | E | `src/workers/wiki_trends.py` | Pics de vues Wikipédia (API Wikimedia) croisés avec le marché |
 | F | `src/workers/google_trends.py` | Recherches Google en hausse en France (flux RSS), croisées avec le marché |
+| G | `src/workers/collection.py` | Compléter une collection (jours de l'année…) : mises sur les cartes manquantes |
 
 > **À lire avant de lancer**
 > - Automatiser un compte peut être contraire aux conditions d'utilisation de WikiMasters et mener à un bannissement. Le jitter et l'espacement limitent la charge sur le site ; ils ne garantissent rien.
@@ -103,6 +104,7 @@ python -m src.main inventory discard --apply    # défausse, après vérificatio
 python -m src.main report                       # bilan du jour sur Discord
 python -m src.main trends --days 7              # mesure des signaux de tendance
 python -m src.main packs                        # paquets ouverts ces dernières 24 h
+python -m src.main collection                   # collection à compléter : possédées / manquantes
 ```
 
 Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes programmées sont publiées par le bot en marche, à l'heure prévue.
@@ -134,6 +136,8 @@ Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes program
 **Tendances (E).** Le module prend le top fr.wikipedia de la veille : les données du jour ne sont publiées qu'avec environ un jour de retard. Un pic correspond à des vues ≥ 3 × la médiane des 30 jours précédents. Le prix d'une carte suit les tendances : si la carte d'un article en pic est en vente sous le budget d'une position (`TRENDS_MAX_PRICE`, 0 = ce budget), elle est signalée avec sa mise minimale et son estimation (ventes observées). Un seul message Discord par passage horaire, chaque vente n'est signalée qu'une fois. La rareté probable (projection des vues sur 30 jours, Légendaire à 20 000 vues) n'est plus qu'une information.
 
 **Google Trends (F).** Le flux RSS public de Google Trends France (`trends.google.com/trending/rss?geo=FR`) donne les 10 dernières recherches en forte hausse, le jour même, au lieu de la veille pour Wikipédia. Il est lu toutes les 20 min. Chaque nouveau terme (une fois par 24 h) est cherché au marché : même titre, ou titre contenu dans le terme, sur 2 mots au moins. Les cartes sous le budget d'une position sont signalées sur Discord, en un message par passage. Toutes les cartes trouvées, Wikipédia comprise, sont enregistrées comme signaux et mesurées chaque dimanche dans le bilan (voir « Mesure des tendances »).
+
+**Collection (G).** Avec `COLLECTION_SETS=jours`, le bot complète ta collection des 366 jours de l'année. Toutes les 6 h, il cherche dans ta collection les cartes de chaque mois (12 requêtes) et note celles qui te manquent. Le sniper mise alors sur une carte manquante en vente, jusqu'à `COLLECTION_MAX_PRICE` (50 WB), dans sa fenêtre habituelle de 20 à 11 s avant la fin. Il ne mise jamais sur deux ventes de la même carte à la fois, ni sur une carte que tu cherches déjà toi-même. Une carte gagnée est gardée, jamais revendue ni défaussée, et Discord affiche « Collection : carte obtenue ». `COLLECTION_TITLES` ajoute d'autres titres exacts. Le bilan quotidien indique l'avancement (possédées / 366 et les premières manquantes) ; `python -m src.main collection` donne la liste complète. Le format des titres (« 1er janvier », « 14 octobre ») n'est pas encore vérifié sur les cartes du site : la commande signale les titres trouvés mais non reconnus.
 
 **Mesure des tendances.** Chaque dimanche, le bilan indique, pour Google Trends et pour Wikipédia, si les signaux de la semaine auraient rapporté. Le calcul suppose un achat en surenchérissant sur le prix final observé de la vente signalée, puis une revente à la médiane des ventes de la même carte observées dans les 7 jours suivants. Un signal est « gagnant » si le bénéfice atteint celui exigé d'une position (~147 WB). Avec au moins 10 signaux mesurés, le bilan conclut « prometteur » ou « pas rentable ». Le même calcul est disponible à tout moment avec `python -m src.main trends`. Pour comparer les deux sources dans la durée, le bilan de chaque soir contient une ligne « Tendances du jour » : termes Google, cartes trouvées par chaque source, cartes communes aux deux. La mesure du dimanche ajoute un tableau jour par jour : cartes, signaux, mesurés, bénéfice médian, gagnants. Sur Discord, une carte en vente plusieurs fois n'occupe qu'une ligne : nombre de ventes, fourchette des mises, première fin.
 

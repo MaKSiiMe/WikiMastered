@@ -181,6 +181,12 @@ class Settings(BaseSettings):
     trends_max_price: int = 0   # 0 = budget d'une position (solde × ratio / places)
     trends_auto_buy: bool = False
     trends_auto_buy_max: int = 20
+    # --- Module G : collection (cartes gardées, jamais revendues) ---------------------
+    collection_sets: CsvList = Field(default_factory=list)    # « jours » = les 366 jours de l'année
+    collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
+    collection_max_price: int = 50                              # mise maximale pour une carte manquante
+    collection_refresh_minutes: float = 360.0
+
     # --- Module F : Google Trends (flux RSS public) ------------------------------
     google_trends_url: str = "https://trends.google.com/trending/rss?geo={geo}"
     google_trends_geo: str = "FR"
@@ -191,6 +197,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "pack_notify_rarities", "discard_rarities", "listing_duration_options", "live_writes",
+        "collection_sets", "collection_titles",
         "achievement_milestones", mode="before",
     )
     @classmethod

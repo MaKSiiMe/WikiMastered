@@ -29,6 +29,8 @@ from src.core.pricing import Quote
 from src.core.text import normalize_title
 from src.core.timeutils import in_window, local_dt, now_local
 from src.workers.base import Worker
+from src.workers.collection import KV_KEY as COLLECTION_KV
+from src.workers.collection import collection_key
 
 COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, pas revendues
 
@@ -126,10 +128,13 @@ def rarity_ceiling(auction: Auction, params: SnipeParams) -> int | None:
 
 
 def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales: int,
-           portfolio: Portfolio | None = None, fee: float = 0.0) -> Decision | None:
-    """Position à revendre (estimation, budget, bénéfice) ou achat « collection » par rareté."""
+           portfolio: Portfolio | None = None, fee: float = 0.0, collection_cap: int | None = None) -> Decision | None:
+    """Position à revendre (estimation, budget, bénéfice) ou achat « collection » (carte manquante, rareté)."""
     amount = auction.min_bid
     options: list[Decision] = []
+    if collection_cap is not None and amount <= collection_cap:
+        options.append(Decision(amount, collection_cap, f"{COLLECTION_PREFIX} : carte manquante ≤ {collection_cap}",
+                                quote.average if quote else None))
     cap = rarity_ceiling(auction, params)
     if cap is not None and amount <= cap:
         label = f"{COLLECTION_PREFIX} : {auction.rarity}{' shiny' if auction.shiny else ''} ≤ {cap}"
@@ -190,6 +195,9 @@ class AuctionSniper(Worker):
         self._manual_auctions: set[str] = set()
         self._manual_cards: set[str] = set()
         self._sale_slots: tuple[datetime, int, int] | None = None  # (lu à, max, ventes en cours)
+        # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
+        self._collection_missing: set[str] = set()
+        await self._load_collection()
         await self._refresh_engaged()
         await self._check_config()
         if not self.api.user_id:
@@ -225,6 +233,7 @@ class AuctionSniper(Worker):
         await self._track_outbids(auctions, me)
         if self._ticks % 20 == 0:
             await self._refresh_engaged()
+            await self._load_collection()
 
         in_window_now = [a for a in auctions if in_snipe_window(a, me, params.window_seconds, now,
                                                                 self.settings.sniper_min_seconds_left)]
@@ -251,7 +260,13 @@ class AuctionSniper(Worker):
         candidates.sort(key=lambda c: c[0], reverse=True)
         free = self.free_slots(now)
         opened = 0
+        collection_cards: set[str] = set()
         for _, auction, decision in candidates:
+            if decision.collection:
+                # Deux ventes de la même carte manquante dans le même passage : une seule mise.
+                if auction.catalog_id in collection_cards:
+                    continue
+                collection_cards.add(auction.catalog_id)
             rebid = auction.id in self._engaged
             if not rebid:
                 if free <= 0:
@@ -332,6 +347,23 @@ class AuctionSniper(Worker):
                 manual_cards.add(a.catalog_id)
         self._manual_auctions, self._manual_cards = manual_auctions, manual_cards
 
+    async def _load_collection(self) -> None:
+        if not (self.settings.collection_sets or self.settings.collection_titles):
+            return
+        state = await self.db.kv_get(COLLECTION_KV) or {}
+        # Gagnées par le bot (même en simulation) : plus manquantes, même avant la prochaine lecture.
+        won = {collection_key(t) for t in await self.db.collection_cards(("won", "sim_won"))}
+        self._collection_missing = set(state.get("missing", [])) - won
+
+    async def _collection_cap(self, auction: Auction) -> int | None:
+        """Plafond si la carte manque à la collection et que le bot ne mise pas déjà sur une autre vente."""
+        if collection_key(auction.title) not in self._collection_missing:
+            return None
+        engaged = await self.db.collection_auctions_engaged(auction.catalog_id)
+        if engaged - {auction.id}:
+            return None  # une autre vente de la même carte est déjà en cours pour le bot
+        return self.settings.collection_max_price
+
     def is_manual_interest(self, auction: Auction) -> bool:
         """Carte que tu cherches toi-même (tu mises dessus) : le bot ne l'achète pas pour la revendre."""
         return self.settings.sniper_avoid_my_bids and (
@@ -393,7 +425,8 @@ class AuctionSniper(Worker):
             quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False)
         except (RateLimited, ApiError):
             quote = None
-        return decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct)
+        return decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
+                      collection_cap=await self._collection_cap(auction))
 
     async def _affordable(self, amount: int, params: SnipeParams, portfolio: Portfolio) -> bool:
         if amount > portfolio.available:
@@ -495,6 +528,13 @@ class AuctionSniper(Worker):
         await self.db.update_bid(row["id"], status=status, settled_at=utcnow(), closed=closed)
         self._leading.pop(row["auction_id"], None)
         self._engaged.pop(row["auction_id"], None)
+        if won and closed:
+            detail = f"{row['title']} ({row['rarity']}) pour {row['amount']} WB, gardée"
+            if simulated:
+                self.notifier.info("Collection : carte obtenue (simulé)", detail)
+            else:
+                self.notifier.success("Collection : carte obtenue !", detail)
+            return
         if won:
             ref = row["reference_price"]
             detail = f"{row['title']} ({row['rarity']}) pour {row['amount']} WB"

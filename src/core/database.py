@@ -262,6 +262,21 @@ class Database:
             (iso(before), limit),
         )
 
+    async def collection_cards(self, statuses: tuple[str, ...]) -> list[str]:
+        """Titres des achats « collection » du bot ayant ce statut."""
+        marks = ",".join("?" * len(statuses))
+        rows = await self._all(f"SELECT DISTINCT title FROM bids WHERE reason LIKE 'collection%' "
+                               f"AND status IN ({marks})", statuses)
+        return [r["title"] for r in rows if r["title"]]
+
+    async def collection_auctions_engaged(self, card_id: str) -> set[str]:
+        """Enchères « collection » en cours du bot pour cette carte (dernière mise en tête ou simulée)."""
+        rows = await self._all(
+            "SELECT auction_id FROM bids b WHERE card_id = ? AND reason LIKE 'collection%' "
+            "AND status IN ('placed', 'simulated', 'uncertain') AND id = "
+            "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)", (card_id,))
+        return {r["auction_id"] for r in rows}
+
     async def committed_since(self, since: datetime, dry_run: bool = False) -> int:
         """WikiBidous engagés : enchères en tête non réglées + enchères gagnées depuis `since`.
 
