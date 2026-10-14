@@ -63,13 +63,14 @@ def snipe_params(s: Settings, night: bool) -> SnipeParams:
 @dataclass(frozen=True)
 class Portfolio:
     capital: int          # WikiBidous + capital déjà engagé en positions et enchères réelles
-    available: int        # mobilisable tout de suite (réserve et engagements simulés déduits)
+    available: int        # pour une mise simulée : solde, moins la réserve et les engagements simulés
     position_budget: int  # mise maximale pour une position
     min_profit: int       # bénéfice attendu minimum
     open_positions: int   # positions détenues + enchères du bot en cours
     max_positions: int
     sale_room: int = 5            # places de vente libres pour le bot
     queue_min_profit: int = 0     # bénéfice exigé pour une position qui devra attendre
+    real_available: int = 0       # pour une mise réelle : vrai solde moins la réserve (le simulé n'y touche pas)
 
     @property
     def can_open(self) -> bool:
@@ -103,7 +104,8 @@ def portfolio_state(s: Settings, *, balance: int, held_count: int, held_real_cos
     return Portfolio(capital, max(0, available), budget, min_profit, held_count + bot_engaged_count,
                      s.portfolio_max_positions if max_positions is None else max_positions,
                      s.portfolio_slots if sale_room is None else sale_room,
-                     int(budget * s.portfolio_queue_profit_ratio))
+                     int(budget * s.portfolio_queue_profit_ratio),
+                     max(0, balance - s.sniper_min_balance_reserve))
 
 
 @dataclass(frozen=True)
@@ -311,7 +313,7 @@ class AuctionSniper(Worker):
                 self.log.debug("%s : trop tard pour miser sans prolonger l'enchère", auction.title)
                 self._outcome(auction, "trop tard")
                 continue
-            if not await self._affordable(decision.amount, params, portfolio):
+            if not await self._affordable(decision, params, portfolio):
                 self._outcome(auction, "solde ou budget du jour insuffisant")
                 continue
             if await self._bid(auction, decision, params):
@@ -487,8 +489,12 @@ class AuctionSniper(Worker):
         ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
         return [f"{len(outcomes)} enchère(s) examinée(s) : " + " · ".join(f"{o} {n}" for o, n in ranked)]
 
-    async def _affordable(self, amount: int, params: SnipeParams, portfolio: Portfolio) -> bool:
-        if amount > portfolio.available:
+    async def _affordable(self, decision: Decision, params: SnipeParams, portfolio: Portfolio) -> bool:
+        amount = decision.amount
+        # Une mise réelle (ex. collection avec SIMULATE=sniper) ne dépend que du vrai solde : les positions
+        # simulées ne doivent pas la bloquer.
+        live = self.settings.is_live("collection_bid" if decision.collection else "place_bid")
+        if amount > (portfolio.real_available if live else portfolio.available):
             return False
         if not params.budget:
             return True

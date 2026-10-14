@@ -122,3 +122,49 @@ async def test_duplicates_fill_free_slots_during_the_day(tmp_path, monkeypatch):
     assert await inv.fill_free_slots() == 1 and len(reads) == 1  # la collection n'est pas relue
     assert not notifier.sent  # pas de message Discord pour les doublons
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_simulated_positions_never_block_real_collection_bids(tmp_path):
+    """Des positions simulées qui dépassent le solde bloquent les mises simulées, pas les vraies."""
+    now = datetime.now(timezone.utc)
+
+    def sale(aid, title, base):
+        return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "R"},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
+                "end_at": (now + timedelta(seconds=15)).isoformat(), "base_amount": base,
+                "current_bid": None, "current_bidder_id": None}
+
+    def handler(request):
+        if request.method == "POST":
+            return httpx.Response(200, json={"current_bid": 10, "bidder_balance": 2990})
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": [sale("pos", "Mème", 100), sale("col", "14 octobre", 10)],
+                                             "hasMore": False})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"],
+                                   collection_sets=["jours"], collection_max_price=20)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    await seed_observed(db, "card-Mème", [400, 410, 390], rarity="R")
+    await db.kv_set("collection", {"owned": [], "missing": ["14 octobre"], "total": 366})
+    await db.record_bid(auction_id="vieille", card_id="x", title="x", rarity="C", is_shiny=False, amount=6400,
+                        reference_price=None, reason="revente", night=False, dry_run=True, status="sim_won",
+                        end_at=now - timedelta(days=1))  # position simulée détenue : 6400 WB > solde
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    await sniper.step()
+    status = {r["auction_id"]: r["status"] for r in await db._all("SELECT * FROM bids WHERE auction_id <> 'vieille'")}
+    assert status == {"col": "placed"}  # la vraie mise de collection passe, la position simulée non
+    assert "solde ou budget du jour insuffisant 1" in sniper.recap()[0]
+    await db.close()
