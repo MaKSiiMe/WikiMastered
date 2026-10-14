@@ -77,7 +77,7 @@ async def alert_line(ctx: Context, sales: list[Auction], detail: str, extra: str
 
 
 def flush(ctx: Context, title: str, lines: list[str]) -> None:
-    """Un seul message par passage ; `lines` contient une ligne par carte."""
-    if lines:
+    """Un seul message par passage (avec TRENDS_NOTIFY) ; `lines` contient une ligne par carte."""
+    if lines and ctx.settings.trends_notify:
         shown = "\n".join(lines[:15]) + (f"\n… et {len(lines) - 15} autre(s)" if len(lines) > 15 else "")
         ctx.notifier.info(f"{title} : {len(lines)} carte(s) en vente", shown, topic=Topic.TRENDS)

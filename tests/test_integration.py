@@ -622,7 +622,7 @@ async def test_google_trends_feed_to_market_signals(tmp_path):
                 "base_amount": 100, "current_bid": None, "current_bidder_id": None}], "hasMore": False})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler)
+    client, notifier = make_client(tmp_path, handler, trends_notify=True)
     db = Database(tmp_path / "t.db")
     await db.connect()
     api = WikiMastersAPI(client)

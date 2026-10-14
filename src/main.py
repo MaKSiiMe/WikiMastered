@@ -95,12 +95,11 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
     if ctx.settings.enable_google_trends or ctx.settings.enable_wiki_trends:
         extra.append(await day_line(ctx.db, datetime.now(timezone.utc)))
     sections += [as_section(text) for text in extra]
+    if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine (détail : commande trends)
+        text = await trends_text(ctx.db, 7, await min_profit(ctx), datetime.now(timezone.utc), detailed=False)
+        sections.append(("Tendances de la semaine", text))
     if send:
         ctx.notifier.info(f"Bilan du {now_local():%d/%m}", description, topic=Topic.REPORT, sections=sections)
-        if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine, à part car longue
-            text = await trends_text(ctx.db, 7, await min_profit(ctx), datetime.now(timezone.utc))
-            title, _, body = text.partition("\n")
-            ctx.notifier.info(title.strip("*"), body, topic=Topic.REPORT)
     return stats
 
 

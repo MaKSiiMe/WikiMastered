@@ -1,29 +1,25 @@
 # Déploiement avec Portainer
 
-Le bot tourne comme une stack Portainer construite depuis ce dépôt GitHub privé. Aucun accès SSH n'est nécessaire.
+Le bot tourne comme une stack Portainer construite depuis ce dépôt GitHub privé, sans accès SSH. Une fois en place, il se met à jour tout seul à chaque fusion sur `main`.
 
-## 1. Préparer ce qu'il faut (sur ton PC)
+## 1. Préparer (sur ton PC)
 
-**Token GitHub** (le dépôt est privé)
-GitHub > photo de profil > *Settings* > *Developer settings* > *Personal access tokens* > *Fine-grained tokens* > *Generate new token*.
-- *Repository access* : *Only select repositories* > `MaKSiiMe/WikiMastered`
-- *Permissions* > *Repository permissions* > *Contents* : **Read-only**
-- Copie le token (`github_pat_…`) : il ne s'affiche qu'une fois.
+**Token GitHub** (le dépôt est privé). GitHub > photo de profil > *Settings* > *Developer settings* > *Personal access tokens* > *Fine-grained tokens* > *Generate new token* :
+- *Repository access* : *Only select repositories* > `MaKSiiMe/WikiMastered` ;
+- *Repository permissions* > *Contents* : **Read-only** ;
+- copie le token (`github_pat_…`) : il ne s'affiche qu'une fois.
 
-**Webhook Discord**
-Sur ton serveur Discord, ouvre le salon voulu > ⚙️ *Modifier le salon* > *Intégrations* > *Webhooks* > *Nouveau webhook* > *Copier l'URL du webhook*.
-Optionnel : crée un deuxième webhook dans un salon dédié aux alertes critiques.
+**Webhook Discord.** Salon voulu > ⚙️ *Modifier le salon* > *Intégrations* > *Webhooks* > *Nouveau webhook* > *Copier l'URL du webhook*. Facultatif : un second webhook dans un salon réservé aux alertes rouges.
 
-**Cookie et User-Agent WikiMasters**
-1. Connecte-toi sur https://www.wiki-masters.com, puis ouvre DevTools (F12) > onglet *Réseau*.
-2. Recharge la page et filtre sur `wikibidous`. Clique sur la requête `/api/wikibidous`.
-3. Dans *En-têtes de requête*, copie :
-   - la valeur complète de `cookie`. Elle doit contenir `sb-…-auth-token`, parfois en plusieurs morceaux `.0`, `.1` : prends tout ;
-   - la valeur de `user-agent`.
+**Session WikiMasters, propre au bot.** Le jeton de renouvellement de session ne sert qu'une fois : si ton navigateur et le bot partagent la même session, le premier qui la renouvelle déconnecte l'autre.
+1. Ouvre une **fenêtre de navigation privée** et connecte-toi sur https://www.wiki-masters.com.
+2. DevTools (F12) > *Réseau*, recharge la page, filtre sur `wikibidous` et clique sur la requête `/api/wikibidous`. Dans *En-têtes de requête*, copie la valeur complète de `cookie` (elle contient `sb-…-auth-token`, parfois en `.0`, `.1` : prends tout) et celle de `user-agent`.
+3. Filtre ensuite sur `supabase.co`, clique sur n'importe quelle requête et copie l'en-tête `apikey` (une longue chaîne qui commence par `eyJ`). Cette clé est envoyée à tous les visiteurs du site : ce n'est pas un mot de passe.
+4. **Ferme la fenêtre sans cliquer sur « Se déconnecter ».** La session reste valable pour le bot. Évite aussi « Se déconnecter » dans ton navigateur habituel : Supabase ferme alors en principe toutes les sessions du compte, celle du bot comprise.
 
 ## 2. Créer la stack
 
-Portainer > ton environnement > *Stacks* > *+ Add stack*
+Portainer > ton environnement > *Stacks* > *+ Add stack* :
 
 | Champ | Valeur |
 |---|---|
@@ -33,116 +29,69 @@ Portainer > ton environnement > *Stacks* > *+ Add stack*
 | Repository reference | `refs/heads/main` |
 | Compose path | `portainer-stack.yml` |
 | Authentication | activé : username `MaKSiiMe`, Personal Access Token = le token GitHub |
-| GitOps updates | désactivé pour l'instant |
+| GitOps updates | activé, mécanisme **Polling**, intervalle `5m` |
+
+Pourquoi Polling : Portainer vérifie lui-même `main` et redéploie s'il y a du nouveau, sans rien ouvrir sur internet. Le mécanisme *Webhook* exige que GitHub puisse joindre ton Portainer ; une adresse Tailscale (`100.x.x.x`) ou locale ne l'est pas. Les options *Re-pull image* et *Force redeployment* sont réservées à la version Business : laisse-les désactivées.
 
 ## 3. Variables d'environnement
 
-Dans *Environment variables*, clique sur **Advanced mode** et colle ce bloc, une variable par ligne, **sans apostrophes** :
+Dans *Environment variables*, clique sur **Advanced mode** et colle, une variable par ligne, **sans apostrophes** :
 
 ```
 DRY_RUN=true
-WM_COOKIE=sb-xxxxxxxx-auth-token=base64-...
-WM_USER_AGENT=Mozilla/5.0 (...)
+WM_COOKIE=<le cookie de la fenêtre privée>
+WM_USER_AGENT=<le user-agent>
+SUPABASE_ANON_KEY=<la valeur de apikey>
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 WIKIMEDIA_USER_AGENT=WikiMasteredBot/1.0 (https://github.com/MaKSiiMe; ton-email)
 ```
 
-Optionnel, mais utile dès le départ :
+Facultatif :
 
 ```
 DISCORD_ALERT_WEBHOOK_URL=https://discord.com/api/webhooks/...
 DISCORD_MENTION=@here
 ACHIEVEMENT_MILESTONES=100,250,500,1000,2500,5000
+COLLECTION_SETS=jours
+PROTECTED_TAGS=date
 ```
 
-À ne **pas** ajouter : `SNIPER_RARITY_CAPS` (achats par rareté, contraires à la stratégie : le prix suit les tendances) et un petit `SNIPER_DAILY_BUDGET`. Une position coûte jusqu'à ~540 WB : un budget du jour de 300 bloquerait presque tous les achats.
+À ne **pas** ajouter : `SNIPER_RARITY_CAPS` (achats par rareté, contraires à la stratégie : le prix suit les tendances) et un petit `SNIPER_DAILY_BUDGET` (une position coûte jusqu'à ~540 WB : un budget de 300 bloquerait presque tous les achats).
 
-Toutes les autres variables sont décrites dans [.env.example](../.env.example). Elles s'ajoutent de la même façon.
+Toutes les autres variables sont décrites dans [.env.example](../.env.example).
 
-## 4. Déployer
+## 4. Déployer et vérifier
 
-Clique sur **Deploy the stack**. Portainer clone le dépôt puis construit l'image, ce qui prend une à deux minutes la première fois.
-
-## 5. Vérifier
-
-1. *Containers* > `wikimastered` : l'état doit passer à **healthy** au bout d'une à deux minutes.
-2. Icône *Logs* : tu dois voir `Démarrage en mode DRY RUN … joueur <uuid>`, et Discord doit recevoir **« [DRY RUN] Bot démarré »**.
-3. Icône *>_ Console* > *Command* `/bin/sh` > *Connect*, puis :
+1. **Deploy the stack.** Portainer clone le dépôt et construit l'image (une à deux minutes la première fois).
+2. *Containers* > `wikimastered` : l'état passe à **healthy** au bout d'une à deux minutes.
+3. Discord reçoit « [DRY RUN] Bot démarré », avec l'étiquette ⚙️ Système.
+4. *Console* (*Command* `/bin/sh` > *Connect*) :
    ```sh
-   python -m src.main check      # Session OK — joueur … — solde … WB
+   python -m src.main check      # session OK, joueur, solde, « renouvellement automatique actif »
    python -m src.main inspect    # chaque route doit afficher « OK : conforme »
    ```
-   Si `inspect` affiche `ÉCART` ou `ERREUR`, envoie-moi sa sortie : il faudra ajuster une route ou un modèle.
+   Si `inspect` affiche `ÉCART` ou `ERREUR`, une route ou un modèle est à ajuster.
 
-## 6. Observer en simulation (1 à 2 jours)
+## 5. Passer en réel, par étapes
 
-Sur Discord, regarde passer les « Enchère simulée », « Tirage remarquable », etc. Ajuste ensuite les seuils dans l'onglet de la stack > *Environment variables* > **Update the stack**.
+1. Observe un ou deux jours en simulation : résumés « Sniper : enchères simulées », boosters, bilan du soir. `python -m src.main inventory scan` montre ce que l'inventaire ferait.
+2. `DRY_RUN=false` et `SIMULATE=sniper` : paquets, ventes de doublons, collection et étiquettes deviennent réels ; seules les mises des positions du sniper restent simulées. Ajoute `AUTO_LIST=true` pour la vente automatique des doublons.
+3. Retire `SIMULATE` quand le bloc « Validation de la simulation » du bilan dit que le passage en réel est envisageable : au moins 10 reventes simulées, et un bilan positif même en comptant les invendues comme perdues.
 
-Pour voir ce que le module inventaire ferait, ouvre la *Console* :
+Chaque changement : stack > *Environment variables* > **Update the stack**.
 
-```sh
-python -m src.main inventory scan
-```
-
-## 7. Passer en réel
-
-**Par étapes (recommandé).** `DRY_RUN=false` et `SIMULATE=sniper` : paquets, ventes de doublons, collection et étiquettes deviennent réels, et seules les mises des positions du sniper restent simulées. Le bilan quotidien continue de juger la simulation du sniper. Pour garder aussi la collection en simulation : `SIMULATE=sniper,collection`. Quand le sniper est validé, retire `SIMULATE`.
-
-Attends que le bilan quotidien (23:00 sur Discord) indique, dans « Validation de la simulation », que le passage en réel est envisageable : au moins 10 reventes simulées, et un bilan positif même en comptant les invendues comme perdues.
-
-Au premier passage en réel, Discord affiche « Première réponse réelle : place_bid » et « Première réponse réelle : create_listing ». Les 3 premières réponses de chaque écriture sont enregistrées dans le volume. Envoie-moi leur contenu, obtenu dans la *Console* avec :
-
-```sh
-cat /app/data/inspect/writes/*.json
-```
-
-Stack `wikimastered` > *Environment variables* > `DRY_RUN=false` > **Update the stack**.
-
-Pour réactiver plus tard la vente ou la défausse automatiques : `AUTO_LIST=true` et `AUTO_DISCARD=true`. Ces deux options sont désactivées par défaut.
-
-## Session autonome (recommandé)
-
-Sans cette étape, le bot se met en pause dès que sa session expire, et attend que tu lui donnes un nouveau cookie. Avec elle, il renouvelle lui-même sa session, comme le fait ton navigateur.
-
-1. **Donne au bot sa propre session.** Le jeton de renouvellement ne sert qu'une fois. Si ton navigateur habituel et le bot partagent la même session, le premier qui la renouvelle invalide l'autre.
-   - Ouvre une **fenêtre de navigation privée** (ou un autre navigateur) et connecte-toi sur https://www.wiki-masters.com.
-   - Récupère le cookie comme à l'étape 1.
-   - **Ferme la fenêtre sans cliquer sur « Se déconnecter ».** Fermer une fenêtre privée efface le cookie de ton côté, mais la session reste valable pour le bot.
-   - Plus tard, évite aussi « Se déconnecter » dans ton navigateur habituel. Par défaut, Supabase ferme alors **toutes** les sessions du compte, celle du bot comprise. Ce comportement n'est pas encore vérifié sur ce site.
-2. **Récupère la clé publique Supabase**, dans la même fenêtre : DevTools (F12) > *Réseau* > filtre `supabase.co` > n'importe quelle requête > *En-têtes de requête* > valeur de `apikey` (une longue chaîne qui commence par `eyJ`). Cette clé est envoyée à tous les visiteurs du site : ce n'est pas un mot de passe.
-3. Dans la stack > *Environment variables* :
-   ```
-   WM_COOKIE=<le cookie de la fenêtre privée>
-   SUPABASE_ANON_KEY=<la valeur de apikey>
-   ```
-   puis **Update the stack**.
-4. Vérifie dans la *Console* : `python -m src.main check` doit afficher `renouvellement automatique actif`. Le message Discord « Bot démarré » l'indique aussi.
-
-Si Supabase refuse un jour le renouvellement, Discord affiche « Session : renouvellement refusé ». Refais alors les étapes 1 et 3.
-
-Pourquoi un cookie au départ : le formulaire de connexion du site est protégé par une vérification anti-robot (Cloudflare Turnstile). Le bot ne se connecte donc jamais tout seul et ne contourne pas cette vérification. Il garde vivante la session que tu lui donnes, indéfiniment, sauf si elle est révoquée : déconnexion de toutes les sessions, changement de mot de passe, ou jeton consommé par un autre appareil.
+À la première écriture réelle de chaque type, Discord affiche « Première réponse réelle : … ». Les 3 premières réponses sont gardées dans le volume (`cat /app/data/inspect/writes/*.json` dans la *Console*) pour vérifier leur format.
 
 ## Entretien
 
-**Session expirée.** Discord affiche l'alerte « Session expirée » et le bot se met en pause. Récupère un nouveau cookie (étape 1), remplace `WM_COOKIE` dans la stack, puis **Update the stack**. Autre possibilité, sans redémarrage : dans la *Console*, lance
+**Mises à jour.** Automatiques : une PR fusionnée sur `main` est déployée dans les 5 minutes. Le message « Bot démarré » le confirme. À la main : stack > **Pull and redeploy**. Si l'ancien code tourne encore (Portainer a réutilisé l'image), supprime `wikimastered:latest` dans *Images* et relance *Pull and redeploy*.
 
-```sh
-cat > /app/data/session_cookie.txt
-```
+**Session perdue.** Avec `SUPABASE_ANON_KEY`, le bot renouvelle sa session tout seul. Si Discord affiche « Session expirée » ou « Session : renouvellement refusé », refais l'étape « Session WikiMasters » ci-dessus, puis :
+- soit remplace `WM_COOKIE` dans la stack et **Update the stack** ;
+- soit, sans redémarrage, dans la *Console* : `cat > /app/data/session_cookie.txt`, colle le cookie, Entrée puis Ctrl+D. Le bot le charge en moins de 30 s.
 
-colle le cookie, appuie sur Entrée puis Ctrl+D. Le bot le charge en moins de 30 s.
+Une session reste valable tant qu'elle n'est pas révoquée : déconnexion de toutes les sessions, changement de mot de passe, ou jeton consommé par un autre appareil.
 
-**Mettre à jour le code.** Stack > **Pull and redeploy**. Si les logs montrent que l'ancien code tourne encore, Portainer a réutilisé l'image existante au lieu de la reconstruire. Dans ce cas : *Images* > supprime `wikimastered:latest`, puis relance *Pull and redeploy*.
+**Données.** Volume `wikimastered_wikimastered_data` (*Volumes*) : base SQLite, logs et session. Il survit aux redéploiements et à la suppression du conteneur ; il n'est effacé que si tu supprimes le volume lui-même.
 
-## Déploiement automatique
-
-À chaque push sur `main` dont les tests passent, GitHub Actions ([.github/workflows/](../.github/workflows/)) appelle un webhook Portainer qui tire le dépôt et redéploie la stack. Sans l'étape ci-dessous, rien ne se déploie tout seul : le bouton **Pull and redeploy** reste la méthode manuelle.
-
-1. Stack > **Git** (ou *Editor*, selon la version) > active **Automatic updates** > mécanisme **Webhook** > active **Re-pull image and redeploy** (sinon l'ancienne image peut être réutilisée) > copie l'URL du webhook > **Update the stack**.
-2. GitHub > le dépôt > *Settings* > *Secrets and variables* > *Actions* > *New repository secret* : nom `PORTAINER_WEBHOOK_URL`, valeur = l'URL copiée.
-
-Portainer doit être joignable depuis internet (HTTPS) pour que GitHub l'appelle. Sinon, choisis plutôt le mécanisme **Polling** (toutes les 5 min par exemple) : aucun secret GitHub n'est alors nécessaire.
-
-**Données.** Elles sont dans le volume `wikimastered_wikimastered_data` (*Volumes*) : base SQLite, logs et session. Ce volume survit aux redéploiements et à la suppression du conteneur. Il n'est effacé que si tu supprimes le volume lui-même.
-
-**Arrêter.** Stack > *Stop*. Le bot termine proprement et envoie « Bot arrêté » sur Discord.
+**Arrêter.** Stack > *Stop*. Le bot termine proprement et envoie « Bot arrêté ».
