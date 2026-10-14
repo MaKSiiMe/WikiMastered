@@ -58,7 +58,7 @@ async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
                                    collection_sets=["jours"], collection_max_price=20)
     db = Database(tmp_path / "t.db")
     await db.connect()
-    await seed_observed(db, "card-Mème", [400, 410, 390])
+    await seed_observed(db, "card-Mème", [400, 410, 390], rarity="R")
     await db.kv_set("collection", {"owned": [], "missing": ["14 octobre"], "total": 366})
     api = WikiMastersAPI(client)
     sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))

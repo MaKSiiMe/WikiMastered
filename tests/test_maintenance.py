@@ -30,3 +30,33 @@ async def test_purge_keeps_accounting_and_recent_market(tmp_path):
     assert await db.observed_prices("c", 5) == ([10], 1)
     assert len(await db._all("SELECT * FROM bids")) == 1  # comptabilité gardée
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_estimates_compare_same_rarity_and_shiny(tmp_path):
+    """Un exemplaire Commun ne s'estime pas sur les ventes de la même carte en UR ou shiny."""
+    from src.core.client import ApiError
+    from src.core.pricing import PriceService, Quote
+
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    rows = [("a1", "UR", 0, 500), ("a2", "UR", 0, 520), ("a3", "C", 0, 12), ("a4", "C", 0, 10), ("a5", "C", 1, 90)]
+    await db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
+        "VALUES (?, 'x', 't', ?, ?, ?, ?)", [(a, r, s, p, now.isoformat()) for a, r, s, p in rows])
+    await db.db.commit()
+
+    prices = PriceService(None, db, 30)  # type: ignore[arg-type]
+
+    async def no_market(*_args):
+        raise ApiError(429, {}, "card_sales_summary")
+
+    prices._market = no_market  # type: ignore[method-assign]
+    assert await prices.quote("x", "C") == Quote(11.0, 2)
+    assert await prices.quote("x", "UR") == Quote(510.0, 2)
+    assert await prices.quote("x", "C", shiny=True) == Quote(90.0, 1)
+    assert await prices.quote("x", "L") == Quote(None, 0)  # jamais vue en L : pas d'estimation
+    assert set(await prices.observed_quote("x")) == {"C", "UR"}
+    assert sorted(await db.observed_prices_since("x", now - timedelta(days=1), 5, rarity="C", shiny=False)) == [10, 12]
+    await db.close()

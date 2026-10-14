@@ -301,7 +301,8 @@ class InventoryManager(Worker):
             if not owned_id:
                 continue
             try:
-                quote = await self.ctx.prices.quote(row["card_id"], row["rarity"], wait=False)
+                quote = await self.ctx.prices.quote(row["card_id"], row["rarity"], wait=False,
+                                                    shiny=bool(row["is_shiny"]))
                 estimate = quote.average
             except (RateLimited, ApiError):
                 estimate = None
@@ -425,7 +426,7 @@ class InventoryManager(Worker):
             bid = await self.db.get_bid(row["bid_id"]) if row["bid_id"] else None
             label = f"{row['title']} ({row['rarity']})"
             if row["status"] == "simulated":
-                if not await self._simulated_sale(row):
+                if not await self._simulated_sale(row, bid):
                     await self.db.update_listing(row["id"], status="sim_unsold", settled_at=utcnow())
                     await self._unsold(row, bid, label)
                     continue
@@ -457,13 +458,14 @@ class InventoryManager(Worker):
             await self.db.update_listing(row["id"], status="unsold", settled_at=utcnow())
             await self._unsold(row, bid, label)
 
-    async def _simulated_sale(self, row) -> bool:
+    async def _simulated_sale(self, row, bid) -> bool:
         """Une vente simulée aboutit si la carte s'est vendue au moins à ce prix de départ récemment.
 
         Personne ne mise sous le prix de départ : si les ventes observées de ces derniers jours
         sont plus basses (tendance retombée) ou absentes, la vente simulée reste invendue."""
         prices = await self.db.observed_prices_since(row["card_id"], utcnow() - SIM_MARKET_WINDOW,
-                                                     self.settings.price_recent_sales)
+                                                     self.settings.price_recent_sales, rarity=row["rarity"],
+                                                     shiny=bool(bid["is_shiny"]) if bid else None)
         return bool(prices) and statistics.median(prices) >= row["base_amount"]
 
     async def _unsold(self, row, bid, label: str) -> None:

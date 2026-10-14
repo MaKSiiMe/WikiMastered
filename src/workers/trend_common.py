@@ -65,7 +65,8 @@ async def scan_market(ctx: Context, *, source: str, term: str, detail: str, max_
 async def alert_line(ctx: Context, sales: list[Auction], detail: str, extra: str = "") -> str:
     """Une ligne par carte, quel que soit le nombre de ses ventes en cours."""
     first = min(sales, key=lambda a: a.end_at)
-    observed, n = await ctx.db.observed_prices(first.catalog_id, ctx.settings.price_recent_sales)
+    observed, n = await ctx.db.observed_prices(first.catalog_id, ctx.settings.price_recent_sales,
+                                               rarity=first.rarity, shiny=first.shiny)
     estimate = (f"estimation ~{statistics.median(observed):.0f} WB ({n} vente(s) vue(s))" if observed
                 else "aucune vente observée")
     rarities = "/".join(sorted({a.rarity or "?" for a in sales}))

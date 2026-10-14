@@ -113,6 +113,17 @@ HELD = "status IN ('won', 'sim_won') AND closed = 0"
 LISTING_OPEN = "('scheduled', 'posted', 'simulated', 'uncertain')"
 
 
+def _observed_filter(card_id: str, rarity: str | None, shiny: bool | None) -> tuple[str, tuple]:
+    where, params = "card_id = ?", [card_id]
+    if rarity is not None:
+        where += " AND rarity = ?"
+        params.append(rarity)
+    if shiny is not None:
+        where += " AND is_shiny = ?"
+        params.append(int(shiny))
+    return where, tuple(params)
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -442,15 +453,30 @@ class Database:
         await self.db.commit()
         return len(sales)
 
-    async def observed_prices(self, card_id: str, limit: int) -> tuple[list[int], int]:
-        """(prix des `limit` dernières ventes observées, plus récentes d'abord ; nombre total)."""
-        rows = await self._all("SELECT price FROM observed_sales WHERE card_id = ? ORDER BY ended_at DESC",
-                               (card_id,))
+    async def observed_prices(self, card_id: str, limit: int, rarity: str | None = None,
+                              shiny: bool | None = None) -> tuple[list[int], int]:
+        """(prix des `limit` dernières ventes observées, plus récentes d'abord ; nombre total).
+
+        Une même carte vaut très différemment selon sa rareté et si elle est shiny : `rarity`
+        et `shiny` limitent aux ventes comparables (None = sans filtre)."""
+        where, params = _observed_filter(card_id, rarity, shiny)
+        rows = await self._all(f"SELECT price FROM observed_sales WHERE {where} ORDER BY ended_at DESC", params)
         return [r["price"] for r in rows[:limit]], len(rows)
 
-    async def observed_prices_since(self, card_id: str, since: datetime, limit: int) -> list[int]:
-        rows = await self._all("SELECT price FROM observed_sales WHERE card_id = ? AND ended_at >= ? "
-                               "ORDER BY ended_at DESC LIMIT ?", (card_id, iso(since), limit))
+    async def observed_by_rarity(self, card_id: str, limit: int, shiny: bool = False) -> dict[str, tuple[list[int], int]]:
+        """Ventes observées d'une carte, par rareté : {rareté: (`limit` derniers prix, nombre)}."""
+        rows = await self._all("SELECT rarity, price FROM observed_sales WHERE card_id = ? AND is_shiny = ? "
+                               "AND rarity IS NOT NULL ORDER BY ended_at DESC", (card_id, int(shiny)))
+        groups: dict[str, list[int]] = {}
+        for r in rows:
+            groups.setdefault(r["rarity"], []).append(r["price"])
+        return {rarity: (prices[:limit], len(prices)) for rarity, prices in groups.items()}
+
+    async def observed_prices_since(self, card_id: str, since: datetime, limit: int, rarity: str | None = None,
+                                    shiny: bool | None = None) -> list[int]:
+        where, params = _observed_filter(card_id, rarity, shiny)
+        rows = await self._all(f"SELECT price FROM observed_sales WHERE {where} AND ended_at >= ? "
+                               "ORDER BY ended_at DESC LIMIT ?", (*params, iso(since), limit))
         return [r["price"] for r in rows]
 
     async def validation_stats(self, since: datetime, min_sales: int) -> dict[str, int]:

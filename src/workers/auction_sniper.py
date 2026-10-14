@@ -304,7 +304,7 @@ class AuctionSniper(Worker):
             if await self.ctx.prices.is_cached(a.catalog_id):
                 continue
             try:
-                await self.ctx.prices.quote(a.catalog_id, a.rarity, wait=False)
+                await self.ctx.prices.quote(a.catalog_id, a.rarity, wait=False, shiny=a.shiny)
             except (RateLimited, ApiError):
                 pass
             return
@@ -424,7 +424,7 @@ class AuctionSniper(Worker):
                 return None
         # Sans attendre : si la route des cotes est limitée, l'enchère est simplement ignorée.
         try:
-            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False)
+            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
         except (RateLimited, ApiError):
             quote = None
         return decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
