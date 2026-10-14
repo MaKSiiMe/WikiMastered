@@ -262,6 +262,9 @@ async def packs_status(settings: Settings, hours: int) -> None:
         rows = await ctx.db.recent_pulls(datetime.now(timezone.utc) - timedelta(hours=hours))
         if not settings.is_live("open_pack"):
             print("DRY_RUN : les paquets ne sont PAS ouverts. Ajoute LIVE_WRITES=open_pack pour les ouvrir quand même.")
+        from src.workers.pack_opener import checks_report
+        print("Vérifications humaines :")
+        print("\n".join(await checks_report(ctx.db)))
         if not rows:
             print(f"Aucune carte tirée ces {hours} dernières heures.")
             return

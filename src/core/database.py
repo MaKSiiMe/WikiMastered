@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS pulls (
 CREATE TABLE IF NOT EXISTS pack_opens (
     id INTEGER PRIMARY KEY, opened_at TEXT NOT NULL, cards INTEGER NOT NULL DEFAULT 0
 );
+-- Vérifications humaines demandées par le site à l'ouverture des paquets (fréquence, contexte).
+CREATE TABLE IF NOT EXISTS pack_checks (
+    id INTEGER PRIMARY KEY, requested_at TEXT NOT NULL, cleared_at TEXT, bot_started_at TEXT
+);
 
 CREATE TABLE IF NOT EXISTS bids (
     id INTEGER PRIMARY KEY, auction_id TEXT NOT NULL, card_id TEXT, title TEXT, rarity TEXT,
@@ -230,6 +234,21 @@ class Database:
 
     async def record_pack_open(self, cards: int) -> None:
         await self._exec("INSERT INTO pack_opens (opened_at, cards) VALUES (?, ?)", (iso(utcnow()), cards))
+
+    async def record_pack_check(self, bot_started_at: datetime) -> None:
+        await self._exec("INSERT INTO pack_checks (requested_at, bot_started_at) VALUES (?, ?)",
+                         (iso(utcnow()), iso(bot_started_at)))
+
+    async def clear_pack_check(self) -> None:
+        await self._exec("UPDATE pack_checks SET cleared_at = ? WHERE cleared_at IS NULL", (iso(utcnow()),))
+
+    async def pack_checks(self) -> list[aiosqlite.Row]:
+        return await self._all("SELECT * FROM pack_checks ORDER BY requested_at")
+
+    async def packs_opened_between(self, start: str, end: str) -> int:
+        row = await self._one("SELECT COUNT(*) AS n FROM pack_opens WHERE opened_at >= ? AND opened_at < ?",
+                              (start, end))
+        return int(row["n"]) if row else 0
 
     async def recent_pulls(self, since: datetime) -> list[aiosqlite.Row]:
         return await self._all("SELECT * FROM pulls WHERE opened_at >= ? ORDER BY opened_at DESC", (iso(since),))
