@@ -5,6 +5,9 @@ services:
   wikimastered:
     build: .
     image: wikimastered:latest
+    # Reconstruit l'image à chaque déploiement : sinon Portainer réutilise l'ancienne image
+    # et l'ancien code continue de tourner après une mise à jour du dépôt.
+    pull_policy: build
     container_name: wikimastered
     restart: unless-stopped
     env_file:
