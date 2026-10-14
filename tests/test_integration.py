@@ -585,4 +585,6 @@ async def test_trend_alerts_cards_under_position_budget(tmp_path):
     lines = await trends.check_market(trend, budget)
     assert len(lines) == 1 and "mise min 132 WB" in lines[0] and "estimation ~400 WB" in lines[0]
     assert await trends.check_market(trend, budget) == []  # chaque vente n'est signalée qu'une fois
+    signals = await db._all("SELECT auction_id, source FROM trend_signals ORDER BY auction_id")
+    assert [(r["auction_id"], r["source"]) for r in signals] == [("a1", "wikipedia"), ("a2", "wikipedia")]
     await db.close()
