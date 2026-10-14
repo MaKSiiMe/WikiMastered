@@ -293,6 +293,28 @@ async def test_listings_respect_concurrent_limit(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_null_selling_count_falls_back_to_posted_listings(tmp_path):
+    from src.workers.inventory_manager import InventoryManager
+
+    def handler(request):
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": None, "maxConcurrentAuctions": 5})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    now = datetime.now(timezone.utc)
+    await db.schedule_listing(owned_card_id="o1", card_id="c", title="T", rarity="C", base_amount=20,
+                              duration_minutes=120, post_at=now, target_end=now + timedelta(hours=2), reason="test")
+    await db._exec("UPDATE listings SET status = 'posted'")
+    assert await inv.slot_usage() == (1, 5)
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_portfolio_simulated_buy_then_resale(tmp_path):
     """Scénario complet en DRY_RUN : mise, gain simulé, mise en vente, revente simulée, bénéfice."""
     from src.workers.inventory_manager import InventoryManager
