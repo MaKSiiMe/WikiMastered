@@ -524,3 +524,31 @@ async def test_daily_budget_applies_in_dry_run(tmp_path):
     assert len(rows) == 2  # 100 + 100 ; la troisième dépasserait 250
     assert ("INFO", "Sniper : budget du jour atteint") in notifier.sent
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_pack_sessions_every_15_to_90_minutes(tmp_path):
+    from src.workers.pack_opener import PackOpener
+
+    opened = []
+
+    def handler(request):
+        opened.append(request.url.path)
+        return httpx.Response(200, json={"cards": [{"id": "c1", "wikipedia_title": "Ada", "rarity": "C"}],
+                                         "packs_remaining": 0})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, pack_between_opens_min_seconds=0,
+                                   pack_between_opens_max_seconds=0)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await opener.setup()
+    assert 60 <= await opener.step() <= 600 and not opened  # pas d'ouverture dès le démarrage
+    opener._next_open = datetime.now(timezone.utc)
+    await opener.step()
+    assert len(opened) == 1
+    gap = (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60
+    assert 14.9 <= gap <= 90
+    assert await opener.step() > 0 and len(opened) == 1  # on attend la prochaine session
+    await db.close()

@@ -87,10 +87,12 @@ class Settings(BaseSettings):
     pack_regen_minutes: float = 10.0
     pack_max_stock: int = 10
     pack_open_min_stock: int = 1
-    pack_delay_min_seconds: float = 15.0
-    pack_delay_max_seconds: float = 60.0
-    pack_between_opens_min_seconds: float = 2.0
-    pack_between_opens_max_seconds: float = 6.0
+    # Rythme humain, pour éviter les vérifications : une session d'ouverture toutes les 15 à 90 min
+    # (stock plafonné à 10, régénéré en 100 min : rien n'est perdu), paquets espacés de 5 à 15 s.
+    pack_interval_min_minutes: float = 15.0
+    pack_interval_max_minutes: float = 90.0
+    pack_between_opens_min_seconds: float = 5.0
+    pack_between_opens_max_seconds: float = 15.0
     pack_notify_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
     pack_notify_shiny: bool = True
     pack_verification_recheck_minutes: float = 30.0
