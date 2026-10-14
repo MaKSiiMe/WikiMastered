@@ -157,6 +157,24 @@ def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales
     return Decision(amount, ceiling, best.reason, best.reference, best.profit)
 
 
+def refusal(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales: int,
+            portfolio: Portfolio | None = None, fee: float = 0.0) -> str:
+    """Pourquoi `decide` n'a pas retenu une position (pour le récap) : la première règle qui bloque."""
+    if quote is None or not quote.reliable(min_sales):
+        return "pas assez vue vendue"
+    amount = auction.min_bid
+    if amount > math.floor(quote.average * params.deal_ratio):  # type: ignore[operator]
+        return f"mise > {params.deal_ratio:.0%} de l'estimation"
+    if portfolio is not None:
+        if amount > math.floor(quote.average * (1 - fee) - portfolio.required_profit):  # type: ignore[operator]
+            return "bénéfice attendu trop faible"
+        if amount > portfolio.position_budget:
+            return "au-dessus du budget d'une position"
+    if params.max_bid and amount > params.max_bid:
+        return "au-dessus de SNIPER_MAX_BID"
+    return "autre"
+
+
 def in_snipe_window(auction: Auction, me: str | None, window: int, now: datetime, min_left: int = 0) -> bool:
     """Fenêtre de mise : entre `window` et `min_left` secondes avant la fin (au-dessous, le site prolonge)."""
     left = auction.seconds_left(now)
@@ -192,6 +210,8 @@ class AuctionSniper(Worker):
         # Enchères engagées par le bot lui-même (pour le décompte des positions).
         self._bot_engaged: set[str] = set(self._leading)
         self._digest: list[tuple[bool, str]] = []  # (simulée, résumé)
+        # Sort de chaque enchère entrée dans la fenêtre de mise depuis le dernier récap : id -> issue.
+        self._outcomes: dict[str, str] = {}
         self._next_digest = utcnow() + timedelta(minutes=self.settings.notify_digest_minutes)
         # Tes mises manuelles (collections) : enchères et cartes que le bot ne touche jamais.
         self._manual_auctions: set[str] = set()
@@ -273,25 +293,34 @@ class AuctionSniper(Worker):
             if not rebid:
                 if free <= 0:
                     self.log.debug("plus de place pour %s (%d enchères en cours)", auction.title, len(self._engaged))
+                    self._outcome(auction, "limite d'enchères en cours")
                     continue
                 if not decision.collection:
                     open_now = portfolio.open_positions + opened
                     if open_now >= portfolio.max_positions:
                         self.log.debug("positions pleines, %s ignorée", auction.title)
+                        self._outcome(auction, "plafond de positions atteint")
                         continue
                     # Les achats précédents du passage ont pris les places libres : celle-ci attendra.
                     queued = open_now >= portfolio.sale_room
                     if queued and (decision.profit or 0) < max(portfolio.min_profit, portfolio.queue_min_profit):
+                        self._outcome(auction, "file d'attente : bénéfice trop faible")
                         continue
             # Le temps a passé depuis la lecture du marché (cotes, solde…) : on revérifie juste avant de miser.
             if auction.seconds_left() <= self.settings.sniper_min_seconds_left:
                 self.log.debug("%s : trop tard pour miser sans prolonger l'enchère", auction.title)
+                self._outcome(auction, "trop tard")
                 continue
             if not await self._affordable(decision.amount, params, portfolio):
+                self._outcome(auction, "solde ou budget du jour insuffisant")
                 continue
-            if await self._bid(auction, decision, params) and not rebid:
-                free -= 1
-                opened += 1
+            if await self._bid(auction, decision, params):
+                self._outcome(auction, "misée (collection)" if decision.collection else "misée")
+                if not rebid:
+                    free -= 1
+                    opened += 1
+            else:
+                self._outcome(auction, "mise refusée par le site")
 
     async def _prefetch(self, auctions: list[Auction], params: SnipeParams, me: str | None, now: datetime) -> None:
         """Hors fenêtre de mise, cote à l'avance une enchère proche de sa fin (route des cotes limitée)."""
@@ -420,10 +449,11 @@ class AuctionSniper(Worker):
     async def _evaluate(self, auction: Auction, params: SnipeParams, portfolio: Portfolio) -> Decision | None:
         last = await self.db.last_bid(auction.id)
         if last is None and self.is_manual_interest(auction):
+            self._outcome(auction, "tu mises sur cette carte")
             return None
         if last is not None:
             if last["status"] in ("uncertain", "simulated"):
-                return None
+                return None  # déjà misée : l'issue est déjà comptée
             if last["status"] == "rejected" and last["amount"] >= auction.min_bid:
                 return None
             if last["status"] in ("placed", "outbid") and not self.settings.sniper_allow_rebid:
@@ -433,8 +463,29 @@ class AuctionSniper(Worker):
             quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
         except (RateLimited, ApiError):
             quote = None
-        return decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
-                      collection_cap=await self._collection_cap(auction))
+        collection_cap = await self._collection_cap(auction)
+        decision = decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
+                          collection_cap=collection_cap)
+        if decision is None:
+            self._outcome(auction, "collection : trop chère" if collection_cap is not None else
+                          refusal(auction, params, quote, self.settings.price_min_sales, portfolio,
+                                  self.settings.sale_fee_pct))
+        return decision
+
+    def _outcome(self, auction: Auction, outcome: str) -> None:
+        """Retient l'issue d'une enchère ; une mise placée n'est plus remplacée par un refus ultérieur."""
+        if self._outcomes.get(auction.id) not in ("misée", "misée (collection)"):
+            self._outcomes[auction.id] = outcome
+
+    def recap(self) -> list[str]:
+        outcomes, self._outcomes = self._outcomes, {}
+        if not outcomes:
+            return ["Aucune enchère dans la fenêtre de mise."]
+        counts: dict[str, int] = {}
+        for outcome in outcomes.values():
+            counts[outcome] = counts.get(outcome, 0) + 1
+        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+        return [f"{len(outcomes)} enchère(s) examinée(s) : " + " · ".join(f"{o} {n}" for o, n in ranked)]
 
     async def _affordable(self, amount: int, params: SnipeParams, portfolio: Portfolio) -> bool:
         if amount > portfolio.available:

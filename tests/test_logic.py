@@ -283,3 +283,22 @@ def test_every_list_setting_accepts_csv_from_the_environment(monkeypatch):
     s = Settings(_env_file=None)
     assert s.protected_tags == ["date"] and s.simulate == ["sniper", "collection"]
     assert s.achievement_milestones == [100, 250] and s.collection_titles == ["Paris", "Lyon"]
+
+
+def test_refusal_names_the_blocking_rule():
+    from src.core.models import Auction
+    from src.workers.auction_sniper import Portfolio, refusal, snipe_params
+
+    params = snipe_params(Settings(_env_file=None), night=False)
+    portfolio = Portfolio(capital=3000, available=2950, position_budget=540, min_profit=135, open_positions=0,
+                          max_positions=15)
+
+    def auction(base):
+        return Auction.model_validate({"id": "a", "card": {"id": "c", "wikipedia_title": "t", "rarity": "C"},
+                                       "end_at": "2026-10-14T20:00:00+00:00", "base_amount": base})
+
+    assert refusal(auction(10), params, None, 2, portfolio) == "pas assez vue vendue"
+    assert refusal(auction(10), params, Quote(300.0, 1), 2, portfolio) == "pas assez vue vendue"
+    assert refusal(auction(250), params, Quote(300.0, 3), 2, portfolio) == "mise > 70% de l'estimation"
+    assert refusal(auction(200), params, Quote(300.0, 3), 2, portfolio) == "bénéfice attendu trop faible"
+    assert refusal(auction(600), params, Quote(2000.0, 3), 2, portfolio) == "au-dessus du budget d'une position"

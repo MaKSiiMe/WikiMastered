@@ -84,7 +84,7 @@ Chaque changement : stack > *Environment variables* > **Update the stack**.
 
 ## Entretien
 
-**Mises à jour.** Automatiques : une PR fusionnée sur `main` est déployée dans les 5 minutes. Le message « Bot démarré » le confirme. À la main : stack > **Pull and redeploy**. Si l'ancien code tourne encore (Portainer a réutilisé l'image), supprime `wikimastered:latest` dans *Images* et relance *Pull and redeploy*.
+**Mises à jour.** Automatiques : une PR fusionnée sur `main` est déployée dans les 5 minutes, et `pull_policy: build` reconstruit l'image à chaque fois. Le message « Bot démarré » le confirme, et le récap indique l'heure du dernier démarrage. À la main : stack > **Pull and redeploy**. Si l'ancien code tourne encore malgré tout, supprime `wikimastered:latest` dans *Images* et relance *Pull and redeploy*.
 
 **Session perdue.** Avec `SUPABASE_ANON_KEY`, le bot renouvelle sa session tout seul. Si Discord affiche « Session expirée » ou « Session : renouvellement refusé », refais l'étape « Session WikiMasters » ci-dessus, puis :
 - soit remplace `WM_COOKIE` dans la stack et **Update the stack** ;

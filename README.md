@@ -75,6 +75,8 @@ Les messages rouges partent dans `DISCORD_ALERT_WEBHOOK_URL` s'il est défini, a
 - les ventes de doublons : comptées dans le bilan du soir ;
 - les tendances : enregistrées et mesurées, sans message ; `TRENDS_NOTIFY=true` rétablit un message par passage.
 
+**Le récap** (🩺, toutes les `RECAP_INTERVAL_HOURS` heures, 4 par défaut, aux heures rondes) montre ce que chaque worker a fait depuis le précédent, s'il tourne encore et ses erreurs, et ce que le sniper a fait des enchères de sa fenêtre de mise (pas assez vue vendue, bénéfice trop faible, misée…). S'il trouve une anomalie (worker arrêté, positions au-dessus du plafond, marché plus lu, session en pause), il passe en orange avec un bloc « À vérifier » en tête.
+
 **Le bilan du soir** (`DAILY_REPORT_TIME`, 23:00) donne le solde puis un bloc par activité : Paquets, Sniper, Ventes, Positions, Validation de la simulation, Collection, Tendances du jour. Le dimanche, il ajoute « Tendances de la semaine ».
 
 Les tirages remarquables, positions achetées et cartes de collection obtenues montrent l'image de la carte (si le site la fournit) et un lien vers son article Wikipédia.

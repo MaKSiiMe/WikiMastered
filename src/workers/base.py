@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 import httpx
 
 from src.config import Settings
 from src.core.api import WikiMastersAPI
 from src.core.client import ApiError, RateLimited, SessionExpired, UncertainMutation, WikiMastersClient
-from src.core.database import Database
+from src.core.database import Database, utcnow
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 
@@ -40,6 +41,11 @@ class Worker:
         self.notifier = ctx.notifier.for_topic(self.topic)
         self.log = logging.getLogger(f"worker.{self.name}")
         self._errors = 0
+        # Santé, pour le récap : dernier passage réussi, prochain prévu, erreurs depuis le dernier récap.
+        self.last_ok: datetime | None = None
+        self.next_due: datetime | None = None
+        self.recent_errors = 0
+        self.last_error = ""
 
     async def setup(self) -> None:
         """Initialisation (lecture d'état en base...)."""
@@ -56,6 +62,7 @@ class Worker:
             try:
                 delay = await self.step()
                 self._errors = 0
+                self.last_ok = utcnow()
             except asyncio.CancelledError:
                 raise
             except (SessionExpired, RateLimited):
@@ -69,10 +76,17 @@ class Worker:
             except Exception as exc:  # noqa: BLE001 - un worker ne doit jamais tuer le bot
                 self.log.exception("erreur inattendue")
                 delay = self._on_error(exc)
+            self.next_due = utcnow() + timedelta(seconds=max(0.0, delay))
             await asyncio.sleep(max(0.0, delay))
+
+    def recap(self) -> list[str]:
+        """Lignes d'activité propres au worker pour le récap (compteurs remis à zéro ensuite)."""
+        return []
 
     def _on_error(self, exc: Exception) -> float:
         self._errors += 1
+        self.recent_errors += 1
+        self.last_error = str(exc)[:200]
         self.log.warning("erreur #%d : %s", self._errors, exc)
         if self._errors == self.alert_after_errors:
             self.notifier.warning(f"{self.name} : erreurs répétées", str(exc)[:500])

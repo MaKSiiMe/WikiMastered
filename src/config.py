@@ -96,6 +96,7 @@ class Settings(BaseSettings):
     discord_alert_webhook_url: str = ""
     discord_mention: str = ""
     daily_report_time: time = time(23, 0)
+    recap_interval_hours: int = 4  # récap des workers toutes les N heures (0 = aucun)
     notify_each_bid: bool = False
     notify_digest_minutes: float = 60.0
 

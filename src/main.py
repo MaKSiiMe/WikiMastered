@@ -29,6 +29,7 @@ from src.core.endpoints import Endpoints
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until
+from src.recap import recap_loop
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
 from src.workers.collection import CollectionWorker, summary_line, targets
@@ -218,6 +219,8 @@ async def run_bot(settings: Settings) -> None:
         tasks = [asyncio.create_task(w.run(), name=w.name) for w in workers]
         tasks += [asyncio.create_task(report_loop(ctx), name="report"),
                   asyncio.create_task(heartbeat(ctx), name="heartbeat")]
+        if settings.recap_interval_hours > 0:  # une tâche terminée arrête le bot : pas de tâche sans récap
+            tasks.append(asyncio.create_task(recap_loop(ctx, workers, datetime.now(timezone.utc)), name="recap"))
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
