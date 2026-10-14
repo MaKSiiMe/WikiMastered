@@ -662,3 +662,35 @@ async def test_trend_alert_one_line_per_card(tmp_path):
     assert len(lines) == 1 and "3 ventes, mise min 165 à 441 WB" in lines[0] and "première fin" in lines[0]
     assert len(await db._all("SELECT * FROM trend_signals")) == 3  # chaque vente reste un signal mesuré
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path):
+    from src.workers.pack_opener import PackOpener
+
+    state = {"verify": True}
+
+    def handler(request):
+        if state["verify"]:
+            return httpx.Response(200, json={"human_verification_required": True, "packs_remaining": 8})
+        return httpx.Response(200, json={"cards": [{"id": "c1", "wikipedia_title": "Ada", "rarity": "C"}],
+                                         "packs_remaining": 0})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await opener.setup()
+    for _ in range(3):  # trois échecs de suite : une seule alerte
+        opener._next_open = datetime.now(timezone.utc)
+        await opener.step()
+        gap = (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60
+        assert 4.9 <= gap <= 10
+    assert [t for _, t in notifier.sent if "vérification" in t] == ["Paquets : vérification humaine demandée"]
+    state["verify"] = False
+    opener._next_open = datetime.now(timezone.utc)
+    await opener.step()
+    assert ("SUCCESS", "Paquets : vérification levée") in notifier.sent
+    assert (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60 >= 14.9  # retour au rythme normal
+    await db.close()

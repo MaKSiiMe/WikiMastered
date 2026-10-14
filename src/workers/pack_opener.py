@@ -72,6 +72,7 @@ class PackOpener(Worker):
         self.state = PackState.from_json(await self.db.kv_get(STATE_KEY)) if self.live else PackState()
         # Première ouverture quelques minutes après le démarrage, puis toutes les 15 à 90 min.
         self._next_open = utcnow() + timedelta(minutes=random.uniform(1, 10))
+        self._retry_soon = False  # la dernière tentative a échoué : réessayer dans 5 à 10 min
 
     def _schedule_next(self) -> None:
         s = self.settings
@@ -79,6 +80,12 @@ class PackOpener(Worker):
                                                                   s.pack_interval_max_minutes))
         self._next_open = utcnow() + timedelta(minutes=minutes)
         self.log.info("prochaine ouverture de paquets vers %s", f"{self._next_open.astimezone():%H:%M}")
+
+    def _schedule_retry(self) -> None:
+        s = self.settings
+        minutes = random.uniform(s.pack_retry_min_minutes, max(s.pack_retry_min_minutes, s.pack_retry_max_minutes))
+        self._next_open = utcnow() + timedelta(minutes=minutes)
+        self.log.info("ouverture échouée : nouvel essai vers %s", f"{self._next_open.astimezone():%H:%M}")
 
     async def _save(self) -> None:
         if self.live:
@@ -95,8 +102,9 @@ class PackOpener(Worker):
         wait = seconds_until_stock(self.state, self.target, self.period, now)
         if wait > 0:
             return min(wait, 600.0)
+        self._retry_soon = False
         await self._open_batch()
-        self._schedule_next()
+        self._schedule_retry() if self._retry_soon else self._schedule_next()
         return 1.0
 
     async def _refresh_status(self) -> None:
@@ -136,6 +144,8 @@ class PackOpener(Worker):
             if pack.human_verification_required or "human_verification_required" in str(payload):
                 await self._pause_for_verification()
                 return
+            if self.state.verification_required and result.ok:
+                self.notifier.success("Paquets : vérification levée", "Les ouvertures reprennent.", live=self.live)
             self.state.verification_required = False
 
             if pack.rate_limit_daily:
@@ -151,15 +161,15 @@ class PackOpener(Worker):
                 wait = (pack.retry_after - utcnow()).total_seconds() + random.uniform(1, 5)
                 rate_retries += 1
                 if rate_retries > 5 or wait > 300:
-                    self.log.warning("ouverture limitée par le serveur, nouvel essai au prochain cycle")
+                    self.log.warning("ouverture limitée par le serveur, nouvel essai dans quelques minutes")
+                    self._retry_soon = True
                     break
                 await asyncio.sleep(max(0.5, wait))
                 continue
 
             if not result.ok or not pulled:
                 if not (result.status == 400 and pack.packs_remaining == 0):
-                    # Refus inconnu : on espace les essais au lieu de réessayer à chaque cycle.
-                    self.state.paused_until = utcnow() + self.period
+                    self._retry_soon = True  # refus inconnu : nouvel essai dans 5 à 10 min
                     self.log.warning("ouverture refusée (HTTP %s) : %s", result.status,
                                      pack.error or pack.message or str(payload)[:200])
                 break
@@ -187,16 +197,16 @@ class PackOpener(Worker):
         await self._save()
 
     async def _pause_for_verification(self) -> None:
-        recheck = utcnow() + timedelta(minutes=self.settings.pack_verification_recheck_minutes)
+        self._retry_soon = True
         if not self.state.verification_required:
             self.notifier.critical(
                 "Paquets : vérification humaine demandée",
                 "WikiMasters demande une vérification. Ouvre la page Paquets dans ton navigateur et "
-                "fais-la toi-même ; aucun paquet n'a été consommé. Le bot réessaiera tout seul.",
+                "fais-la toi-même ; aucun paquet n'a été consommé. Le bot réessaie toutes les 5 à 10 min "
+                "(le stock plafonne à 10 paquets).",
                 live=self.live,
             )
         self.state.verification_required = True
-        self.state.paused_until = recheck
         await self._save()
 
     async def _record(self, pulled: list) -> list[str]:
