@@ -60,7 +60,8 @@ class Worker:
             except (SessionExpired, RateLimited):
                 delay = 5  # le client gère déjà la pause et l'alerte
             except UncertainMutation as exc:
-                self.notifier.critical(f"{self.name} : résultat incertain", f"{exc}\nVérifie sur le site, rien n'a été rejoué.")
+                self.notifier.critical(f"{self.name} : résultat incertain", f"{exc}\nRien n'a été rejoué. Le bot relira le résultat sur le site "
+                                     "et enverra « … vérifiée ».")
                 delay = 60
             except (ApiError, RuntimeError, ValueError, httpx.HTTPError) as exc:
                 delay = self._on_error(exc)

@@ -93,7 +93,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
 ]
 
 HELD = "status IN ('won', 'sim_won') AND closed = 0"
-LISTING_OPEN = "('scheduled', 'posted', 'simulated')"
+# Une vente « incertaine » a peut-être été créée : elle reste ouverte jusqu'à sa vérification.
+LISTING_OPEN = "('scheduled', 'posted', 'simulated', 'uncertain')"
 
 
 def utcnow() -> datetime:
@@ -222,6 +223,14 @@ class Database:
     async def placed_bids(self) -> list[aiosqlite.Row]:
         return await self._all("SELECT id, auction_id, amount FROM bids WHERE status = 'placed'")
 
+    async def uncertain_bids(self, before: datetime, limit: int = 2) -> list[aiosqlite.Row]:
+        """Mises réelles au résultat incertain, à relire sur le serveur (jamais rejouées)."""
+        return await self._all(
+            "SELECT * FROM bids b WHERE status = 'uncertain' AND dry_run = 0 AND placed_at < ? AND id = "
+            "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id) ORDER BY id LIMIT ?",
+            (iso(before), limit),
+        )
+
     async def mark_outbid(self, auction_id: str) -> None:
         await self._exec("UPDATE bids SET status = 'outbid' WHERE auction_id = ? AND status = 'placed'", (auction_id,))
 
@@ -306,6 +315,20 @@ class Database:
             (iso(before),),
         )
 
+    async def uncertain_listings(self, before: datetime) -> list[aiosqlite.Row]:
+        return await self._all(
+            "SELECT * FROM listings WHERE status = 'uncertain' AND COALESCE(posted_at, created_at) < ? ORDER BY id",
+            (iso(before),),
+        )
+
+    async def failed_listings_count(self, bid_id: int) -> int:
+        row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE bid_id = ? AND status = 'failed'", (bid_id,))
+        return int(row["n"]) if row else 0
+
+    async def listed_auction_ids(self) -> set[str]:
+        rows = await self._all("SELECT auction_id FROM listings WHERE auction_id IS NOT NULL")
+        return {r["auction_id"] for r in rows}
+
     async def posted_listings_count(self) -> int:
         """Ventes réelles du bot en cours sur le site."""
         row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE status = 'posted'")
@@ -326,7 +349,7 @@ class Database:
         return int(row["n"]) if row else 0
 
     async def scheduled_owned_ids(self) -> set[str]:
-        rows = await self._all("SELECT owned_card_id FROM listings WHERE status IN ('scheduled', 'posted')")
+        rows = await self._all("SELECT owned_card_id FROM listings WHERE status IN ('scheduled', 'posted', 'uncertain')")
         return {r["owned_card_id"] for r in rows}
 
     async def record_discards(self, rows: list[tuple[str, str, str, str | None]], dry_run: bool) -> None:

@@ -104,7 +104,7 @@ Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes program
 
 ## Comportement détaillé
 
-**Réseau (A).** Une seule requête à la fois, espacées de 1,5 s plus un aléa. Sur 429, 5xx ou une page HTML de passerelle, une pause globale exponentielle s'applique (30 s / 60 s → 15 min max, `Retry-After` respecté). Un 403 n'est traité comme une perte de session que si une sonde `/api/wikibidous` échoue aussi ; sinon c'est une route refusée (par exemple réservée au PRO). Une écriture n'est **jamais rejouée** : si la réponse est perdue, l'action est marquée « incertaine » et une alerte part.
+**Réseau (A).** Une seule requête à la fois, espacées de 1,5 s plus un aléa. Sur 429, 5xx ou une page HTML de passerelle, une pause globale exponentielle s'applique (30 s / 60 s → 15 min max, `Retry-After` respecté). Un 403 n'est traité comme une perte de session que si une sonde `/api/wikibidous` échoue aussi ; sinon c'est une route refusée (par exemple réservée au PRO). Une écriture n'est **jamais rejouée** : si la réponse est perdue ou inattendue, l'action est marquée « incertaine » et une alerte part. Le bot relit ensuite le résultat sur le site (l'enchère elle-même, ou tes ventes en cours) et envoie « Mise incertaine vérifiée » ou « Mise en vente vérifiée ». Une position dont la mise en vente est refusée 3 fois est gardée (« Revente abandonnée »).
 
 **Paquets (B).** Le bot ouvre dès que `PACK_OPEN_MIN_STOCK` paquets sont disponibles, puis attend 15 à 60 s de plus, tirés au hasard. Le stock est déduit de `packs_remaining` et `packs_last_regen_at`. La limite quotidienne met en pause jusqu'au lendemain. Chaque carte est enregistrée en base.
 

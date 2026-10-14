@@ -233,6 +233,7 @@ class AuctionSniper(Worker):
 
         if self._ticks % 10 == 0:
             await self._settle()
+            await self._reconcile()
         self._flush_digest(now)
         return random.uniform(self.settings.sniper_poll_min_seconds, self.settings.sniper_poll_max_seconds)
 
@@ -434,7 +435,8 @@ class AuctionSniper(Worker):
                 confirmed = None
             if confirmed is None or confirmed.current_bid != decision.amount:
                 await self.db.record_bid(**common, status="uncertain", note=str(payload)[:300])
-                self.notifier.critical("Enchère non confirmée", f"{label} — vérifie sur le site.")
+                self.notifier.critical("Enchère non confirmée", f"{label} — réponse inattendue, le bot relira "
+                                       "l'enchère sur le site d'ici une minute.")
                 return False
             await self.db.mark_outbid(auction.id)
             bid_id = await self.db.record_bid(**common, status="placed")
@@ -474,22 +476,52 @@ class AuctionSniper(Worker):
             if simulated:
                 final = auction.final_price if auction.final_price is not None else auction.current_bid
                 won = auction.status == "settled_unsold" or final is None or final < row["amount"]
-                status = "sim_won" if won else "sim_lost"
             else:
                 winner = (auction.winner_id or auction.current_bidder_id or "").lower()
                 won = auction.status == "settled_sold" and me is not None and winner == me
-                status = "won" if won else "lost"
-            # Un achat « collection » est gardé : ce n'est pas une position à revendre.
-            closed = int(won and str(row["reason"] or "").startswith(COLLECTION_PREFIX))
-            await self.db.update_bid(row["id"], status=status, settled_at=utcnow(), closed=closed)
-            self._leading.pop(row["auction_id"], None)
-            self._engaged.pop(row["auction_id"], None)
-            if won:
-                ref = row["reference_price"]
-                detail = f"{row['title']} ({row['rarity']}) pour {row['amount']} WB"
-                if ref:
-                    detail += f", revente visée ~{ref:.0f} WB (bénéfice ~{ref - row['amount']:.0f})"
-                if simulated:
-                    self.notifier.info("Achat simulé remporté", detail)
-                else:
-                    self.notifier.success("Position achetée !", detail, nuit="oui" if row["night"] else "non")
+            await self._close_bid(row, won, simulated)
+
+    async def _close_bid(self, row, won: bool, simulated: bool) -> None:
+        """Enregistre le résultat d'une enchère terminée ; une carte gagnée devient une position."""
+        status = ("sim_won" if won else "sim_lost") if simulated else ("won" if won else "lost")
+        # Un achat « collection » est gardé : ce n'est pas une position à revendre.
+        closed = int(won and str(row["reason"] or "").startswith(COLLECTION_PREFIX))
+        await self.db.update_bid(row["id"], status=status, settled_at=utcnow(), closed=closed)
+        self._leading.pop(row["auction_id"], None)
+        self._engaged.pop(row["auction_id"], None)
+        if won:
+            ref = row["reference_price"]
+            detail = f"{row['title']} ({row['rarity']}) pour {row['amount']} WB"
+            if ref:
+                detail += f", revente visée ~{ref:.0f} WB (bénéfice ~{ref - row['amount']:.0f})"
+            if simulated:
+                self.notifier.info("Achat simulé remporté", detail)
+            else:
+                self.notifier.success("Position achetée !", detail, nuit="oui" if row["night"] else "non")
+
+    async def _reconcile(self) -> None:
+        """Mises au résultat incertain (réponse perdue ou inattendue) : relues sur le serveur, jamais rejouées."""
+        me = self.api.user_id
+        if me is None:
+            return
+        for row in await self.db.uncertain_bids(utcnow() - timedelta(seconds=30)):
+            auction = await self.api.auction(row["auction_id"])
+            leader = (auction.winner_id or auction.current_bidder_id or "").lower()
+            label = f"{row['title']} ({row['rarity']}), {row['amount']} WB"
+            if auction.status != "active":
+                won = auction.status == "settled_sold" and leader == me
+                await self._close_bid(row, won, simulated=False)
+                verdict = "enchère remportée" if won else "enchère perdue ou mise non passée"
+            elif leader == me:
+                amount = auction.current_bid or row["amount"]
+                await self.db.update_bid(row["id"], status="placed", amount=amount, end_at=auction.end_at,
+                                         note="vérifiée : en tête")
+                self._leading[auction.id] = (row["id"], amount)
+                self._engaged[auction.id] = auction.end_at
+                self._bot_engaged.add(auction.id)
+                verdict = f"mise bien placée ({amount} WB), en tête"
+            else:
+                await self.db.update_bid(row["id"], status="outbid", note="vérifiée : pas en tête")
+                self._leading.pop(auction.id, None)
+                verdict = "pas en tête (mise non passée ou dépassée)"
+            self.notifier.info("Mise incertaine vérifiée", f"{label} : {verdict}.")
