@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from src.config import Settings
+from src.config import RARITIES, Settings
 from src.core.api import WikiMastersAPI
 from src.core.client import ApiError, WikiMastersClient
 from src.core.database import Database
@@ -46,7 +46,8 @@ def make_client(tmp_path: Path, handler, **overrides) -> tuple[WikiMastersClient
     s = Settings(_env_file=None, **{
         "data_dir": tmp_path, "wm_cookie": "a=b", "wm_user_id": ME, "http_min_spacing_seconds": 0,
         "http_jitter_seconds": 0, "backoff_base_seconds": 0.01, "backoff_rate_limit_base_seconds": 0.01,
-        **overrides})
+        # Les tests du sniper revendent toutes les raretés (par défaut : UR et L seulement).
+        "sniper_resale_rarities": list(RARITIES), **overrides})
     notifier = Recorder()
     client = WikiMastersClient(s, Endpoints.load(ROOT / "config" / "endpoints.yaml"), notifier)
     client._http = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=client._http.cookies)
@@ -130,7 +131,7 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
         if request.url.path == "/api/marketplace/mine":
             return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
         if path == "/api/marketplace":
-            assert request.url.params["sort"] == "ending_soon"
+            assert request.url.params["sort"] in ("recent", "ending_soon")
             return httpx.Response(200, json={"auctions": [auction, {"broken": True}], "hasMore": False})
         if path.endswith("/sales") and "scope" not in request.url.params:
             return httpx.Response(200, json={"recent": [{"final_price": p} for p in (200, 190, 210, 50, 205)]})
