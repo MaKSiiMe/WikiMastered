@@ -1,0 +1,26 @@
+# Stack Portainer (Stacks > Add stack > Repository, chemin : portainer-stack.yml).
+# Les variables saisies dans Portainer (onglet Environment variables) sont écrites
+# par Portainer dans stack.env, lu ci-dessous. Guide : docs/PORTAINER.md
+services:
+  wikimastered:
+    build: .
+    image: wikimastered:latest
+    container_name: wikimastered
+    restart: unless-stopped
+    env_file:
+      - stack.env
+    environment:
+      TZ: Europe/Paris
+    volumes:
+      # Volume nommé : survit aux redéploiements et hérite des droits de l'image (UID 1000).
+      - wikimastered_data:/app/data
+    stop_grace_period: 20s
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  wikimastered_data:

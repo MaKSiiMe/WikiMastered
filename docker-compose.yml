@@ -1,0 +1,19 @@
+services:
+  wikimastered:
+    build: .
+    image: wikimastered:latest
+    container_name: wikimastered
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: Europe/Paris
+    volumes:
+      - ./data:/app/data            # base SQLite, logs, session rafraîchie
+      - ./config:/app/config:ro     # endpoints.yaml (+ endpoints.local.yaml)
+    stop_grace_period: 20s
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
