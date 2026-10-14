@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS pulls (
     title TEXT, rarity TEXT, is_shiny INTEGER NOT NULL DEFAULT 0, pageviews INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS pack_opens (
+    id INTEGER PRIMARY KEY, opened_at TEXT NOT NULL, cards INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS bids (
     id INTEGER PRIMARY KEY, auction_id TEXT NOT NULL, card_id TEXT, title TEXT, rarity TEXT,
     is_shiny INTEGER NOT NULL DEFAULT 0, amount INTEGER NOT NULL, reference_price REAL,
@@ -132,7 +136,9 @@ class Database:
 
     async def connect(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(self.path)
+        conn = aiosqlite.connect(self.path)
+        conn.daemon = True  # une base non fermée ne bloque jamais l'arrêt du processus
+        self._db = await conn
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
         for table, column, decl in MIGRATIONS:
@@ -210,6 +216,9 @@ class Database:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (iso(utcnow()), card_id, owned_card_id, title, rarity, int(is_shiny), pageviews),
         )
+
+    async def record_pack_open(self, cards: int) -> None:
+        await self._exec("INSERT INTO pack_opens (opened_at, cards) VALUES (?, ?)", (iso(utcnow()), cards))
 
     async def recent_pulls(self, since: datetime) -> list[aiosqlite.Row]:
         return await self._all("SELECT * FROM pulls WHERE opened_at >= ? ORDER BY opened_at DESC", (iso(since),))
@@ -587,7 +596,9 @@ class Database:
         by_rarity: dict[str, int] = {}
         for p in pulls:
             by_rarity[p["rarity"] or "?"] = by_rarity.get(p["rarity"] or "?", 0) + 1
+        packs = await self._one("SELECT COUNT(*) AS n FROM pack_opens WHERE opened_at >= ?", (s,))
         return {
+            "boosters_ouverts": packs["n"] if packs else 0,
             "cards_pulled": len(pulls),
             "pulls_by_rarity": by_rarity,
             "shiny_pulled": sum(p["is_shiny"] for p in pulls),
