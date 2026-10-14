@@ -35,6 +35,8 @@ from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers.collection import collection_key
 
 COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, pas revendues
+# Taille de la page du marché lue à chaque passage : agrandie si elle ne couvre pas la fenêtre de mise.
+MARKET_LIMITS = (50, 100, 200)
 
 
 @dataclass(frozen=True)
@@ -226,6 +228,8 @@ class AuctionSniper(Worker):
         # ventes de ces cartes déjà signalées dans les logs : id -> issue journalisée (None = repérée).
         self._collection_wanted: set[str] = set()
         self._collection_logged: dict[str, str | None] = {}
+        self._market_limit = MARKET_LIMITS[0]
+        self._market_capped = False
         await self._load_collection()
         await self._refresh_engaged()
         await self._check_config()
@@ -254,7 +258,7 @@ class AuctionSniper(Worker):
         params = snipe_params(self.settings, night)
         me = self.api.user_id
 
-        auctions, _ = await self.api.market_page(sort="ending_soon")
+        auctions = await self._market(params.window_seconds, now)
         # Chaque passage est mémorisé : le dernier prix vu avant la fin devient une vente observée.
         await self._remember(auctions, now)
         if self._ticks % 10 == 5:
@@ -278,6 +282,28 @@ class AuctionSniper(Worker):
             await self._reconcile()
         self._flush_digest(now)
         return random.uniform(self.settings.sniper_poll_min_seconds, self.settings.sniper_poll_max_seconds)
+
+    async def _market(self, window: int, now: datetime) -> list[Auction]:
+        """Enchères qui finissent bientôt, en une requête. Si la page s'arrête avant la fin de la
+        fenêtre de mise (par ex. remplie d'enchères déjà terminées), la suivante est plus grande."""
+        limit = self._market_limit
+        auctions, more = await self.api.market_page(sort="ending_soon", limit=limit)
+        left = [a.seconds_left(now) for a in auctions]
+        beyond = next((i for i, s in enumerate(left) if s > window), None)
+        ended = sum(s <= 0 for s in left)
+        if beyond is None and more and limit < MARKET_LIMITS[-1]:
+            self._market_limit = MARKET_LIMITS[MARKET_LIMITS.index(limit) + 1]
+            self.log.info("marché : aucune des %d enchères lues ne finit dans plus de %d s (%d déjà terminées) : "
+                          "lecture de %d enchères par passage", len(auctions), window, ended, self._market_limit)
+        elif beyond is None and more and len(auctions) < limit and not self._market_capped:
+            self._market_capped = True
+            self.log.warning("marché : le site ne renvoie que %d enchères sur %d demandées, la fenêtre de mise "
+                             "n'est pas couverte (%d déjà terminées)", len(auctions), limit, ended)
+        elif beyond is not None and limit > MARKET_LIMITS[0]:
+            smaller = MARKET_LIMITS[MARKET_LIMITS.index(limit) - 1]
+            if beyond < smaller // 2:  # la page plus petite suffirait largement
+                self._market_limit = smaller
+        return auctions
 
     async def _play(self, auctions: list[Auction], params: SnipeParams, now: datetime) -> None:
         """Évalue toutes les opportunités du passage, puis joue les meilleures dans les places libres."""
@@ -401,8 +427,11 @@ class AuctionSniper(Worker):
             if a.id in self._collection_logged or collection_key(a.title) not in self._collection_wanted:
                 continue
             self._collection_logged[a.id] = None
-            self.log.info("collection : %s (%s) en vente, mise min %d WB, fin %s", a.title, a.rarity, a.min_bid,
-                          f"{a.end_at.astimezone(timeutils.PARIS):%H:%M:%S}")
+            left = a.seconds_left(now)
+            when = f"dans {left / 60:.0f} min" if left >= 120 else (f"dans {left:.0f} s" if left > 0 else
+                                                                    f"déjà terminée depuis {-left:.0f} s")
+            self.log.info("collection : %s (%s) en vente, mise min %d WB, fin %s (%s)", a.title, a.rarity, a.min_bid,
+                          f"{a.end_at.astimezone(timeutils.PARIS):%H:%M:%S}", when)
         if len(self._collection_logged) > 2000:
             self._collection_logged.clear()
 
