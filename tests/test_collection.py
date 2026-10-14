@@ -241,7 +241,7 @@ async def test_owned_days_get_the_date_tag(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_sniper_reads_a_bigger_market_page_when_ended_auctions_fill_it(tmp_path):
+async def test_sniper_keeps_50_auction_pages_and_warns_when_they_are_all_ended(tmp_path, caplog):
     from datetime import datetime, timedelta, timezone
 
     from src.core.database import Database
@@ -251,14 +251,13 @@ async def test_sniper_reads_a_bigger_market_page_when_ended_auctions_fill_it(tmp
 
     now = datetime.now(timezone.utc)
 
-    def sale(aid, title, seconds):
-        return {"id": aid, "card": {"id": f"card-{aid}", "wikipedia_title": title, "rarity": "R"},
+    def sale(aid, seconds):
+        return {"id": aid, "card": {"id": f"card-{aid}", "wikipedia_title": f"Carte {aid}", "rarity": "R"},
                 "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
                 "end_at": (now + timedelta(seconds=seconds)).isoformat(), "base_amount": 20,
                 "current_bid": None, "current_bidder_id": None}
 
-    # Le site garde les enchères terminées en tête de « ending_soon » : 60 avant le jour manquant.
-    market = [sale(f"old{i}", f"Carte {i}", -30 + i * 0.1) for i in range(60)] + [sale("day", "14 octobre", 15)]
+    market = [sale(f"old{i}", -30 + i * 0.1) for i in range(60)]
     limits = []
 
     def handler(request):
@@ -266,27 +265,21 @@ async def test_sniper_reads_a_bigger_market_page_when_ended_auctions_fill_it(tmp
             return httpx.Response(200, json={"balance": 3000})
         if "mine" in request.url.params:
             return httpx.Response(200, json={"bidding": [], "selling": []})
-        if request.url.path == "/api/marketplace/mine":
-            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
         if request.url.path == "/api/marketplace":
             limit = int(request.url.params["limit"])
             limits.append(limit)
-            return httpx.Response(200, json={"auctions": market[:limit], "hasMore": len(market) > limit})
-        if request.url.path.endswith("/sales"):
-            return httpx.Response(404, json={})
+            return httpx.Response(200, json={"auctions": market[:limit], "hasMore": True})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, collection_sets=["jours"], collection_max_price=50)
+    client, notifier = make_client(tmp_path, handler)
     db = Database(tmp_path / "t.db")
     await db.connect()
-    await db.kv_set("collection", {"owned": [], "missing": ["14 octobre"], "total": 366})
     api = WikiMastersAPI(client)
     sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     await sniper.setup()
     await sniper.step()
-    assert not await db._all("SELECT * FROM bids")  # 1re page : que des enchères terminées
     await sniper.step()
-    assert limits == [50, 100]
-    rows = await db._all("SELECT auction_id, reason FROM bids")
-    assert [r["auction_id"] for r in rows] == ["day"] and rows[0]["reason"].startswith("collection")
+    assert limits == [50, 50]  # le site refuse limit=100 (403)
+    warnings = [r.message for r in caplog.records if "fins imminentes sont hors de la page" in r.message]
+    assert len(warnings) == 1  # une fois par heure, pas à chaque passage
     await db.close()
