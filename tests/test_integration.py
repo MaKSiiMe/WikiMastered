@@ -588,3 +588,47 @@ async def test_trend_alerts_cards_under_position_budget(tmp_path):
     signals = await db._all("SELECT auction_id, source FROM trend_signals ORDER BY auction_id")
     assert [(r["auction_id"], r["source"]) for r in signals] == [("a1", "wikipedia"), ("a2", "wikipedia")]
     await db.close()
+
+
+GOOGLE_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:ht="https://trends.google.com/trending/rss" version="2.0"><channel>
+<item><title>squid game saison 3</title><ht:approx_traffic>1000+</ht:approx_traffic></item>
+<item><title>décharge</title><ht:approx_traffic>200+</ht:approx_traffic></item>
+</channel></rss>"""
+
+
+@pytest.mark.asyncio
+async def test_google_trends_feed_to_market_signals(tmp_path):
+    from src.workers.google_trends import GoogleTrends, parse_feed
+
+    assert [(t.term, t.traffic) for t in parse_feed(GOOGLE_FEED)] == [("squid game saison 3", 1000), ("décharge", 200)]
+    end = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    searches = []
+
+    def handler(request):
+        if request.url.host == "trends.google.com":
+            return httpx.Response(200, text=GOOGLE_FEED)
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3300})
+        if request.url.path == "/api/marketplace":
+            searches.append(request.url.params["q"])
+            title = "Squid Game" if "squid" in request.url.params["q"] else "Décharge publique"
+            return httpx.Response(200, json={"auctions": [{
+                "id": f"a-{title}", "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "R"},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active", "end_at": end,
+                "base_amount": 100, "current_bid": None, "current_bidder_id": None}], "hasMore": False})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    gt = GoogleTrends(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await gt.setup()
+    gt.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    assert await gt.step() > 600
+    assert ("INFO", "Tendances Google : 1 carte(s) en vente") in notifier.sent  # pas « Décharge publique »
+    await gt.step()
+    assert searches == ["squid game saison 3", "décharge"]  # termes déjà vus : pas recherchés deux fois
+    assert await db.terms_stats("google", datetime.now(timezone.utc) - timedelta(hours=1)) == (2, 1)
+    await db.close()

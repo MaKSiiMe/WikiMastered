@@ -28,6 +28,7 @@ from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
+from src.workers.google_trends import GoogleTrends
 from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
 from src.workers.pack_opener import PackOpener
@@ -142,6 +143,8 @@ async def run_bot(settings: Settings) -> None:
             workers.append(InventoryManager(ctx))
         if settings.enable_wiki_trends:
             workers.append(WikiTrends(ctx))
+        if settings.enable_google_trends:
+            workers.append(GoogleTrends(ctx))
 
         mode = "DRY RUN (aucune écriture)" if settings.dry_run else "RÉEL"
         names = ", ".join(w.name for w in workers) or "aucun"
