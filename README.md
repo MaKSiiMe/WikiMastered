@@ -110,11 +110,13 @@ Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes program
 
 **Sniper (D).** Le bot lit le marché trié par fin imminente toutes les 2,5 à 4 s. Il mise **le minimum natif** (`max(ceil(1,1 × mise), mise + 1)`), qui est un peu plus élevé que `current_bid + 1`. Il mise si l'une des deux règles l'autorise :
 1. la rareté (ou le shiny) a un plafond, et la mise reste en dessous ;
-2. la mise est ≤ `SNIPER_DEAL_RATIO_MAX` × la cote moyenne, calculée sur au moins `PRICE_MIN_SALES` ventes.
+2. la mise est ≤ `SNIPER_DEAL_RATIO_MAX` × la cote moyenne, calculée sur au moins `PRICE_MIN_SALES` ventes. Sans compte PRO, le site ne donne pas le nombre de ventes : la moyenne est alors utilisée telle quelle.
+
+La route des cotes est limitée par le site (403 + `Retry-After`). Seule cette route est mise en pause ; le sniper continue avec les plafonds de rareté et ne demande une cote que si ce plafond ne suffit pas.
 
 Le site prolonge de 60 s une enchère disputée dans ses 10 dernières secondes : le bot ré-évalue l'enchère à chaque passage, sans jamais dépasser le plafond. Il respecte aussi le budget du jour, une réserve de solde et un plafond absolu. Entre 02:00 et 07:30, l'arbitrage nocturne applique des paramètres plus larges (ratio, plafonds, fenêtre, budget). Les cartes gagnées la nuit sont remises en vente avec une fin vers 21:00.
 
-**Inventaire (C).** Ne sont jamais vendus ni défaussés : les favoris, les shiny, les exemplaires engagés dans un échange, ceux déjà en vente, et le dernier exemplaire de chaque carte (`SELL_KEEP_COPIES`, `DISCARD_KEEP_COPIES`). La défausse passe par lots de 50. Elle est bloquée si un palier est à moins de `ACHIEVEMENT_MARGIN` cartes, et ne fait jamais repasser la collection sous un palier déjà atteint.
+**Inventaire (C).** Le site limite à **5 ventes simultanées** (`maxConcurrentAuctions`) : le bot ne programme que les places libres et reporte au lendemain une vente qui n'a plus de place. Ne sont jamais vendus ni défaussés : les favoris, les shiny, les exemplaires engagés dans un échange, ceux déjà en vente, et le dernier exemplaire de chaque carte (`SELL_KEEP_COPIES`, `DISCARD_KEEP_COPIES`). La défausse passe par lots de 50. Elle est bloquée si un palier est à moins de `ACHIEVEMENT_MARGIN` cartes, et ne fait jamais repasser la collection sous un palier déjà atteint.
 
 **Tendances (E).** Le module prend le top fr.wikipedia de la veille : les données du jour ne sont publiées qu'avec environ un jour de retard. Un pic correspond à des vues ≥ 3 × la médiane des 30 jours précédents. La projection sur 30 jours donne la rareté probable (Légendaire à 20 000 vues). Une alerte part si la carte est en vente sous cette rareté et à petit prix.
 

@@ -48,16 +48,16 @@ endpoints:
     method: GET
     path: /api/marketplace/{auction_id}
 
-  sales_summary:                # [KZ bridge/prices.js, WR api.js]
-    method: GET                 # -> { summary: { "<rareté>": {average, count} }, wikipedia_title }
+  sales_summary:                # [KZ bridge/prices.js, WR api.js] limitée par le site (403 + Retry-After)
+    method: GET                 # -> { summary: { "<rareté>": {average, count?} }, isPro } (count absent hors PRO)
     path: /api/marketplace/cards/{card_id}/sales
     params: {scope: summary}
 
-  my_listings:                  # [KZ bridge/marketplace.js] mes ventes en cours (structure non
-    method: GET                 #   documentée : le bot y cherche seulement des identifiants)
+  my_listings:                  # [KZ bridge/marketplace.js] -> { sellingCount, maxConcurrentAuctions }
+    method: GET                 #   (relevé réel du 14/10/2026 : 5 ventes simultanées max)
     path: /api/marketplace/mine
 
-  my_bids:                      # [KZ features/my-bids.js] -> { bidding: [ auction, ... ] }
+  my_bids:                      # [KZ features/my-bids.js] -> { auctions: [...], selling: [...], hasMore }
     method: GET
     path: /api/marketplace
     params: {page: "1", limit: "1", mine: "1"}

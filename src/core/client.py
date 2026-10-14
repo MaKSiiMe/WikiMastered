@@ -183,6 +183,9 @@ class WikiMastersClient:
         self._failures = 0
         self._degraded_alerted = False
         self._last_rate_alert = 0.0
+        # Limitations propres à une route (ex. 403 + Retry-After sur les cotes) : nom -> (fin, échecs)
+        self._route_pause: dict[str, tuple[float, int]] = {}
+        self._route_alerted: dict[str, float] = {}
         self._session_ok = asyncio.Event()
         self._session_ok.set()
         self._probe_task: asyncio.Task[None] | None = None
@@ -304,13 +307,36 @@ class WikiMastersClient:
             self.notifier.critical(
                 "Limitation de requêtes (429)",
                 f"WikiMasters limite le bot : tous les workers sont en pause {delay:.0f} s.\n"
-                "Si ça se répète, augmente HTTP_MIN_SPACING_SECONDS et SNIPER_POLL_*.",
+                "Si ça se répète, augmente `HTTP_MIN_SPACING_SECONDS` et `SNIPER_POLL_MIN_SECONDS`.",
                 cause=reason,
             )
         elif not limited and self._failures >= 3 and not self._degraded_alerted:
             self._degraded_alerted = True
             self.notifier.warning("Serveurs WikiMasters instables", f"{reason} — backoff {delay:.0f} s")
         return delay
+
+    def _route_backoff(self, name: str, retry_after: float) -> float:
+        """Pause limitée à une route : les autres workers continuent."""
+        _, failures = self._route_pause.get(name, (0.0, 0))
+        failures = min(failures + 1, 10)
+        delay = min(self.settings.backoff_max_seconds,
+                    self.settings.backoff_rate_limit_base_seconds * 2 ** (failures - 1))
+        delay = max(delay + random.uniform(0, delay * 0.2), retry_after)
+        self._route_pause[name] = (time.monotonic() + delay, failures)
+        log.warning("Route %s limitée par le site : pause %.0f s (échec #%d)", name, delay, failures)
+        now = time.monotonic()
+        if now - self._route_alerted.get(name, 0.0) > 3600:
+            self._route_alerted[name] = now
+            self.notifier.warning(
+                f"Route limitée : {name}",
+                f"Le site refuse temporairement `{name}` (403). Seule cette route est en pause "
+                f"({delay:.0f} s) ; les autres workers continuent.",
+            )
+        return delay
+
+    def route_paused_for(self, name: str) -> float:
+        until, _ = self._route_pause.get(name, (0.0, 0))
+        return max(0.0, until - time.monotonic())
 
     def _on_success(self) -> None:
         if self._failures >= 3 and self._degraded_alerted:
@@ -319,14 +345,19 @@ class WikiMastersClient:
         self._degraded_alerted = False
         self._persist_cookies()
 
+    def _on_route_success(self, name: str) -> None:
+        self._route_pause.pop(name, None)
+
     @staticmethod
     def _classify(resp: httpx.Response, payload: Any) -> str:
         status = resp.status_code
         text_hint = server_message(payload) or ("" if payload is not None else resp.text[:300])
         if 300 <= status < 400 or status == 401:
             return "auth"
-        if status == 429 or (status == 403 and (resp.headers.get("Retry-After") or _RATE_HINT.search(text_hint))):
+        if status == 429:
             return "rate"
+        if status == 403 and (resp.headers.get("Retry-After") or _RATE_HINT.search(text_hint)):
+            return "route_rate"
         if status == 403:
             return "forbidden"
         if status >= 500:
@@ -386,13 +417,20 @@ class WikiMastersClient:
             self._consume_cookie_drop()
 
     # ------------------------------------------------------------- appels
-    async def get(self, name: str, **values: Any) -> Any:
+    async def get(self, name: str, *, wait: bool = True, **values: Any) -> Any:
+        """GET avec reprises. `wait=False` : lève RateLimited au lieu d'attendre la fin
+        d'une limitation propre à cette route (utile au sniper, qui ne peut pas attendre)."""
         req = self.endpoints.build(name, **values)
         if req.is_mutation:
             raise ValueError(f"{name} est une écriture : utiliser mutate()")
         attempts = 0
         while True:
             await self._session_ok.wait()
+            paused = self.route_paused_for(name)
+            if paused > 0:
+                if not wait:
+                    raise RateLimited(name)
+                await asyncio.sleep(paused)
             try:
                 resp = await self._send(req)
             except httpx.HTTPError as exc:
@@ -405,9 +443,13 @@ class WikiMastersClient:
             kind = self._classify(resp, payload)
             if kind == "ok":
                 self._on_success()
+                self._on_route_success(name)
                 return payload
             if kind == "auth":
                 self._on_auth_lost(name, resp.status_code)
+                continue
+            if kind == "route_rate":
+                self._route_backoff(name, _retry_after_seconds(resp))
                 continue
             if kind == "forbidden":
                 # 403 peut être un droit manquant (route PRO) : on ne fige tout que si la session est morte.
@@ -453,6 +495,9 @@ class WikiMastersClient:
                 return MutationResult(resp.status_code, payload)
             self._on_auth_lost(name, 403)
             raise SessionExpired(name)
+        if kind == "route_rate":
+            self._route_backoff(name, _retry_after_seconds(resp))
+            raise RateLimited(name)
         if kind == "rate":
             self._backoff(f"{name}: HTTP {resp.status_code}", limited=True,
                           retry_after=_retry_after_seconds(resp))

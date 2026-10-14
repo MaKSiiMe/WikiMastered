@@ -167,3 +167,56 @@ async def test_pack_opener_learns_stock_and_backs_off_when_empty(tmp_path):
     wait = seconds_until_stock(opener.state, 1, opener.period, datetime.now(timezone.utc))
     assert wait > 500
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_route_rate_limit_does_not_freeze_other_routes(tmp_path):
+    from src.core.client import RateLimited
+
+    def handler(request):
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(403, headers={"Retry-After": "120"}, json={"error": "Too many requests"})
+        return httpx.Response(200, json={"balance": 3})
+
+    client, notifier = make_client(tmp_path, handler)
+    api = WikiMastersAPI(client)
+    with pytest.raises(RateLimited):
+        await client.get("sales_summary", card_id="x", wait=False)  # 1er appel : limite constatée
+    with pytest.raises(RateLimited):
+        await client.get("sales_summary", card_id="x", wait=False)  # 2e : refusé sans requête
+    assert client.route_paused_for("sales_summary") > 100
+    assert await asyncio.wait_for(api.balance(), timeout=1) == 3  # les autres routes continuent
+    assert client.session_ok
+    assert [lvl for lvl, title in notifier.sent if "Route limitée" in title] == ["WARNING"]
+
+
+@pytest.mark.asyncio
+async def test_listings_respect_concurrent_limit(tmp_path):
+    from src.workers.inventory_manager import InventoryManager
+
+    posted = []
+
+    def handler(request):
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 4 + len(posted), "maxConcurrentAuctions": 5})
+        if request.method == "POST" and request.url.path == "/api/marketplace":
+            posted.append(request.content)
+            return httpx.Response(200, json={"id": "new"})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    now = datetime.now(timezone.utc)
+    for i in range(2):
+        await db.schedule_listing(owned_card_id=f"o{i}", card_id="c", title=f"T{i}", rarity="C", base_amount=20,
+                                  duration_minutes=120, post_at=now - timedelta(minutes=1),
+                                  target_end=now + timedelta(hours=2), reason="test")
+    await inv.post_due_listings()
+    assert len(posted) == 1  # une seule place libre (4/5)
+    rows = await db._all("SELECT status, post_at FROM listings ORDER BY id")
+    assert rows[0]["status"] == "posted" and rows[1]["status"] == "scheduled"
+    assert datetime.fromisoformat(rows[1]["post_at"]) > now + timedelta(hours=12)  # reportée
+    await db.close()

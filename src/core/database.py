@@ -150,7 +150,7 @@ class Database:
     async def price_put(self, card_id: str, summary: dict[str, tuple[float | None, int | None]]) -> None:
         now = iso(utcnow())
         # Ligne sentinelle "*" : une carte sans aucune vente reste en cache.
-        rows = summary or {"*": (None, 0)}
+        rows = summary or {"*": (None, None)}
         await self.db.execute("DELETE FROM price_cache WHERE card_id = ?", (card_id,))
         await self.db.executemany(
             "INSERT INTO price_cache (card_id, rarity, average, sales_count, fetched_at) VALUES (?, ?, ?, ?, ?)",
@@ -249,6 +249,10 @@ class Database:
         cols = ", ".join(f"{k} = ?" for k in fields)
         values = [iso(v) if isinstance(v, datetime) else v for v in fields.values()]
         await self._exec(f"UPDATE listings SET {cols} WHERE id = ?", (*values, listing_id))
+
+    async def pending_listings_count(self) -> int:
+        row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE status = 'scheduled'")
+        return int(row["n"]) if row else 0
 
     async def scheduled_owned_ids(self) -> set[str]:
         rows = await self._all("SELECT owned_card_id FROM listings WHERE status IN ('scheduled', 'posted')")
