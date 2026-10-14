@@ -236,6 +236,21 @@ async def run_bot(settings: Settings) -> None:
         ctx.notifier.warning("Bot arrêté")
 
 
+async def reset_simulation(settings: Settings, apply: bool) -> None:
+    """Repart d'une simulation propre : les réelles, les ventes observées et le reste sont gardés."""
+    db = Database(settings.data_dir / "wikimastered.db")
+    await db.connect()
+    try:
+        counts = await db.reset_simulation(apply=apply)
+    finally:
+        await db.close()
+    what = f"{counts['mises']} mise(s) simulée(s) et {counts['ventes']} vente(s) simulée(s)"
+    if apply:
+        print(f"Effacé : {what}. Le bilan repart de zéro pour la validation de la simulation.")
+    else:
+        print(f"À effacer : {what}. Relance avec --apply pour les effacer (les données réelles sont gardées).")
+
+
 async def packs_status(settings: Settings, hours: int) -> None:
     """Paquets ouverts ces dernières heures (lecture de la base, aucune requête)."""
     async with build_context(settings) as ctx:
@@ -300,6 +315,8 @@ def main(argv: list[str] | None = None) -> None:
     pk.add_argument("--hours", type=int, default=24)
     tr = sub.add_parser("trends", help="mesure des signaux de tendance (lecture seule)")
     tr.add_argument("--days", type=int, default=7)
+    sim = sub.add_parser("reset-simulation", help="efface les mises et ventes simulées (sans --apply : compte)")
+    sim.add_argument("--apply", action="store_true", help="efface vraiment")
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
     inv.add_argument("action", choices=["scan", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
@@ -332,6 +349,8 @@ def main(argv: list[str] | None = None) -> None:
             async with build_context(settings) as ctx:
                 print(await trends_text(ctx.db, args.days, await min_profit(ctx), datetime.now(timezone.utc)))
         asyncio.run(_trends())
+    elif command == "reset-simulation":
+        asyncio.run(reset_simulation(settings, args.apply))
     elif command == "inventory":
         async def _inventory() -> None:
             async with build_context(settings) as ctx:

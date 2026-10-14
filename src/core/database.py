@@ -513,6 +513,21 @@ class Database:
                                    "(SELECT COUNT(*) FROM listings WHERE status = 'uncertain')"),
         }
 
+    async def reset_simulation(self, *, apply: bool) -> dict[str, int]:
+        """Mises et ventes simulées (positions, reventes, collection en simulation) : compte, et efface avec
+        `apply`. Les mises et ventes réelles, les ventes observées et le reste de l'historique sont gardés."""
+        listings = ("owned_card_id LIKE 'sim-%' OR status IN ('simulated', 'sim_sold', 'sim_unsold') "
+                    "OR bid_id IN (SELECT id FROM bids WHERE dry_run = 1)")
+        counts = {
+            "mises": int((await self._one("SELECT COUNT(*) AS n FROM bids WHERE dry_run = 1"))["n"]),
+            "ventes": int((await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE {listings}"))["n"]),
+        }
+        if apply:
+            await self.db.execute(f"DELETE FROM listings WHERE {listings}")
+            await self.db.execute("DELETE FROM bids WHERE dry_run = 1")
+            await self.db.commit()
+        return counts
+
     async def prune_auctions(self, before: datetime) -> None:
         await self._exec("DELETE FROM auctions_seen WHERE end_at < ?", (iso(before),))
 

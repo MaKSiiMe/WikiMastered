@@ -82,3 +82,23 @@ async def test_unsettled_bids_count_until_settled(tmp_path):
     await bid("perdue", "outbid", 70, dry_run=False)
     assert await db.pending_bids() == {"positions": 3, "sim_cost": 115}
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_reset_simulation_keeps_real_data(tmp_path):
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    for aid, dry_run in (("sim", True), ("reel", False)):
+        bid_id = await db.record_bid(auction_id=aid, card_id=aid, title=aid, rarity="C", is_shiny=False, amount=10,
+                                     reference_price=None, reason="revente", night=False, dry_run=dry_run,
+                                     status="sim_won" if dry_run else "won", end_at=now)
+        await db.schedule_listing(owned_card_id=f"sim-{bid_id}" if dry_run else "copie", card_id=aid, title=aid,
+                                  rarity="C", base_amount=20, duration_minutes=360, post_at=now, target_end=now,
+                                  reason="position", bid_id=bid_id)
+    assert await db.reset_simulation(apply=False) == {"mises": 1, "ventes": 1}
+    assert len(await db._all("SELECT * FROM bids")) == 2  # sans --apply : rien d'effacé
+    await db.reset_simulation(apply=True)
+    assert [r["auction_id"] for r in await db._all("SELECT * FROM bids")] == ["reel"]
+    assert [r["owned_card_id"] for r in await db._all("SELECT * FROM listings")] == ["copie"]
+    await db.close()
