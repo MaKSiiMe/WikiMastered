@@ -61,6 +61,10 @@ def activity(name: str, stats: dict[str, int]) -> list[str]:
         return lines
     if name == "packs":
         return [f"{stats['boosters']} booster(s), {stats['cards']} carte(s), {stats['notable']} remarquable(s)"]
+    if name == "collection":
+        owned = f"{stats['collection_owned']}/{stats['collection_total']} possédées" if stats.get("collection_total") \
+            else "collection pas encore lue"
+        return [f"{owned} · {stats['won_collection']} gagnée(s) · mises {stats['bids_collection']}"]
     if name == "trends":
         return [f"Signaux : Wikipédia {stats['signals_wiki']}, Google {stats['signals_google']}"]
     return []
@@ -86,6 +90,8 @@ async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
     """(anomalie trouvée, description, blocs)."""
     now = utcnow()
     stats = await ctx.db.recap_stats(since)
+    collection = await ctx.db.kv_get("collection") or {}
+    stats["collection_owned"], stats["collection_total"] = len(collection.get("owned", [])), collection.get("total", 0)
     pending = await ctx.db.pending_bids()
     by_name = {w.name: w for w in workers}
     problems = anomalies(ctx, stats, pending)

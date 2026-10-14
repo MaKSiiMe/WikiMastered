@@ -43,7 +43,9 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
                lines=["40 enchère(s) examinée(s) : pas assez vue vendue 30 · misée 10"]),
         worker("packs", last_ok=now - timedelta(hours=2), next_due=now - timedelta(hours=1)),  # bloqué
         worker("inventory", last_ok=now, next_due=now + timedelta(minutes=10), errors=2, last_error="HTTP 500"),
+        worker("collection", last_ok=now, next_due=now + timedelta(hours=6)),
     ]
+    await db.kv_set("collection", {"owned": ["1 janvier"] * 37, "missing": [], "total": 366})
     problem, description, sections = await build_recap(ctx, workers, since, now - timedelta(days=1))
     blocks = dict(sections)
     assert problem and sections[0][0] == "À vérifier"
@@ -53,7 +55,8 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     assert "pas assez vue vendue 30" in blocks["🎯 Sniper"] and "✅" in blocks["🎯 Sniper"]
     assert "1 booster(s)" in blocks["🎴 Paquets"] and "❌ arrêté" in blocks["🎴 Paquets"]
     assert "⚠️ 2 erreur(s)" in blocks["💰 Ventes"]
-    assert "📅 Collection" not in blocks  # worker absent : pas de bloc
+    assert blocks["📅 Collection"].startswith("37/366 possédées · 0 gagnée(s) · mises 0")
+    assert "📈 Tendances" not in blocks  # worker absent : pas de bloc
     assert description.startswith("Depuis ")
     assert workers[2].recent_errors == 0  # erreurs remises à zéro après le récap
     await db.close()
