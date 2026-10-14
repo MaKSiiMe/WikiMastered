@@ -552,3 +552,37 @@ async def test_pack_sessions_every_15_to_90_minutes(tmp_path):
     assert 14.9 <= gap <= 90
     assert await opener.step() > 0 and len(opened) == 1  # on attend la prochaine session
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_trend_alerts_cards_under_position_budget(tmp_path):
+    from src.workers.wiki_trends import Trend, WikiTrends
+
+    end = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+
+    def sale(aid: str, title: str, current: int) -> dict:
+        return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "C"},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active", "end_at": end,
+                "base_amount": 10, "current_bid": current, "current_bidder_id": None}
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3300})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": [sale("a1", "Squid Game", 120), sale("a2", "Squid Game", 900),
+                                                          sale("a3", "Autre", 50)], "hasMore": False})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    await seed_observed(db, "card-Squid Game", [400, 380, 420])
+    api = WikiMastersAPI(client)
+    trends = WikiTrends(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    budget = await trends.max_price()
+    assert budget == 594  # 3300 × 0,9 / 5, et non plus 30 WB fixes
+    trend = Trend("Squid_Game", 50000, 2000, 25.0, 90000)
+    lines = await trends.check_market(trend, budget)
+    assert len(lines) == 1 and "mise min 132 WB" in lines[0] and "estimation ~400 WB" in lines[0]
+    assert await trends.check_market(trend, budget) == []  # chaque vente n'est signalée qu'une fois
+    await db.close()

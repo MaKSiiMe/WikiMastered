@@ -174,7 +174,7 @@ class Settings(BaseSettings):
     trends_min_daily_views: int = 2000
     trends_rarity_thresholds: dict[str, int] = Field(default_factory=lambda: {"L": 20000})
     trends_search_limit: int = 15
-    trends_max_price: int = 30
+    trends_max_price: int = 0   # 0 = budget d'une position (solde × ratio / places)
     trends_auto_buy: bool = False
     trends_auto_buy_max: int = 20
     wikimedia_user_agent: str = "WikiMasteredBot/1.0 (self-hosted; configure WIKIMEDIA_USER_AGENT)"

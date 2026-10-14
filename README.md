@@ -128,7 +128,7 @@ Dans Docker, préfixe par `docker compose exec wikimastered`. Les ventes program
 
 **Inventaire (C).** Le site limite à **5 ventes simultanées** (`maxConcurrentAuctions`) : le bot ne programme que les places libres et reporte au lendemain une vente qui n'a plus de place. Ne sont jamais vendus ni défaussés : les exemplaires portant une étiquette de `PROTECTED_TAGS`, les favoris, les shiny, les exemplaires engagés dans un échange, ceux déjà en vente, et le dernier exemplaire de chaque carte (`SELL_KEEP_COPIES`, `DISCARD_KEEP_COPIES`). La défausse passe par lots de 50. Elle est bloquée si un palier est à moins de `ACHIEVEMENT_MARGIN` cartes, et ne fait jamais repasser la collection sous un palier déjà atteint.
 
-**Tendances (E).** Le module prend le top fr.wikipedia de la veille : les données du jour ne sont publiées qu'avec environ un jour de retard. Un pic correspond à des vues ≥ 3 × la médiane des 30 jours précédents. La projection sur 30 jours donne la rareté probable (Légendaire à 20 000 vues). Une alerte part si la carte est en vente sous cette rareté et à petit prix.
+**Tendances (E).** Le module prend le top fr.wikipedia de la veille : les données du jour ne sont publiées qu'avec environ un jour de retard. Un pic correspond à des vues ≥ 3 × la médiane des 30 jours précédents. Le prix d'une carte suit les tendances : si la carte d'un article en pic est en vente sous le budget d'une position (`TRENDS_MAX_PRICE`, 0 = ce budget), elle est signalée avec sa mise minimale et son estimation (ventes observées). Un seul message Discord par passage horaire, chaque vente n'est signalée qu'une fois. La rareté probable (projection des vues sur 30 jours, Légendaire à 20 000 vues) n'est plus qu'une information.
 
 ## Données
 
