@@ -10,9 +10,9 @@ import json
 from datetime import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_origin
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 RARITIES: tuple[str, ...] = ("C", "PC", "R", "SR", "UR", "L")
@@ -219,14 +219,14 @@ class Settings(BaseSettings):
 
     wikimedia_user_agent: str = "WikiMasteredBot/1.0 (self-hosted; configure WIKIMEDIA_USER_AGENT)"
 
-    @field_validator(
-        "pack_notify_rarities", "discard_rarities", "listing_duration_options", "live_writes", "simulate",
-        "collection_sets", "collection_titles",
-        "achievement_milestones", mode="before",
-    )
+    @field_validator("*", mode="before")
     @classmethod
-    def _parse_lists(cls, value: Any) -> Any:
-        return _split_list(value)
+    def _parse_lists(cls, value: Any, info: ValidationInfo) -> Any:
+        """Toute variable de type liste accepte du JSON (["a","b"]) ou du CSV (a,b), même un seul élément (date)."""
+        field = cls.model_fields.get(info.field_name or "")
+        if field is not None and get_origin(field.annotation) is list:
+            return _split_list(value)
+        return value
 
     @field_validator("pack_notify_rarities", "discard_rarities")
     @classmethod
