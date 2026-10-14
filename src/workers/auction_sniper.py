@@ -65,34 +65,42 @@ class Portfolio:
     min_profit: int       # bénéfice attendu minimum
     open_positions: int   # positions détenues + enchères du bot en cours
     max_positions: int
+    sale_room: int = 5            # places de vente libres pour le bot
+    queue_min_profit: int = 0     # bénéfice exigé pour une position qui devra attendre
 
     @property
     def can_open(self) -> bool:
         return self.open_positions < self.max_positions
 
+    @property
+    def required_profit(self) -> int:
+        """Une position qui aura une place de vente tout de suite, ou qui devra attendre."""
+        return self.min_profit if self.open_positions < self.sale_room else max(self.min_profit, self.queue_min_profit)
 
-def position_cap(s: Settings, sale_slots: int | None, manual_sales: int) -> int:
-    """Positions autorisées : places de vente que tes ventes manuelles laissent au bot, plus un tampon.
 
-    Acheter plus que ce qu'on peut remettre en vente immobilise le capital pour rien."""
+def position_cap(s: Settings, sale_slots: int | None, manual_sales: int) -> tuple[int, int]:
+    """(positions autorisées, places de vente libres pour le bot).
+
+    Au-delà des places libres, une position attend qu'une place se libère (file d'attente,
+    PORTFOLIO_BUFFER au plus) : son capital est immobilisé, d'où un bénéfice exigé plus élevé."""
     if sale_slots is None:
-        return s.portfolio_max_positions
-    free_for_bot = max(0, sale_slots - manual_sales)
-    if free_for_bot == 0:
-        return 0
-    return min(s.portfolio_max_positions, free_for_bot + s.portfolio_buffer)
+        return s.portfolio_max_positions, s.portfolio_slots
+    room = max(0, sale_slots - manual_sales)
+    return min(s.portfolio_max_positions, room + s.portfolio_buffer), room
 
 
 def portfolio_state(s: Settings, *, balance: int, held_count: int, held_real_cost: int, held_sim_cost: int,
                     engaged_real: int, engaged_sim: int, bot_engaged_count: int,
-                    max_positions: int | None = None) -> Portfolio:
+                    max_positions: int | None = None, sale_room: int | None = None) -> Portfolio:
     # Les mises réelles et positions réelles ont déjà quitté le solde : on les rajoute au capital.
     capital = balance + held_real_cost + engaged_real
     available = balance - held_sim_cost - engaged_sim - s.sniper_min_balance_reserve
     budget = int(capital * s.portfolio_capital_ratio / max(1, s.portfolio_slots))
     min_profit = max(s.portfolio_min_profit, int(budget * s.portfolio_min_profit_ratio))
     return Portfolio(capital, max(0, available), budget, min_profit, held_count + bot_engaged_count,
-                     s.portfolio_max_positions if max_positions is None else max_positions)
+                     s.portfolio_max_positions if max_positions is None else max_positions,
+                     s.portfolio_slots if sale_room is None else sale_room,
+                     int(budget * s.portfolio_queue_profit_ratio))
 
 
 @dataclass(frozen=True)
@@ -130,7 +138,7 @@ def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales
         net = quote.average * (1 - fee)  # type: ignore[operator]
         limit = math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
         if portfolio is not None:
-            limit = min(limit, math.floor(net - portfolio.min_profit), portfolio.position_budget)
+            limit = min(limit, math.floor(net - portfolio.required_profit), portfolio.position_budget)
         if amount <= limit:
             options.append(Decision(amount, limit, f"revente ~{quote.average:.0f} WB, bénéfice ~{net - amount:.0f}",
                                     quote.average, net - amount))
@@ -231,9 +239,15 @@ class AuctionSniper(Worker):
                 if free <= 0:
                     self.log.debug("plus de place pour %s (%d enchères en cours)", auction.title, len(self._engaged))
                     continue
-                if not decision.collection and portfolio.open_positions + opened >= portfolio.max_positions:
-                    self.log.debug("positions pleines, %s ignorée", auction.title)
-                    continue
+                if not decision.collection:
+                    open_now = portfolio.open_positions + opened
+                    if open_now >= portfolio.max_positions:
+                        self.log.debug("positions pleines, %s ignorée", auction.title)
+                        continue
+                    # Les achats précédents du passage ont pris les places libres : celle-ci attendra.
+                    queued = open_now >= portfolio.sale_room
+                    if queued and (decision.profit or 0) < max(portfolio.min_profit, portfolio.queue_min_profit):
+                        continue
             if not await self._affordable(decision.amount, params, portfolio):
                 continue
             if await self._bid(auction, decision, params) and not rebid:
@@ -261,11 +275,12 @@ class AuctionSniper(Worker):
         engaged_real = sum(amount for _, amount in self._leading.values())
         engaged_sim = await self.db.simulated_engaged_cost(now) if self.settings.dry_run else 0
         bot_engaged = sum(1 for aid in self._bot_engaged if aid in self._engaged)
+        cap, room = await self._sale_capacity(now)
         return portfolio_state(
             self.settings, balance=await self._current_balance(), held_count=held["count"],
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
             engaged_real=engaged_real, engaged_sim=engaged_sim, bot_engaged_count=bot_engaged,
-            max_positions=await self._sale_capacity(now),
+            max_positions=cap, sale_room=room,
         )
 
     async def _current_balance(self) -> int:
@@ -300,13 +315,13 @@ class AuctionSniper(Worker):
         return self.settings.sniper_avoid_my_bids and (
             auction.id in self._manual_auctions or auction.catalog_id in self._manual_cards)
 
-    async def _sale_capacity(self, now: datetime) -> int | None:
-        """Positions autorisées d'après les places de vente (relu toutes les 5 min)."""
+    async def _sale_capacity(self, now: datetime) -> tuple[int, int]:
+        """(positions autorisées, places libres pour le bot), d'après les places de vente (relu toutes les 5 min)."""
         if self._sale_slots is None or now - self._sale_slots[0] > timedelta(minutes=5):
             try:
                 selling, maximum = await self.api.listing_slots()
             except ApiError:
-                return None
+                return position_cap(self.settings, None, 0)
             self._sale_slots = (now, maximum, selling)
         _, maximum, selling = self._sale_slots
         manual_sales = max(0, selling - await self.db.posted_listings_count())

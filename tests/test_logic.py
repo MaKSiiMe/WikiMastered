@@ -123,10 +123,26 @@ def test_portfolio_decision_needs_real_profit():
 
 def test_positions_follow_free_sale_slots():
     s = settings()
-    assert position_cap(s, 5, 4) == 2   # 4 ventes manuelles : 1 place pour le bot + 1 en attente
-    assert position_cap(s, 5, 5) == 0   # toutes les places prises : aucun achat pour revendre
-    assert position_cap(s, 5, 0) == 6   # plafond absolu PORTFOLIO_MAX_POSITIONS
-    assert position_cap(s, None, 0) == 6
+    assert position_cap(s, 5, 4) == (11, 1)   # 1 place libre + 10 en file d'attente
+    assert position_cap(s, 5, 5) == (10, 0)   # toutes les places prises : file d'attente seulement
+    assert position_cap(s, 5, 0) == (15, 5)   # plafond absolu PORTFOLIO_MAX_POSITIONS
+    assert position_cap(settings(portfolio_buffer=0), 5, 5) == (0, 0)
+
+
+def test_queued_positions_need_a_better_deal():
+    s = settings()
+    params = snipe_params(s, night=False)
+    card = {"id": "c", "wikipedia_title": "x", "rarity": "C"}
+    quote = Quote(400.0, 5)
+
+    def pf(open_positions: int):
+        return portfolio_state(s, balance=3000, held_count=open_positions, held_real_cost=0, held_sim_cost=0,
+                               engaged_real=0, engaged_sim=0, bot_engaged_count=0, max_positions=11, sale_room=1)
+
+    assert pf(1).required_profit == 270                                   # 50 % du budget de 540
+    assert decide(auction(card=card, base_amount=200), params, quote, 3, pf(0))      # place libre : +200 suffit
+    assert decide(auction(card=card, base_amount=200), params, quote, 3, pf(1)) is None  # attendrait : +200 < 270
+    assert decide(auction(card=card, base_amount=120), params, quote, 3, pf(1))      # +280 : vaut l'attente
 
 
 def test_portfolio_counts_engaged_capital():
@@ -135,7 +151,9 @@ def test_portfolio_counts_engaged_capital():
                          engaged_real=500, engaged_sim=0, bot_engaged_count=2)
     # Le capital engagé compte : budget calculé sur 3000, pas sur le solde de 1000.
     assert pf.capital == 3000 and pf.position_budget == 540 and pf.available == 950
-    assert not pf.can_open  # 4 positions + 2 enchères = 6 = maximum
+    assert pf.open_positions == 6 and pf.can_open             # 4 positions + 2 enchères < 15
+    assert not portfolio_state(settings(portfolio_max_positions=6), balance=1000, held_count=4, held_real_cost=0,
+                               held_sim_cost=0, engaged_real=0, engaged_sim=0, bot_engaged_count=2).can_open
 
 
 def test_night_mode_is_more_aggressive():
@@ -199,6 +217,10 @@ def test_listing_ends_in_peak_window():
     assert abs((post + timedelta(minutes=minutes) - end).total_seconds()) < 60
     post, minutes, end = plan_listing_time(now, time(20, 0), time(22, 30), [1440, 60], 60, random.Random(1))
     assert post >= now and post + timedelta(minutes=minutes) == end and minutes == 60
+    morning = datetime(2026, 10, 14, 10, 0, tzinfo=PARIS)
+    site = [10, 30, 60, 180, 360, 720, 1440]  # durées du formulaire de vente du site
+    post, minutes, end = plan_listing_time(morning, time(20, 0), time(22, 30), site, 60, random.Random(1))
+    assert minutes == 360 and post == end - timedelta(hours=6) and time(20, 0) <= end.time() <= time(22, 30)
 
 
 # --------------------------------------------------------------------- trends

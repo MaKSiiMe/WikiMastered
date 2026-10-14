@@ -122,8 +122,9 @@ class Settings(BaseSettings):
 
     # --- Capital : positions achetées pour être revendues ----------------------------
     portfolio_slots: int = 5              # = places de vente simultanées du site
-    portfolio_max_positions: int = 6      # plafond absolu : positions détenues + enchères du bot
-    portfolio_buffer: int = 1             # positions en plus des places de vente libres pour le bot
+    portfolio_max_positions: int = 15     # plafond absolu : positions détenues + enchères du bot
+    portfolio_buffer: int = 10            # positions en attente d'une place de vente, au-delà des places libres
+    portfolio_queue_profit_ratio: float = 0.5  # bénéfice exigé pour une position qui devra attendre
     portfolio_capital_ratio: float = 0.9  # part des WikiBidous engagée en positions
     portfolio_min_profit_ratio: float = 0.25  # bénéfice attendu ≥ 25 % du budget d'une position
     portfolio_min_profit: int = 30        # plancher absolu du bénéfice attendu
@@ -142,7 +143,9 @@ class Settings(BaseSettings):
     sell_max_listings_per_run: int = 5
     listing_end_window_start: time = time(20, 0)
     listing_end_window_end: time = time(22, 30)
-    listing_duration_options: IntList = Field(default_factory=list)
+    # Durées proposées par le formulaire de vente du site [KZ features/ranking.js].
+    listing_duration_options: IntList = Field(default_factory=lambda: [10, 30, 60, 180, 360, 720, 1440])
+    listing_preferred_duration_minutes: int = 360
     listing_min_duration_minutes: int = 60
 
     auto_discard: bool = False
