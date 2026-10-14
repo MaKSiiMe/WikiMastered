@@ -29,6 +29,7 @@ from src.core.timeutils import now_local, random_in_window
 from src.workers.base import Context, Worker
 
 INVENTORY_PRICE_MAX_AGE = timedelta(hours=12)
+POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la carte
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -141,6 +142,7 @@ class InventoryManager(Worker):
         self._next_scan = utcnow() + timedelta(minutes=2)
 
     async def step(self) -> float:
+        await self.reconcile_listings()
         await self.manage_positions()
         await self.post_due_listings()
         await self.settle_listings()
@@ -236,6 +238,12 @@ class InventoryManager(Worker):
         """Programme la revente des cartes achetées par le sniper (2 par passage au plus)."""
         s = self.settings
         for row in (await self.db.positions_to_list())[:2]:
+            failures = await self.db.failed_listings_count(row["id"])
+            if failures >= POSITION_MAX_LIST_FAILURES:
+                await self.db.close_position(row["id"], None)
+                self.notifier.warning("Revente abandonnée", f"{row['title']} ({row['rarity']}) : mise en vente "
+                                      f"refusée {failures} fois, carte gardée. Voir les erreurs dans les logs.")
+                continue
             owned_id = f"sim-{row['id']}" if row["dry_run"] else await self._find_copy(row)
             if not owned_id:
                 continue
@@ -284,7 +292,8 @@ class InventoryManager(Worker):
                 try:
                     result = await self.api.create_listing(row["owned_card_id"], row["base_amount"], minutes)
                 except UncertainMutation as exc:
-                    await self.db.update_listing(row["id"], status="uncertain", error=str(exc))
+                    await self.db.update_listing(row["id"], status="uncertain", error=str(exc), posted_at=utcnow(),
+                                                 duration_minutes=minutes)
                     raise
             target_end = utcnow() + timedelta(minutes=minutes)
             if result is None or result.dry_run:
@@ -314,6 +323,28 @@ class InventoryManager(Worker):
             return None
         selling = [a for a in parse_selling(mine) if a.catalog_id == card_id]
         return max(selling, key=lambda a: a.end_at).id if selling else None
+
+    async def reconcile_listings(self) -> None:
+        """Mises en vente au résultat incertain : cherchées dans mes ventes en cours, jamais rejouées."""
+        rows = await self.db.uncertain_listings(utcnow() - timedelta(minutes=1))
+        if not rows:
+            return
+        selling = parse_selling(MyBids.model_validate(await self.ctx.client.get("my_bids")))
+        known = await self.db.listed_auction_ids()
+        for row in rows:
+            label = f"{row['title']} ({row['rarity']}) à {row['base_amount']} WB"
+            match = [a for a in selling if a.catalog_id == row["card_id"] and a.base_amount == row["base_amount"]
+                     and a.id not in known]
+            if match:
+                auction = max(match, key=lambda a: a.end_at)
+                known.add(auction.id)
+                await self.db.update_listing(row["id"], status="posted", auction_id=auction.id,
+                                             target_end=auction.end_at, error=None)
+                self.notifier.info("Mise en vente vérifiée", f"{label} : bien en vente.")
+            else:
+                await self.db.update_listing(row["id"], status="failed", error="non créée (vérifiée dans mes ventes)")
+                again = " Elle sera reprogrammée." if row["bid_id"] else ""
+                self.notifier.info("Mise en vente vérifiée", f"{label} : pas créée.{again}")
 
     async def _postpone(self, row) -> None:
         """Plus de place de vente : on vise la même fenêtre de fin, le jour suivant."""
