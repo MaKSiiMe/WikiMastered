@@ -67,6 +67,16 @@ class OwnedCard(_Model):
     snapshot_rarity: str | None = None
     user_id: str | None = None
     obtained_at: datetime | None = None
+    tags: list[Any] = []
+
+    @property
+    def tag_names(self) -> set[str]:
+        names = set()
+        for tag in self.tags:
+            name = tag.get("name") if isinstance(tag, dict) else tag
+            if isinstance(name, str) and name.strip():
+                names.add(name.strip().casefold())
+        return names
 
     @property
     def catalog_id(self) -> str:

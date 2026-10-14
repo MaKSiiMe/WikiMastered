@@ -110,6 +110,7 @@ class Settings(BaseSettings):
     sniper_allow_rebid: bool = True
     sniper_settle_grace_seconds: int = 30
     sniper_max_concurrent_bids: int = 0   # 0 = illimité (le site n'impose pas de limite aux mises)
+    sniper_avoid_my_bids: bool = True     # ne jamais toucher aux cartes sur lesquelles tu mises toi-même
 
     # Arbitrage nocturne
     night_start: time = time(2, 0)
@@ -121,7 +122,8 @@ class Settings(BaseSettings):
 
     # --- Capital : positions achetées pour être revendues ----------------------------
     portfolio_slots: int = 5              # = places de vente simultanées du site
-    portfolio_max_positions: int = 6      # positions détenues + enchères du bot en cours
+    portfolio_max_positions: int = 6      # plafond absolu : positions détenues + enchères du bot
+    portfolio_buffer: int = 1             # positions en plus des places de vente libres pour le bot
     portfolio_capital_ratio: float = 0.9  # part des WikiBidous engagée en positions
     portfolio_min_profit_ratio: float = 0.25  # bénéfice attendu ≥ 25 % du budget d'une position
     portfolio_min_profit: int = 30        # plancher absolu du bénéfice attendu
@@ -144,6 +146,7 @@ class Settings(BaseSettings):
     listing_min_duration_minutes: int = 60
 
     auto_discard: bool = False
+    protected_tags: CsvList = Field(default_factory=list)  # étiquettes jamais vendues ni défaussées
     discard_rarities: CsvList = Field(default_factory=lambda: ["C", "PC"])
     discard_max_value: int = 2
     discard_keep_copies: int = 1
