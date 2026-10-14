@@ -657,6 +657,27 @@ class WikiMastersClient:
             self._backoff(f"{name}: HTTP {resp.status_code}", limited=kind == "rate",
                           retry_after=_retry_after_seconds(resp))
 
+    def _capture_write(self, name: str, status: int, payload: Any) -> None:
+        """Garde les 3 premières vraies réponses de chaque écriture (data/inspect/writes/) : leur
+        format n'est pas encore vérifié. La première est résumée sur Discord."""
+        folder = self.settings.data_dir / "inspect" / "writes"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            n = len(list(folder.glob(f"{name}-*.json")))
+            if n >= 3:
+                return
+            (folder / f"{name}-{n + 1}.json").write_text(
+                json.dumps({"status": status, "payload": payload, "at": datetime.now(timezone.utc).isoformat()},
+                           ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        except OSError:
+            log.exception("Impossible d'enregistrer la réponse de %s", name)
+            return
+        if n == 0:
+            keys = ", ".join(sorted(payload)) if isinstance(payload, dict) else type(payload).__name__
+            self.notifier.info(f"Première réponse réelle : {name}",
+                               f"HTTP {status}, clés : {keys or '—'}\n{server_message(payload)}\n"
+                               f"Détail : data/inspect/writes/{name}-1.json")
+
     async def mutate(self, name: str, **values: Any) -> MutationResult:
         req = self.endpoints.build(name, **values)
         if not req.is_mutation:
@@ -677,6 +698,8 @@ class WikiMastersClient:
 
         payload = _json_or_none(resp)
         kind = self._classify(resp, payload)
+        if kind in ("ok", "client", "forbidden"):  # vraie réponse du site, pas une panne ni un 401/429
+            self._capture_write(name, resp.status_code, payload if payload is not None else resp.text[:2000])
         if kind != "ok" and isinstance(payload, dict) and _DOMAIN_KEYS & payload.keys():
             return MutationResult(resp.status_code, payload)
         if kind == "ok":

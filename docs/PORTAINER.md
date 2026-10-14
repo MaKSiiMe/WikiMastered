@@ -86,6 +86,14 @@ python -m src.main inventory scan
 
 ## 7. Passer en réel
 
+Attends que le bilan quotidien (23:00 sur Discord) indique, dans « Validation de la simulation », que le passage en réel est envisageable : au moins 10 reventes simulées, et un bilan positif même en comptant les invendues comme perdues.
+
+Au premier passage en réel, Discord affiche « Première réponse réelle : place_bid » et « Première réponse réelle : create_listing ». Les 3 premières réponses de chaque écriture sont enregistrées dans le volume. Envoie-moi leur contenu, obtenu dans la *Console* avec :
+
+```sh
+cat /app/data/inspect/writes/*.json
+```
+
 Stack `wikimastered` > *Environment variables* > `DRY_RUN=false` > **Update the stack**.
 
 Pour réactiver plus tard la vente ou la défausse automatiques : `AUTO_LIST=true` et `AUTO_DISCARD=true`. Ces deux options sont désactivées par défaut.

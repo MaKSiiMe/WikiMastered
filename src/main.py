@@ -79,9 +79,33 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
     except Exception:  # noqa: BLE001 - le bilan part même sans solde
         stats["balance"] = "?"
     rarities = " ".join(f"{r}:{n}" for r, n in sorted(stats.pop("pulls_by_rarity").items())) or "—"
+    text = f"Tirages par rareté : {rarities}"
+    if ctx.settings.dry_run:
+        text += "\n\n" + validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales))
     if send:
-        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", f"Tirages par rareté : {rarities}", **stats)
+        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", text, **stats)
     return stats
+
+
+def validation_text(v: dict[str, int]) -> str:
+    """Bloc « faut-il passer en réel ? » du bilan, pendant la simulation."""
+    lines = [
+        "**Validation de la simulation (depuis le début)**",
+        f"Marché observé : {v['observed_today']} ventes aujourd'hui, {v['observed_total']} au total, "
+        f"{v['cards_priced']} cartes cotables.",
+        f"Positions : {v['sim_bought']} achetées, {v['sim_sold']} revendues ({v['sim_profit']:+d} WB), "
+        f"{v['sim_kept']} gardées invendues ({v['sim_kept_cost']} WB immobilisés), {v['sim_held']} en cours.",
+    ]
+    if v["uncertain"]:
+        lines.append(f"Écritures incertaines en attente : {v['uncertain']}.")
+    if v["sim_sold"] + v["sim_kept"] < 10:
+        lines.append("Pas encore assez de reventes simulées pour conclure (10 au moins).")
+    elif v["sim_profit"] - v["sim_kept_cost"] > 0:
+        lines.append("Bilan positif, même en comptant les invendues comme perdues : le passage en réel est "
+                     "envisageable (DRY_RUN=false).")
+    else:
+        lines.append("Bilan négatif si on compte les invendues comme perdues : rester en simulation.")
+    return "\n".join(lines)
 
 
 async def report_loop(ctx: Context) -> None:
