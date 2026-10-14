@@ -69,3 +69,46 @@ async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
     assert posted == ["/api/marketplace/col/bid"]  # seule la mise de collection est partie
     assert client.user_id == ME
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_duplicates_fill_free_slots_during_the_day(tmp_path):
+    from src.workers.inventory_manager import InventoryManager
+
+    slots = {"selling": 3}
+    reads = []
+
+    def copy(oid, card):
+        return {"id": oid, "card_id": card, "card": {"id": card, "wikipedia_title": card, "rarity": "C"}}
+
+    def handler(request):
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": slots["selling"], "maxConcurrentAuctions": 5})
+        if request.url.path == "/api/my-collection":
+            reads.append(1)
+            return httpx.Response(200, json={"collection": [copy(f"{c}{i}", c) for c in "ABC" for i in (1, 2)]})
+        if request.url.path == "/api/trades":
+            return httpx.Response(200, json={"trades": []})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"], auto_list=True,
+                                   sell_price_lookups_per_run=0)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    for card, prices in (("A", [300, 310]), ("B", [100, 90]), ("C", [50, 60])):
+        await seed_observed(db, card, prices)
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await inv.setup()
+    assert await inv.fill_free_slots() == 2  # 2 places libres sur 5 : les 2 doublons les mieux cotés
+    rows = await db._all("SELECT card_id, post_at FROM listings ORDER BY base_amount DESC")
+    assert [r["card_id"] for r in rows] == ["A", "B"]
+    soon = datetime.now(timezone.utc) + timedelta(hours=10)
+    assert all(datetime.fromisoformat(r["post_at"]) < soon for r in rows)  # pas d'attente jusqu'au soir
+    slots["selling"] = 4  # une vente terminée libère une place (4 en cours + 2 programmées = plein)
+    assert await inv.fill_free_slots() == 0
+    await db._exec("UPDATE listings SET status = 'posted'")
+    slots["selling"] = 4
+    assert await inv.fill_free_slots() == 1 and len(reads) == 1  # la collection n'est pas relue
+    assert not notifier.sent  # pas de message Discord pour les doublons
+    await db.close()

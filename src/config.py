@@ -173,6 +173,8 @@ class Settings(BaseSettings):
     sell_keep_copies: int = 1
     sell_price_multiplier: float = 1.0
     sell_max_listings_per_run: int = 5
+    sell_anytime: bool = True        # doublons vendus dès qu'une place se libère (6 h), pas seulement le soir
+    sell_check_minutes: float = 10.0  # vérification des places libres
     sell_price_lookups_per_run: int = 60  # cotes demandées au site par passage (route limitée) ; le reste : ventes observées
     listing_end_window_start: time = time(20, 0)
     listing_end_window_end: time = time(22, 30)

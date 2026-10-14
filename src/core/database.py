@@ -582,6 +582,8 @@ class Database:
         closed = await self._all("SELECT dry_run, amount, sale_price FROM bids WHERE closed = 1 AND sold_at >= ? "
                                  "AND sale_price IS NOT NULL", (s,))
         held = await self.positions_summary()
+        dup = await self._one("SELECT COUNT(*) AS n, COALESCE(SUM(sale_price), 0) AS wb FROM listings "
+                              "WHERE bid_id IS NULL AND status = 'sold' AND settled_at >= ?", (s,))
         by_rarity: dict[str, int] = {}
         for p in pulls:
             by_rarity[p["rarity"] or "?"] = by_rarity.get(p["rarity"] or "?", 0) + 1
@@ -594,6 +596,8 @@ class Database:
             "auctions_won": sum(1 for b in bids if b["status"] == "won"),
             "spent_won": sum(b["amount"] for b in bids if b["status"] == "won"),
             "listings_posted": sum(1 for x in listings if x["status"] == "posted"),
+            "doublons_vendus": dup["n"] if dup else 0,
+            "doublons_recette": dup["wb"] if dup else 0,
             "listings_scheduled": sum(1 for x in listings if x["status"] == "scheduled"),
             "discarded": discards["n"] if discards else 0,
             "positions_sold": sum(1 for c in closed if not c["dry_run"]),
