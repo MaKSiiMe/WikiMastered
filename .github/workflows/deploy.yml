@@ -1,0 +1,37 @@
+name: Déploiement
+
+# Après chaque push sur main dont les tests passent, demande à Portainer de
+# tirer le dépôt et de redéployer la stack. Sans le secret PORTAINER_WEBHOOK_URL,
+# le workflow ne fait rien (Portainer peut aussi sonder le dépôt lui-même).
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  portainer:
+    name: redéploiement Portainer
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PORTAINER_WEBHOOK_URL: ${{ secrets.PORTAINER_WEBHOOK_URL }}
+    steps:
+      - name: Appel du webhook Portainer
+        run: |
+          if [ -z "$PORTAINER_WEBHOOK_URL" ]; then
+            echo "PORTAINER_WEBHOOK_URL absent : aucun redéploiement demandé."
+            exit 0
+          fi
+          curl --fail --silent --show-error --max-time 60 --retry 3 --retry-delay 5 \
+            -X POST "$PORTAINER_WEBHOOK_URL"
+          echo "Redéploiement demandé pour ${{ github.event.workflow_run.head_sha }}."
