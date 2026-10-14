@@ -40,12 +40,12 @@ async def position_budget(ctx: Context) -> int:
 
 async def scan_market(ctx: Context, *, source: str, term: str, detail: str, max_price: int,
                       exact: bool = False, extra=None) -> list[str]:
-    """Cherche la carte au marché : enregistre chaque vente trouvée comme signal, renvoie les lignes
-    Discord des nouvelles ventes sous `max_price`. `extra(auction)` ajoute un détail à la ligne."""
+    """Cherche la carte au marché : enregistre chaque vente trouvée comme signal, renvoie une ligne
+    Discord par carte ayant de nouvelles ventes sous `max_price`. `extra(auction)` ajoute un détail."""
     auctions, _ = await ctx.api.market_page(sort="ending_soon", q=term)
     now = datetime.now(timeutils.PARIS)
     me = ctx.api.user_id
-    lines: list[str] = []
+    by_card: dict[str, list[Auction]] = {}
     for a in auctions:
         if not title_matches(a.title, term, exact=exact) or a.status != "active" or a.seconds_left(now) <= 0:
             continue
@@ -57,20 +57,26 @@ async def scan_market(ctx: Context, *, source: str, term: str, detail: str, max_
         await ctx.db.mark_term_matched(source, term)
         if a.min_bid > max_price:
             continue
-        lines.append(await alert_line(ctx, a, detail, extra(a) if extra else ""))
-    return lines
+        by_card.setdefault(a.catalog_id, []).append(a)
+    return [await alert_line(ctx, sales, detail, extra(sales[0]) if extra else "") for sales in by_card.values()]
 
 
-async def alert_line(ctx: Context, a: Auction, detail: str, extra: str = "") -> str:
-    observed, n = await ctx.db.observed_prices(a.catalog_id, ctx.settings.price_recent_sales)
+async def alert_line(ctx: Context, sales: list[Auction], detail: str, extra: str = "") -> str:
+    """Une ligne par carte, quel que soit le nombre de ses ventes en cours."""
+    first = min(sales, key=lambda a: a.end_at)
+    observed, n = await ctx.db.observed_prices(first.catalog_id, ctx.settings.price_recent_sales)
     estimate = (f"estimation ~{statistics.median(observed):.0f} WB ({n} vente(s) vue(s))" if observed
                 else "aucune vente observée")
-    end = a.end_at.astimezone(timeutils.PARIS)
-    return (f"**{a.title}** {a.rarity or '?'}{extra} — {detail} — mise min {a.min_bid} WB, {estimate} — "
-            f"fin {end:%d/%m %H:%M}")
+    rarities = "/".join(sorted({a.rarity or "?" for a in sales}))
+    bids = sorted(a.min_bid for a in sales)
+    price = f"mise min {bids[0]} WB" if len(bids) == 1 else f"{len(bids)} ventes, mise min {bids[0]} à {bids[-1]} WB"
+    end = first.end_at.astimezone(timeutils.PARIS)
+    when = "fin" if len(sales) == 1 else "première fin"
+    return f"**{first.title}** {rarities}{extra} — {detail} — {price}, {estimate} — {when} {end:%d/%m %H:%M}"
 
 
 def flush(ctx: Context, title: str, lines: list[str]) -> None:
+    """Un seul message par passage ; `lines` contient une ligne par carte."""
     if lines:
         shown = "\n".join(lines[:15]) + (f"\n… et {len(lines) - 15} autre(s)" if len(lines) > 15 else "")
         ctx.notifier.info(f"{title} : {len(lines)} carte(s) en vente", shown)
