@@ -85,6 +85,7 @@ endpoints:
     json: {amount: "{amount}"}
 
   create_listing:               # [KZ bridge/marketplace.js] card_id = id de l'EXEMPLAIRE possédé
+                                # réponse réelle (14/10/2026) : HTTP 201 { auction_id }
     method: POST
     path: /api/marketplace
     json: {card_id: "{owned_card_id}", base_amount: "{base_amount}", duration_minutes: "{duration_minutes}"}
