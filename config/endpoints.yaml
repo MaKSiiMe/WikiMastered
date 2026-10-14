@@ -60,7 +60,8 @@ endpoints:
   my_bids:                      # [KZ features/my-bids.js] -> { auctions: [...], selling: [...], hasMore }
     method: GET
     path: /api/marketplace
-    params: {page: "1", limit: "1", mine: "1"}
+    params: {page: "1", limit: "{limit}", mine: "1"}
+    defaults: {limit: 50}
 
   active_trades:                # [WR api.js] -> { trades: [ {status, items: [ {card_id,
     method: GET                 #   user_card_id, offered_by} ] } ] }

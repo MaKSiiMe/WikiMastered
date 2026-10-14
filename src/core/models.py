@@ -222,6 +222,9 @@ class MyBids(_Model):
     auctions: list[Any] = []
     selling: list[Any] = []
 
+    def bid_items(self) -> list[Auction]:
+        return parse_items(Auction, self.auctions, label="enchère")
+
 
 class MyListingsInfo(_Model):
     """/api/marketplace/mine : seulement des compteurs (relevé du 14/10/2026)."""

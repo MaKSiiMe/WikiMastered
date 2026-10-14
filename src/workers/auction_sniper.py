@@ -108,6 +108,12 @@ class AuctionSniper(Worker):
         self._leading: dict[str, tuple[int, int]] = {}
         for row in await self.db.placed_bids():
             self._leading[row["auction_id"]] = (row["id"], row["amount"])
+        # Enchères engagées (le site en limite le nombre) : auction_id -> fin.
+        # Réelles (lues sur le serveur) + celles du bot, y compris simulées en DRY_RUN.
+        self._engaged: dict[str, datetime] = {}
+        self._digest: list[str] = []
+        self._next_digest = utcnow() + timedelta(minutes=self.settings.notify_digest_minutes)
+        await self._refresh_engaged()
         if not self.api.user_id:
             self.notifier.warning("Sniper : identifiant joueur inconnu",
                                   "Renseigne WM_USER_ID pour ne jamais enchérir sur tes propres ventes.")
@@ -123,14 +129,57 @@ class AuctionSniper(Worker):
         if self._ticks % 5 == 1:
             await self._remember(auctions, now)
         await self._track_outbids(auctions, me)
+        if self._ticks % 20 == 0:
+            await self._refresh_engaged()
 
+        # Toutes les opportunités du passage sont évaluées, puis seules les meilleures
+        # sont jouées dans la limite des enchères simultanées.
+        candidates: list[tuple[float, Auction, Decision]] = []
         for auction in auctions:
             if in_snipe_window(auction, me, params.window_seconds, now):
-                await self._consider(auction, params)
+                decision = await self._evaluate(auction, params)
+                if decision:
+                    margin = (decision.reference or decision.ceiling) - decision.amount
+                    candidates.append((margin, auction, decision))
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        free = self.free_slots(now)
+        for _, auction, decision in candidates:
+            rebid = auction.id in self._engaged
+            if not rebid and free <= 0:
+                self.log.debug("plus de place pour %s (%d enchères en cours)", auction.title, len(self._engaged))
+                continue
+            if not await self._affordable(decision.amount, params):
+                continue
+            if await self._bid(auction, decision, params) and not rebid:
+                free -= 1
 
         if self._ticks % 10 == 0:
             await self._settle()
+        self._flush_digest(now)
         return random.uniform(self.settings.sniper_poll_min_seconds, self.settings.sniper_poll_max_seconds)
+
+    def free_slots(self, now: datetime) -> int:
+        grace = timedelta(seconds=self.settings.sniper_settle_grace_seconds)
+        self._engaged = {aid: end for aid, end in self._engaged.items() if end + grace > now}
+        return max(0, self.settings.sniper_max_concurrent_bids - len(self._engaged))
+
+    async def _refresh_engaged(self) -> None:
+        """Ajoute les enchères en cours vues par le serveur (y compris tes mises manuelles)."""
+        for a in await self.api.my_bids():
+            if a.status == "active":
+                self._engaged[a.id] = a.end_at
+
+    def _flush_digest(self, now: datetime) -> None:
+        if now < self._next_digest:
+            return
+        self._next_digest = now + timedelta(minutes=self.settings.notify_digest_minutes)
+        if not self._digest:
+            return
+        lines, self._digest = self._digest, []
+        shown = "\n".join(lines[-15:])
+        more = f"\n… et {len(lines) - 15} autre(s)" if len(lines) > 15 else ""
+        title = "Sniper : enchères simulées" if self.settings.dry_run else "Sniper : enchères placées"
+        self.notifier.info(f"{title} ({len(lines)})", shown + more)
 
     async def _remember(self, auctions: list[Auction], now: datetime) -> None:
         await self.db.upsert_auctions([{
@@ -148,15 +197,15 @@ class AuctionSniper(Worker):
                 del self._leading[a.id]
                 self.log.info("surenchéri sur %s (%s), mise %d remboursée", a.title, a.rarity, mine[1])
 
-    async def _consider(self, auction: Auction, params: SnipeParams) -> None:
+    async def _evaluate(self, auction: Auction, params: SnipeParams) -> Decision | None:
         last = await self.db.last_bid(auction.id)
         if last is not None:
             if last["status"] in ("uncertain", "simulated"):
-                return
+                return None
             if last["status"] == "rejected" and last["amount"] >= auction.min_bid:
-                return
+                return None
             if last["status"] in ("placed", "outbid") and not self.settings.sniper_allow_rebid:
-                return
+                return None
 
         # La cote n'est demandée que si le plafond de rareté ne suffit pas : la route des
         # cotes est limitée par le site, et le sniper ne doit jamais attendre qu'elle se libère.
@@ -167,12 +216,7 @@ class AuctionSniper(Worker):
                 quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False)
             except RateLimited:
                 quote = None
-        decision = decide(auction, params, quote, self.settings.price_min_sales)
-        if decision is None:
-            return
-        if not await self._affordable(decision.amount, params):
-            return
-        await self._bid(auction, decision, params)
+        return decide(auction, params, quote, self.settings.price_min_sales)
 
     async def _affordable(self, amount: int, params: SnipeParams) -> bool:
         if self.settings.dry_run:
@@ -188,7 +232,8 @@ class AuctionSniper(Worker):
             self._balance, self._balance_at = await self.api.balance(), utcnow()
         return self._balance - amount >= self.settings.sniper_min_balance_reserve
 
-    async def _bid(self, auction: Auction, decision: Decision, params: SnipeParams, *, retried: bool = False) -> None:
+    async def _bid(self, auction: Auction, decision: Decision, params: SnipeParams, *, retried: bool = False) -> bool:
+        """Place la mise ; renvoie True si elle est acceptée (ou simulée)."""
         common = dict(
             auction_id=auction.id, card_id=auction.catalog_id, title=auction.title, rarity=auction.rarity,
             is_shiny=auction.shiny, amount=decision.amount, reference_price=decision.reference,
@@ -199,13 +244,15 @@ class AuctionSniper(Worker):
             result = await self.api.place_bid(auction.id, decision.amount)
         except UncertainMutation:
             await self.db.record_bid(**common, status="uncertain", note="réponse perdue")
+            self._engaged[auction.id] = auction.end_at  # la mise a peut-être abouti : place occupée
             raise
 
+        summary = f"{label} : {decision.amount} WB ({decision.reason}{', nuit' if params.night else ''})"
         if result.dry_run:
             await self.db.record_bid(**common, status="simulated")
-            self.notifier.info("Enchère simulée", label, mise=decision.amount, plafond=decision.ceiling,
-                               raison=decision.reason, nuit="oui" if params.night else "non")
-            return
+            self._engaged[auction.id] = auction.end_at
+            self._report_bid("Enchère simulée", summary)
+            return True
 
         payload = result.payload if isinstance(result.payload, dict) else {}
         if result.ok:
@@ -216,22 +263,30 @@ class AuctionSniper(Worker):
             if confirmed is None or confirmed.current_bid != decision.amount:
                 await self.db.record_bid(**common, status="uncertain", note=str(payload)[:300])
                 self.notifier.critical("Enchère non confirmée", f"{label} — vérifie sur le site.")
-                return
+                return False
             await self.db.mark_outbid(auction.id)
             bid_id = await self.db.record_bid(**common, status="placed")
             self._leading[auction.id] = (bid_id, decision.amount)
             self._balance, self._balance_at = confirmed.bidder_balance, utcnow()
-            self.notifier.info("Enchère placée", label, mise=decision.amount, raison=decision.reason,
-                               solde=confirmed.bidder_balance)
-            return
+            self._engaged[auction.id] = auction.end_at
+            self._report_bid("Enchère placée", f"{summary}, solde {confirmed.bidder_balance}")
+            return True
 
         server_min = payload.get("min")
         error = payload.get("error") or payload.get("message") or f"HTTP {result.status}"
         await self.db.record_bid(**common, status="rejected", note=str(error)[:300])
         self.log.info("mise refusée sur %s : %s", label, error)
         if not retried and isinstance(server_min, int) and decision.amount < server_min <= decision.ceiling:
-            await self._bid(auction, Decision(server_min, decision.ceiling, decision.reason, decision.reference),
-                            params, retried=True)
+            return await self._bid(auction, Decision(server_min, decision.ceiling, decision.reason,
+                                                     decision.reference), params, retried=True)
+        return False
+
+    def _report_bid(self, title: str, summary: str) -> None:
+        self.log.info("%s : %s", title, summary)
+        if self.settings.notify_each_bid:
+            self.notifier.info(title, summary)
+        else:
+            self._digest.append(summary)
 
     async def _settle(self) -> None:
         cutoff = utcnow() - timedelta(seconds=self.settings.sniper_settle_grace_seconds)

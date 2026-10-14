@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     discord_alert_webhook_url: str = ""
     discord_mention: str = ""
     daily_report_time: time = time(23, 0)
+    notify_each_bid: bool = False
+    notify_digest_minutes: float = 60.0
 
     # --- Workers ----------------------------------------------------------------
     enable_pack_opener: bool = True
@@ -104,6 +106,7 @@ class Settings(BaseSettings):
     sniper_min_balance_reserve: int = 50
     sniper_allow_rebid: bool = True
     sniper_settle_grace_seconds: int = 30
+    sniper_max_concurrent_bids: int = 5
 
     # Arbitrage nocturne
     night_start: time = time(2, 0)

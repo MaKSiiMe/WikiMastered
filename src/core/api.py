@@ -7,7 +7,7 @@ from typing import Any, AsyncIterator
 
 from src.core.client import MutationResult, WikiMastersClient
 from src.core.models import (
-    Auction, AuctionDetail, Balance, CollectionPage, CollectionStats, MarketPage, MyListingsInfo,
+    Auction, AuctionDetail, Balance, CollectionPage, CollectionStats, MarketPage, MyBids, MyListingsInfo,
     OwnedCard, SalesSummary, TradesList,
 )
 
@@ -67,6 +67,10 @@ class WikiMastersAPI:
 
     async def sales_summary(self, card_id: str, *, wait: bool = True) -> SalesSummary:
         return SalesSummary.model_validate(await self.client.get("sales_summary", card_id=card_id, wait=wait))
+
+    async def my_bids(self) -> list[Auction]:
+        """Enchères sur lesquelles j'ai misé (/api/marketplace?mine=1, clé `auctions`)."""
+        return MyBids.model_validate(await self.client.get("my_bids")).bid_items()
 
     async def active_trades(self) -> TradesList:
         return TradesList.model_validate(await self.client.get("active_trades"))

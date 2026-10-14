@@ -112,6 +112,8 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
 
     def handler(request):
         path = request.url.path
+        if path == "/api/marketplace" and "mine" in request.url.params:
+            return httpx.Response(200, json={"auctions": [], "selling": []})
         if path == "/api/marketplace":
             assert request.url.params["sort"] == "ending_soon"
             return httpx.Response(200, json={"auctions": [auction, {"broken": True}], "hasMore": False})
@@ -131,7 +133,46 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
     assert bid["status"] == "simulated" and bid["amount"] == 7  # max(ceil(6,6), 7)
     assert "deal" in bid["reason"]
     await sniper.step()  # pas de seconde simulation sur la même enchère
-    assert sum(1 for level, title in notifier.sent if title == "Enchère simulée") == 1
+    assert not any("simulée" in title for _, title in notifier.sent)  # pas de message par enchère
+    sniper._next_digest = datetime.now(timezone.utc)
+    sniper._flush_digest(datetime.now(timezone.utc))
+    assert ("INFO", "Sniper : enchères simulées (1)") in notifier.sent
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_sniper_respects_concurrent_bid_limit(tmp_path):
+    end = (datetime.now(timezone.utc) + timedelta(seconds=8)).isoformat()
+
+    def auction(i: int, base: int) -> dict:
+        return {
+            "id": f"33333333-3333-3333-3333-{i:012d}",
+            "card": {"id": f"44444444-4444-4444-4444-{i:012d}", "wikipedia_title": f"Carte {i}", "rarity": "SR"},
+            "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active", "end_at": end,
+            "base_amount": base, "current_bid": None, "current_bidder_id": None,
+        }
+
+    market = [auction(i, base) for i, base in enumerate([14, 3, 9, 5, 12, 2, 7])]
+    manual = {**auction(99, 1), "end_at": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()}
+
+    def handler(request):
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"auctions": [manual], "selling": []})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": market, "hasMore": False})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, sniper_rarity_caps={"SR": 15})
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    await sniper.step()
+    rows = await db._all("SELECT amount FROM bids WHERE status = 'simulated' ORDER BY amount")
+    # 1 enchère manuelle déjà en cours -> 4 places ; les plus grosses marges (15 - mise) d'abord.
+    assert [r["amount"] for r in rows] == [2, 3, 5, 7]
+    assert sniper.free_slots(datetime.now(timezone.utc)) == 0
     await db.close()
 
 
