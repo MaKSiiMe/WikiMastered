@@ -50,6 +50,8 @@ MARKET_LIMIT = 50
 FRESH = timedelta(seconds=3)
 # Une carte de collection manquante entre dans la fenêtre de mise d'ici N s : le sniper ne lance plus rien de lent.
 COLLECTION_GUARD_SECONDS = 10
+# Issues d'une mise acceptée (ou simulée) : la vente est relue à sa fin.
+PLACED = ("misée", "misée (collection)")
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -316,10 +318,15 @@ class AuctionSniper(Worker):
                  if not t.recheck and now - t.seen_at <= FRESH
                  and in_snipe_window(t.auction, me, params.window_seconds, now, self.settings.sniper_min_seconds_left)]
         if ready:
+            for a in ready:
+                # Surenchérie puis rejouée : la nouvelle issue (ex. « trop chère ») remplace la mise précédente,
+                # sinon elle n'est ni journalisée ni comptée, et la vente est encore relue à sa fin pour rien.
+                if self._outcomes.get(a.id) in PLACED:
+                    del self._outcomes[a.id]
             await self._play(ready, params, now)
             self._log_collection_outcomes(ready)
             for a in ready:
-                if self._outcomes.get(a.id) in ("misée", "misée (collection)"):
+                if self._outcomes.get(a.id) in PLACED:
                     self._targets[a.id].recheck = True  # relue à sa fin : prolongée, elle sera rejouée
                 else:
                     self._targets.pop(a.id, None)
@@ -766,7 +773,7 @@ class AuctionSniper(Worker):
 
     def _outcome(self, auction: Auction, outcome: str) -> None:
         """Retient l'issue d'une enchère ; une mise placée n'est plus remplacée par un refus ultérieur."""
-        if self._outcomes.get(auction.id) not in ("misée", "misée (collection)"):
+        if self._outcomes.get(auction.id) not in PLACED:
             self._outcomes[auction.id] = outcome
 
     def recap(self) -> list[str]:
