@@ -1080,4 +1080,4 @@ class AuctionSniper(Worker):
                 await self.db.update_bid(row["id"], status="outbid", note="vérifiée : pas en tête")
                 self._leading.pop(auction.id, None)
                 verdict = "pas en tête (mise non passée ou dépassée)"
-            self.notifier.info("Mise incertaine vérifiée", f"{label} : {verdict}.")
+            self.notifier.info("Mise incertaine vérifiée", f"{label} : {verdict}.", important=True)

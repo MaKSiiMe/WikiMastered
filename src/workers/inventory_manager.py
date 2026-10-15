@@ -421,7 +421,7 @@ class InventoryManager(Worker):
                 await self.db.update_listing(row["id"], status="posted", posted_at=utcnow(), duration_minutes=minutes,
                                              target_end=target_end, auction_id=auction_id)
                 if row["bid_id"]:
-                    self.notifier.info("Carte mise en vente", label, durée=f"{minutes} min")
+                    self.notifier.info("Carte mise en vente", label, durée=f"{minutes} min", important=True)
                 else:
                     self.log.info("doublon mis en vente : %s (%d min)", label, minutes)
             else:
@@ -539,7 +539,7 @@ class InventoryManager(Worker):
             self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
             if not bid["dry_run"]:
                 self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
-                                   f"(achetée {bid['amount']}).")
+                                   f"(achetée {bid['amount']}).", important=True)
             await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
                                  rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
                                  bid_id=bid["id"], relist_count=row["relist_count"] + 1)
