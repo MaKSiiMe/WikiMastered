@@ -3,8 +3,8 @@
 - Vente : doublons dont la cote moyenne (même rareté) dépasse SELL_MIN_VALUE, même C/PC.
   Fin d'enchère programmée dans LISTING_END_WINDOW (20:00-22:30, Paris).
 - Positions : chaque carte achetée par le sniper est remise en vente en priorité (avant
-  les doublons). C'est une enchère : le prix de départ est le prix d'achat + POSITION_LIST_MARGIN,
-  les joueurs le font monter. Invendue, elle repart à −10 % sans passer sous le prix d'achat, puis est gardée.
+  les doublons). C'est une enchère : le prix de départ est le prix d'achat + la moitié du bénéfice attendu
+  (POSITION_LIST_PROFIT_SHARE), au moins + POSITION_LIST_MARGIN ; les joueurs le font monter. Invendue, elle repart à −10 % sans passer sous le prix d'achat, puis est gardée.
   Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
 - Défausse : doublons sans valeur, seulement si aucun palier de succès de taille de
   collection n'est proche (ACHIEVEMENT_MILESTONES), par lots de 50 [WR discard.js].
@@ -39,10 +39,14 @@ SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une r
 
 
 # ---------------------------------------------------------------- logique pure
-def list_price(cost: int, margin: float, fee: float = 0.0) -> int:
-    """Prix de départ d'une revente : le prix d'achat + `margin`, une fois la commission du site payée.
-    Toujours au-dessus du prix d'achat (au moins +1 WB)."""
-    return max(cost + 1, math.ceil(cost * (1 + margin) / max(0.01, 1 - fee)))
+def list_price(cost: int, margin: float, fee: float = 0.0, estimate: float | None = None, share: float = 0.0) -> int:
+    """Prix de départ d'une revente, commission du site payée : le prix d'achat + `share` du bénéfice attendu
+    (`estimate` à l'achat), au moins le prix d'achat + `margin`, et toujours au moins +1 WB."""
+    keep = max(0.01, 1 - fee)
+    price = max(cost + 1, math.ceil(cost * (1 + margin) / keep))
+    if estimate and share > 0:
+        price = max(price, math.ceil((cost + share * (estimate * keep - cost)) / keep))
+    return price
 
 
 @dataclass(frozen=True)
@@ -310,7 +314,8 @@ class InventoryManager(Worker):
             owned_id = f"sim-{row['id']}" if row["dry_run"] else await self._find_copy(row)
             if not owned_id:
                 continue
-            price = list_price(row["amount"], s.position_list_margin, s.sale_fee_pct)
+            price = list_price(row["amount"], s.position_list_margin, s.sale_fee_pct,
+                               estimate=row["reference_price"], share=s.position_list_profit_share)
             await self._schedule(owned_id=owned_id, card_id=row["card_id"], title=row["title"], rarity=row["rarity"],
                                  price=price, reason=f"position (achetée {row['amount']})",
                                  at_peak=s.position_list_at_peak, bid_id=row["id"])

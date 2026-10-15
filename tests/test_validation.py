@@ -77,6 +77,10 @@ def test_list_price_is_cost_plus_margin():
     assert list_price(100, 0.15) == 115
     assert list_price(100, 0.15, fee=0.05) == 122  # la commission payée, il reste 15 % de marge
     assert list_price(3, 0.0) == 4                 # toujours au-dessus du prix d'achat
+    # Achats simulés du 15/10 : moitié du bénéfice attendu (Lukaku 481 → ~881, Le Parrain 150 → ~550).
+    assert list_price(481, 0.15, estimate=881, share=0.5) == 681
+    assert list_price(150, 0.15, estimate=550, share=0.5) == 350
+    assert list_price(100, 0.15, estimate=105, share=0.5) == 115  # tendance retombée : la marge minimale reste
 
 
 @pytest.mark.asyncio

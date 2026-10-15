@@ -151,3 +151,36 @@ async def test_missed_collection_card_counted_apart(tmp_path):
     counted = sniper.recap()[1].split(" : ", 1)[1].split(" · ")
     assert sorted(counted) == ["collection : pas relue à temps 1", "pas relue à temps 1"]
     await db.close()
+
+
+@pytest.mark.parametrize("simulate, open_positions", [([], 1), (["sniper"], 7)])
+@pytest.mark.asyncio
+async def test_live_sniper_ignores_simulated_positions_in_its_cap(tmp_path, simulate, open_positions):
+    """Passage en réel le 16/10 avec PORTFOLIO_MAX_POSITIONS=5 : les 6 positions simulées ne bloquent pas les achats."""
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3300})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=simulate, portfolio_max_positions=5,
+                                   sniper_max_bid=500)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    for i in range(6):
+        await db.record_bid(auction_id=f"sim{i}", card_id=f"c{i}", title=f"Carte {i}", rarity="L", is_shiny=False,
+                            amount=200, reference_price=600, reason="revente ~600 WB", night=False, dry_run=True,
+                            status="sim_won", end_at=now)
+    await db.record_bid(auction_id="real", card_id="cr", title="Réelle", rarity="L", is_shiny=False, amount=400,
+                        reference_price=900, reason="revente ~900 WB", night=False, dry_run=False, status="won",
+                        end_at=now)
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    portfolio = await sniper.portfolio(now)
+    assert portfolio.open_positions == open_positions and portfolio.can_open == (open_positions < 5)
+    await db.close()

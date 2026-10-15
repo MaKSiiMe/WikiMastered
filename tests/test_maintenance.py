@@ -80,7 +80,7 @@ async def test_unsettled_bids_count_until_settled(tmp_path):
     await bid("col", "simulated", 15, reason="collection : carte manquante ≤ 20")
     await bid("reglee", "sim_won", 50)                                   # réglée : compte comme position détenue
     await bid("perdue", "outbid", 70, dry_run=False)
-    assert await db.pending_bids() == {"positions": 3, "sim_cost": 115}
+    assert await db.pending_bids() == {"positions": 3, "real_positions": 1, "sim_cost": 115}
     await db.close()
 
 

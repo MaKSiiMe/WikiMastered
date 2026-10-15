@@ -613,10 +613,15 @@ class AuctionSniper(Worker):
         engaged_real = sum(amount for _, amount in self._leading.values())
         pending = await self.db.pending_bids()  # mises pas encore réglées, même après la fin de l'enchère
         cap, room = await self._sale_capacity(now)
+        # Mises réelles : seules les positions réelles comptent dans le plafond. Les positions simulées d'avant
+        # le passage en réel (6 le 16/10) bloqueraient sinon tout achat avec PORTFOLIO_MAX_POSITIONS=5.
+        live = self.settings.is_live("place_bid")
         return portfolio_state(
-            self.settings, balance=await self._current_balance(), held_count=held["count"],
+            self.settings, balance=await self._current_balance(),
+            held_count=held["real_count"] if live else held["count"],
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
-            engaged_real=engaged_real, engaged_sim=pending["sim_cost"], bot_engaged_count=pending["positions"],
+            engaged_real=engaged_real, engaged_sim=pending["sim_cost"],
+            bot_engaged_count=pending["real_positions"] if live else pending["positions"],
             max_positions=cap, sale_room=room,
         )
 
