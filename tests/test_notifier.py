@@ -107,12 +107,13 @@ def test_log_line_carries_fields_and_sections(caplog):
 
 
 def test_two_channels_main_keeps_money_and_alerts():
-    """« Beaucoup trop de messages » (16/10) : le salon principal garde l'argent et les alertes, le reste à part."""
+    """« Beaucoup trop de messages » (16/10) : le salon principal (le seul qui sonne) garde l'argent et les alertes ;
+    le salon d'activité, muet, garde le reste, réussites ordinaires comprises."""
     activity = "https://discord/activity"
     n = notifier(activity_webhook_url=activity)
     route = lambda level, title, **kw: n._webhook_for(_Message(level, title, "", **kw))  # noqa: E731
-    assert route(Level.SUCCESS, "Position achetée !", topic=Topic.SNIPER) == MAIN
-    assert route(Level.SUCCESS, "Revente réussie", topic=Topic.SALES) == MAIN
+    assert route(Level.SUCCESS, "Position achetée !", topic=Topic.SNIPER, important=True) == MAIN
+    assert route(Level.SUCCESS, "Revente réussie", topic=Topic.SALES, important=True) == MAIN
     assert route(Level.INFO, "Carte mise en vente", topic=Topic.SALES, important=True) == MAIN
     assert route(Level.WARNING, "Mise en vente refusée", topic=Topic.SALES) == MAIN
     assert route(Level.INFO, "Bilan du 16/10", topic=Topic.REPORT) == MAIN
@@ -120,6 +121,9 @@ def test_two_channels_main_keeps_money_and_alerts():
     assert route(Level.INFO, "Boosters ouverts", topic=Topic.PACKS) == activity
     assert route(Level.INFO, "Sniper : 5 enchères", topic=Topic.SNIPER) == activity
     assert route(Level.WARNING, "Récap des 4 dernières heures", topic=Topic.RECAP) == activity
+    assert route(Level.SUCCESS, "Collection : carte obtenue !", topic=Topic.COLLECTION) == activity
+    assert route(Level.SUCCESS, "Boosters ouverts : tirage remarquable !", topic=Topic.PACKS) == activity
+    assert route(Level.WARNING, "Serveurs WikiMasters instables", important=False) == activity
     # Sans salon d'activité : tout dans le principal, comme avant ; « off » : logs seulement.
     assert notifier()._webhook_for(_Message(Level.INFO, "Boosters ouverts", "", topic=Topic.PACKS)) == MAIN
     assert notifier(activity_webhook_url="off")._webhook_for(_Message(Level.INFO, "Boosters", "")) == ""

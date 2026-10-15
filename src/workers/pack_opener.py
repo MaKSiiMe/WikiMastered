@@ -157,7 +157,7 @@ class PackOpener(Worker):
                 resume = next_local(time(0, 0)) + timedelta(minutes=random.uniform(5, 30))
                 self.state.paused_until = resume.astimezone(timezone.utc)
                 self.notifier.warning("Paquets : limite quotidienne atteinte", f"Reprise vers {resume:%d/%m %H:%M}.",
-                                      live=self.live)
+                                      live=self.live, important=False)  # se règle seul
                 await self._save()
                 return
 

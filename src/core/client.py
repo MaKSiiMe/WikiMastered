@@ -538,7 +538,8 @@ class WikiMastersClient:
             )
         elif not limited and self._failures >= 3 and not self._degraded_alerted:
             self._degraded_alerted = True
-            self.notifier.warning("Serveurs WikiMasters instables", f"{reason} — backoff {delay:.0f} s")
+            self.notifier.warning("Serveurs WikiMasters instables", f"{reason} — backoff {delay:.0f} s",
+                                  important=False)  # se règle seul
         return delay
 
     def _route_backoff(self, name: str, retry_after: float) -> float:

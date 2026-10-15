@@ -101,7 +101,7 @@ La couleur indique l'importance :
 | 🟠 Orange | À surveiller | Position invendue, mise en vente refusée, erreurs répétées, bot arrêté |
 | 🔴 Rouge | Il faut agir | Session expirée, vérification humaine des paquets, enchère non confirmée |
 
-Les messages rouges partent dans `DISCORD_ALERT_WEBHOOK_URL` s'il est défini, avec la mention `DISCORD_MENTION`. Avec `DISCORD_ACTIVITY_WEBHOOK_URL` (un 2e salon), le salon principal ne garde que l'essentiel : alertes, achats, mises en vente et ventes réelles, cartes de collection gagnées, bilan du soir et récap du sniper ; les paquets, digests d'enchères, récaps périodiques, tendances et le simulé vont dans le salon d'activité (`off` : logs seulement).
+Les messages rouges partent dans `DISCORD_ALERT_WEBHOOK_URL` s'il est défini, avec la mention `DISCORD_MENTION`. Avec `DISCORD_ACTIVITY_WEBHOOK_URL` (un 2e salon), le salon principal (à laisser sonner) ne garde que l'essentiel : alertes, achats, mises en vente et ventes réelles, bilan du soir et récap du sniper ; tout le reste va dans le salon d'activité (à mettre en sourdine) : paquets et tirages, cartes de collection gagnées, succès, digests d'enchères, récaps périodiques, tendances, simulé (`off` : logs seulement).
 
 **Ce qui n'envoie pas de message à chaque fois :**
 - les enchères : un résumé toutes les `NOTIFY_DIGEST_MINUTES` (60) ; `NOTIFY_EACH_BID=true` envoie un message par enchère ;
