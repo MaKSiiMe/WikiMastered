@@ -33,6 +33,7 @@ from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until
 from src.recap import recap_loop
+from src.sniper_report import sniper_report
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
 from src.workers.achievements import AchievementsWorker
@@ -194,6 +195,26 @@ async def report_loop(ctx: Context) -> None:
             log.exception("Entretien de la base impossible")
 
 
+async def sniper_report_loop(ctx: Context) -> None:
+    """Chaque matin, le récap de toutes les enchères misées par le sniper sur les dernières heures."""
+    while True:
+        await sleep_until(next_local(ctx.settings.sniper_report_time))
+        try:
+            await send_sniper_report(ctx, ctx.settings.sniper_report_hours)
+        except Exception:  # noqa: BLE001 - le bot continue sans ce récap
+            log.exception("Récap du sniper impossible")
+
+
+async def send_sniper_report(ctx: Context, hours: float, *, send: bool = True) -> str:
+    until = datetime.now(timezone.utc)
+    since = until - timedelta(hours=hours)
+    if send:
+        title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.sale_fee_pct)
+        ctx.notifier.info(title, summary, topic=Topic.SNIPER, sections=sections)
+    title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.sale_fee_pct, limit=None)
+    return "\n\n".join([f"{title}\n{summary}", *(f"== {name} ==\n{body}" for name, body in sections)])
+
+
 async def heartbeat(ctx: Context) -> None:
     path = ctx.settings.data_dir / "heartbeat"
     while True:
@@ -256,6 +277,8 @@ async def run_bot(settings: Settings) -> None:
         jobs += [("report", lambda: report_loop(ctx)), ("heartbeat", lambda: heartbeat(ctx))]
         if settings.recap_interval_hours > 0:
             jobs.append(("recap", lambda: recap_loop(ctx, workers, started_at)))
+        if settings.enable_sniper and settings.sniper_report_hours > 0:
+            jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
         tasks = [asyncio.create_task(supervise(name, start, ctx.notifier), name=name) for name, start in jobs]
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -394,6 +417,8 @@ def main(argv: list[str] | None = None) -> None:
     tr.add_argument("--days", type=int, default=7)
     sim = sub.add_parser("reset-simulation", help="efface les mises et ventes simulées (sans --apply : compte)")
     sim.add_argument("--apply", action="store_true", help="efface vraiment")
+    snr = sub.add_parser("sniper-report", help="toutes les enchères misées sur les N dernières heures (lecture seule)")
+    snr.add_argument("--hours", type=float, default=24)
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
     inv.add_argument("action", choices=["scan", "report", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
@@ -432,6 +457,11 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_trends())
     elif command == "reset-simulation":
         asyncio.run(reset_simulation(settings, args.apply))
+    elif command == "sniper-report":
+        async def _sniper_report() -> None:
+            async with build_context(settings) as ctx:
+                print(await send_sniper_report(ctx, args.hours, send=False))
+        asyncio.run(_sniper_report())
     elif command == "inventory":
         async def _inventory() -> None:
             async with build_context(settings) as ctx:

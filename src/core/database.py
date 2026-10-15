@@ -115,6 +115,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("observed_sales", "seller_id", "TEXT"),
     ("observed_sales", "buyer_id", "TEXT"),
     ("observed_sales", "base_amount", "INTEGER"),
+    # Récap de nuit du sniper : plafond de la mise, prix final payé par le gagnant.
+    ("bids", "ceiling", "INTEGER"),
+    ("bids", "final_price", "INTEGER"),
 ]
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
 WASH_PAIR_MIN = 2
@@ -268,12 +271,28 @@ class Database:
     # ------------------------------------------------------------- enchères
     async def record_bid(self, *, auction_id: str, card_id: str, title: str, rarity: str | None,
                          is_shiny: bool, amount: int, reference_price: float | None, reason: str,
-                         night: bool, dry_run: bool, status: str, end_at: datetime, note: str = "") -> int:
+                         night: bool, dry_run: bool, status: str, end_at: datetime, note: str = "",
+                         ceiling: int | None = None) -> int:
         return await self._exec(
             "INSERT INTO bids (auction_id, card_id, title, rarity, is_shiny, amount, reference_price, reason, "
-            "night, dry_run, status, end_at, placed_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "night, dry_run, status, end_at, placed_at, note, ceiling) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (auction_id, card_id, title, rarity, int(is_shiny), amount, reference_price, reason,
-             int(night), int(dry_run), status, iso(end_at), iso(utcnow()), note),
+             int(night), int(dry_run), status, iso(end_at), iso(utcnow()), note, ceiling),
+        )
+
+    async def bids_since(self, since: datetime) -> list[aiosqlite.Row]:
+        """Dernière mise de chaque enchère misée depuis `since`, avec son prix final (relu au règlement, sinon
+        vu au marché) et la dernière revente de la carte gagnée."""
+        return await self._all(
+            "SELECT b.*, (SELECT COUNT(*) FROM bids x WHERE x.auction_id = b.auction_id) AS n_bids, "
+            "COALESCE(b.final_price, (SELECT price FROM observed_sales o WHERE o.auction_id = b.auction_id)) AS final, "
+            "(SELECT current_bid FROM auctions_seen s WHERE s.auction_id = b.auction_id) AS last_seen, "
+            "l.status AS listing_status, l.base_amount AS list_price, l.post_at AS list_post_at "
+            "FROM bids b LEFT JOIN listings l ON l.id = (SELECT MAX(id) FROM listings WHERE bid_id = b.id) "
+            "WHERE b.id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id) "
+            "AND (SELECT MIN(placed_at) FROM bids WHERE auction_id = b.auction_id) >= ? ORDER BY b.placed_at",
+            (iso(since),),
         )
 
     async def update_bid(self, bid_id: int, **fields: Any) -> None:

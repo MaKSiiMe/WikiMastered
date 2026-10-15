@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     discord_mention: str = ""
     daily_report_time: time = time(23, 0)
     recap_interval_hours: int = 4  # récap des workers toutes les N heures (0 = aucun)
+    # Récap du sniper : chaque enchère misée sur les N dernières heures (gagnées, perdues, gain latent et manqué).
+    sniper_report_time: time = time(8, 0)
+    sniper_report_hours: int = 24  # 0 = pas de récap du sniper
     notify_each_bid: bool = False
     notify_digest_minutes: float = 60.0
     # Messages des achats et reventes simulés (sniper de test) ; false : seulement dans les logs, le récap et le bilan.
