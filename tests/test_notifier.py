@@ -88,3 +88,13 @@ def test_card_links():
     assert Card(id="1").page_url is None
     assert highlight_line(Card(id="1", wikipedia_title="Céline Dion", rarity="UR"), True) == \
         "**UR** ✨ Shiny — [Céline Dion](https://fr.wikipedia.org/wiki/C%C3%A9line_Dion)"
+
+
+def test_log_line_carries_fields_and_sections(caplog):
+    caplog.set_level("INFO")
+    n = DiscordNotifier("", dry_run=False)
+    n.info("Boosters ouverts", boosters=7, cartes=35)
+    n.warning("Récap", "Depuis 08:00", sections=[("À vérifier", "• vérification humaine en attente")])
+    lines = [r.getMessage() for r in caplog.records]
+    assert "[INFO] Boosters ouverts boosters : 7, cartes : 35" in lines
+    assert "[WARNING] Récap Depuis 08:00 | À vérifier : • vérification humaine en attente" in lines

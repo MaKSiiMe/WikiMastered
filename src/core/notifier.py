@@ -90,7 +90,11 @@ class DiscordNotifier:
              topic: Topic = Topic.SYSTEM, sections: list[tuple[str, str]] | None = None,
              thumbnail: str | None = None, url: str | None = None, **fields: Any) -> None:
         log_fn = log.warning if level in (Level.WARNING, Level.CRITICAL) else log.info
-        log_fn("[%s] %s %s", level.name, title, description.replace("\n", " | "))
+        # Les logs reprennent tout le message (champs et blocs), pas seulement le titre.
+        parts = [description] if description else []
+        parts += [", ".join(f"{k} : {v}" for k, v in fields.items() if v is not None)] if fields else []
+        parts += [f"{name} : {body}" for name, body in sections or []]
+        log_fn("[%s] %s %s", level.name, title, " | ".join(p for p in parts if p).replace("\n", " | "))
         if not self._webhook:
             return
         try:
