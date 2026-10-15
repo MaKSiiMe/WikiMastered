@@ -19,6 +19,7 @@ import contextlib
 import logging
 import signal
 import sys
+from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 
@@ -198,6 +199,31 @@ async def heartbeat(ctx: Context) -> None:
         await asyncio.sleep(30)
 
 
+SUPERVISE_BASE_SECONDS = 30  # 1re relance d'une tâche arrêtée, doublée à chaque nouvel arrêt (10 min au plus)
+
+
+async def supervise(name: str, start: Callable[[], Awaitable[None]], notifier) -> None:
+    """Fait tourner une tâche et la relance si elle s'arrête : un worker en panne ne coupe jamais les autres."""
+    failures = 0
+    while True:
+        started = asyncio.get_running_loop().time()
+        try:
+            await start()
+            reason = "terminée sans raison"
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - la tâche est relancée, les autres continuent
+            log.exception("La tâche %s s'est arrêtée", name)
+            reason = f"{type(exc).__name__} : {exc}"[:300]
+        failures = 1 if asyncio.get_running_loop().time() - started > 3600 else failures + 1  # relance rapide après 1 h stable
+        delay = min(600, SUPERVISE_BASE_SECONDS * 2 ** (failures - 1))
+        log.error("tâche %s relancée dans %d s (%s)", name, delay, reason)
+        if failures in (1, 5):
+            notifier.critical(f"{name} : tâche arrêtée, relancée", f"{reason}\nLes autres workers continuent. "
+                              f"Nouvel essai dans {delay} s.")
+        await asyncio.sleep(delay)
+
+
 async def run_bot(settings: Settings) -> None:
     async with build_context(settings) as ctx:
         workers: list[Worker] = []
@@ -221,22 +247,20 @@ async def run_bot(settings: Settings) -> None:
         log.info("Démarrage en mode %s — workers : %s — joueur %s", mode, names, ctx.client.user_id or "?")
         ctx.notifier.info("Bot démarré", f"Mode {mode}\nWorkers : {names}\nSession : {ctx.client.session_status()}")
 
-        tasks = [asyncio.create_task(w.run(), name=w.name) for w in workers]
-        tasks += [asyncio.create_task(report_loop(ctx), name="report"),
-                  asyncio.create_task(heartbeat(ctx), name="heartbeat")]
-        if settings.recap_interval_hours > 0:  # une tâche terminée arrête le bot : pas de tâche sans récap
-            tasks.append(asyncio.create_task(recap_loop(ctx, workers, datetime.now(timezone.utc)), name="recap"))
+        # Chaque tâche est supervisée à part : si l'une plante, elle est relancée et les autres continuent.
+        started_at = datetime.now(timezone.utc)
+        jobs: list[tuple[str, Callable[[], Awaitable[None]]]] = [(w.name, w.run) for w in workers]
+        jobs += [("report", lambda: report_loop(ctx)), ("heartbeat", lambda: heartbeat(ctx))]
+        if settings.recap_interval_hours > 0:
+            jobs.append(("recap", lambda: recap_loop(ctx, workers, started_at)))
+        tasks = [asyncio.create_task(supervise(name, start, ctx.notifier), name=name) for name, start in jobs]
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             with contextlib.suppress(NotImplementedError):
                 loop.add_signal_handler(sig, stop.set)
 
-        stopper = asyncio.create_task(stop.wait())
-        done, _ = await asyncio.wait([stopper, *tasks], return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            if task is not stopper and task.exception():
-                log.error("La tâche %s s'est arrêtée", task.get_name(), exc_info=task.exception())
+        await stop.wait()
         log.info("Arrêt en cours…")
         for task in tasks:
             task.cancel()

@@ -108,7 +108,11 @@ async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
             continue
         lines = activity(names[0], stats)
         for worker in present:
-            lines += worker.recap()
+            try:
+                lines += worker.recap()
+            except Exception:  # noqa: BLE001 - pas encore initialisé, ou bogue : le récap des autres part quand même
+                log.exception("récap de %s impossible", worker.name)
+                lines.append(f"{worker.name} : activité indisponible")
             state, problem = health(worker, now, ctx.client.session_ok)
             lines.append(state if len(present) == 1 else f"{worker.name} : {state}")
             if problem:
