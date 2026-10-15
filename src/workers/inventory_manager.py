@@ -476,11 +476,11 @@ class InventoryManager(Worker):
             return
         if row["relist_count"] < self.settings.position_max_relists:
             price = max(1, round(row["base_amount"] * self.settings.position_relist_discount))
+            self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
             await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
                                  rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
                                  at_peak=self.settings.position_list_at_peak, bid_id=bid["id"],
                                  relist_count=row["relist_count"] + 1)
-            self.log.info("%s invendue, remise en vente à %d WB", label, price)
         else:
             await self.db.close_position(bid["id"], None)
             self.notifier.warning("Position invendue", f"{label} : invendue après "
