@@ -1049,7 +1049,7 @@ class AuctionSniper(Worker):
             else:
                 self.log.info("achat simulé remporté : %s (%s), %d WB", row["title"], row["rarity"], row["amount"])
         else:
-            self.notifier.success("Position achetée !", name, **look, **fields)
+            self.notifier.success("Position achetée !", name, important=True, **look, **fields)
 
     async def _reconcile(self) -> None:
         """Mises au résultat incertain (réponse perdue ou inattendue) : relues sur le serveur, jamais rejouées."""

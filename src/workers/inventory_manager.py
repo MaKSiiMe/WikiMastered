@@ -511,7 +511,7 @@ class InventoryManager(Worker):
                 if bid:
                     await self.db.close_position(bid["id"], price)
                     self.notifier.success("Revente réussie", f"{label} : achetée {bid['amount']}, vendue {price} WB "
-                                          f"({price - bid['amount']:+d})")
+                                          f"({price - bid['amount']:+d})", important=True)
                 continue
             await self.db.update_listing(row["id"], status="unsold", settled_at=utcnow())
             await self._unsold(row, bid, label)

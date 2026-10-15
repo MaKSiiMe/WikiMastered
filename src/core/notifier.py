@@ -59,15 +59,19 @@ class _Message:
     sections: list[tuple[str, str]] = field(default_factory=list)  # blocs pleine largeur, dans l'ordre
     thumbnail: str | None = None
     url: str | None = None
-    important: bool = False  # message d'information qui va quand même dans le salon principal
+    important: bool | None = None  # True : salon principal ; False : activité ; None : selon le niveau
 
     @property
     def main_channel(self) -> bool:
-        """Salon principal : alertes, réussites (achats, ventes, cartes gagnées), bilan du soir, et les messages
-        marqués importants. Le reste (paquets, digests, récap périodique, tendances, simulé) : salon d'activité."""
-        if self.important or self.topic is Topic.REPORT:
+        """Salon principal (le seul qui sonne) : ce qui touche à ton argent (achats, mises en vente, ventes,
+        marqués `important`), les alertes (avertissements, critiques) et le bilan. Tout le reste, réussites
+        comprises (cartes de collection gagnées, tirages, succès), va dans le salon d'activité, consulté de temps
+        en temps. Un avertissement qui se règle seul est marqué `important=False`."""
+        if self.important is not None:
+            return self.important
+        if self.topic is Topic.REPORT:
             return True
-        return self.level is not Level.INFO and self.topic is not Topic.RECAP
+        return self.level in (Level.WARNING, Level.CRITICAL) and self.topic is not Topic.RECAP
 
 
 # DISCORD_ACTIVITY_WEBHOOK_URL=off : les messages d'activité ne vont que dans les logs.
@@ -104,7 +108,8 @@ class DiscordNotifier:
 
     def send(self, level: Level, title: str, description: str = "", *, live: bool = False,
              topic: Topic = Topic.SYSTEM, sections: list[tuple[str, str]] | None = None,
-             thumbnail: str | None = None, url: str | None = None, important: bool = False, **fields: Any) -> None:
+             thumbnail: str | None = None, url: str | None = None, important: bool | None = None,
+             **fields: Any) -> None:
         log_fn = log.warning if level in (Level.WARNING, Level.CRITICAL) else log.info
         # Les logs reprennent tout le message (champs et blocs), pas seulement le titre.
         parts = [description] if description else []
