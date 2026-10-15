@@ -60,9 +60,12 @@ def activity(name: str, stats: dict[str, int]) -> list[str]:
         return lines
     if name == "inventory":
         lines = [f"Mises en vente : {stats['posted']} · vendues {stats['sold']} ({stats['sold_wb']} WB) · "
-                 f"invendues {stats['unsold']}"]
+                 f"sans acheteur {stats['unsold']}"]
         if stats["sim_sold"] or stats["sim_unsold"]:
-            lines.append(f"Reventes simulées : {stats['sim_sold']} vendue(s), {stats['sim_unsold']} invendue(s)")
+            # « Sans acheteur » : une vente terminée sans mise, remise en vente ou carte gardée (le bilan ne compte
+            # que les cartes gardées, d'où « 8 invendue(s) » au récap et « 0 gardées invendues » au bilan, le 16/10).
+            lines.append(f"Reventes simulées : {stats['sim_sold']} vendue(s), {stats['sim_unsold']} vente(s) sans "
+                         "acheteur (remise en vente ou carte gardée)")
         return lines
     if name == "packs":
         return [f"{stats['boosters']} booster(s), {stats['cards']} carte(s), {stats['notable']} remarquable(s)"]

@@ -75,3 +75,13 @@ async def test_recap_flags_worker_waiting_for_you(tmp_path):
     assert problem and "packs : vérification humaine en attente" in blocks["À vérifier"]
     assert "⏸️ vérification humaine en attente" in blocks["🎴 Paquets"] and "✅" not in blocks["🎴 Paquets"]
     await db.close()
+
+
+def test_inventory_lines_say_what_unsold_means():
+    """Récap du 16/10 : « 8 invendue(s) » contre « 0 gardées invendues » au bilan, sans contradiction réelle."""
+    from src.recap import activity
+
+    stats = {"posted": 0, "sold": 0, "sold_wb": 0, "unsold": 1, "sim_sold": 5, "sim_unsold": 8}
+    assert activity("inventory", stats) == [
+        "Mises en vente : 0 · vendues 0 (0 WB) · sans acheteur 1",
+        "Reventes simulées : 5 vendue(s), 8 vente(s) sans acheteur (remise en vente ou carte gardée)"]

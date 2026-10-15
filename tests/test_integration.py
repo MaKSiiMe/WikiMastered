@@ -394,13 +394,13 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
     assert (await db.last_bid(auction_id))["status"] == "sim_won"
     assert (await db.positions_summary())["count"] == 1
 
-    await inv.manage_positions()              # revente programmée au prix estimé
+    await inv.manage_positions()              # revente programmée : prix d'achat + 15 %
     await db._exec("UPDATE listings SET post_at = ?", ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),))
     await inv.post_due_listings()
     listing = (await db._all("SELECT * FROM listings"))[0]
-    assert listing["status"] == "simulated" and listing["base_amount"] == 400 and listing["bid_id"]
+    assert listing["status"] == "simulated" and listing["base_amount"] == 115 and listing["bid_id"]
     await db._exec("UPDATE listings SET target_end = ?", ((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),))
-    await inv.settle_listings()               # revente simulée : position close, bénéfice +300
+    await inv.settle_listings()               # enchère montée au prix du marché (400) : bénéfice +300
     report = await db.report(datetime.now(timezone.utc) - timedelta(days=1))
     assert report["profit_simulated"] == 300 and report["positions_held"] == 0
     assert ("INFO", "Revente simulée") in notifier.sent

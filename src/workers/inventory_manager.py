@@ -3,7 +3,8 @@
 - Vente : doublons dont la cote moyenne (même rareté) dépasse SELL_MIN_VALUE, même C/PC.
   Fin d'enchère programmée dans LISTING_END_WINDOW (20:00-22:30, Paris).
 - Positions : chaque carte achetée par le sniper est remise en vente en priorité (avant
-  les doublons), au prix estimé ; invendue, elle est remise à prix réduit, puis gardée.
+  les doublons). C'est une enchère : le prix de départ est le prix d'achat + POSITION_LIST_MARGIN,
+  les joueurs le font monter. Invendue, elle repart à −10 % sans passer sous le prix d'achat, puis est gardée.
   Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
 - Défausse : doublons sans valeur, seulement si aucun palier de succès de taille de
   collection n'est proche (ACHIEVEMENT_MILESTONES), par lots de 50 [WR discard.js].
@@ -15,6 +16,7 @@ automatiques ne tournent que si AUTO_LIST / AUTO_DISCARD sont activés.
 
 from __future__ import annotations
 
+import math
 import random
 import statistics
 from collections import defaultdict
@@ -37,6 +39,12 @@ SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une r
 
 
 # ---------------------------------------------------------------- logique pure
+def list_price(cost: int, margin: float, fee: float = 0.0) -> int:
+    """Prix de départ d'une revente : le prix d'achat + `margin`, une fois la commission du site payée.
+    Toujours au-dessus du prix d'achat (au moins +1 WB)."""
+    return max(cost + 1, math.ceil(cost * (1 + margin) / max(0.01, 1 - fee)))
+
+
 @dataclass(frozen=True)
 class SaleCandidate:
     owned: OwnedCard
@@ -302,14 +310,7 @@ class InventoryManager(Worker):
             owned_id = f"sim-{row['id']}" if row["dry_run"] else await self._find_copy(row)
             if not owned_id:
                 continue
-            try:
-                quote = await self.ctx.prices.quote(row["card_id"], row["rarity"], wait=False,
-                                                    shiny=bool(row["is_shiny"]))
-                estimate = quote.average
-            except (RateLimited, ApiError):
-                estimate = None
-            estimate = estimate or row["reference_price"] or row["amount"]
-            price = max(round(estimate * s.position_list_ratio), row["amount"] + 1)
+            price = list_price(row["amount"], s.position_list_margin, s.sale_fee_pct)
             await self._schedule(owned_id=owned_id, card_id=row["card_id"], title=row["title"], rarity=row["rarity"],
                                  price=price, reason=f"position (achetée {row['amount']})",
                                  at_peak=s.position_list_at_peak, bid_id=row["id"])
@@ -428,16 +429,16 @@ class InventoryManager(Worker):
             bid = await self.db.get_bid(row["bid_id"]) if row["bid_id"] else None
             label = f"{row['title']} ({row['rarity']})"
             if row["status"] == "simulated":
-                if not await self._simulated_sale(row, bid):
+                price = await self._simulated_sale(row, bid)
+                if price is None:
                     await self.db.update_listing(row["id"], status="sim_unsold", settled_at=utcnow())
                     await self._unsold(row, bid, label)
                     continue
-                await self.db.update_listing(row["id"], status="sim_sold", sale_price=row["base_amount"],
-                                             settled_at=utcnow())
+                await self.db.update_listing(row["id"], status="sim_sold", sale_price=price, settled_at=utcnow())
                 if bid:
-                    await self.db.close_position(bid["id"], row["base_amount"])
-                    self.notifier.info("Revente simulée", f"{label} : achetée {bid['amount']}, vendue "
-                                       f"{row['base_amount']} WB ({row['base_amount'] - bid['amount']:+d})")
+                    await self.db.close_position(bid["id"], price)
+                    self.notifier.info("Revente simulée", f"{label} : achetée {bid['amount']}, départ "
+                                       f"{row['base_amount']}, vendue {price} WB ({price - bid['amount']:+d})")
                 continue
             if not row["auction_id"]:
                 await self.db.update_listing(row["id"], status="ended", settled_at=utcnow())
@@ -460,22 +461,26 @@ class InventoryManager(Worker):
             await self.db.update_listing(row["id"], status="unsold", settled_at=utcnow())
             await self._unsold(row, bid, label)
 
-    async def _simulated_sale(self, row, bid) -> bool:
-        """Une vente simulée aboutit si la carte s'est vendue au moins à ce prix de départ récemment.
+    async def _simulated_sale(self, row, bid) -> int | None:
+        """Prix de vente simulé : la médiane des ventes observées ces derniers jours, si elle atteint le prix
+        de départ (les joueurs font monter l'enchère jusqu'au prix du marché).
 
         Personne ne mise sous le prix de départ : si les ventes observées de ces derniers jours
-        sont plus basses (tendance retombée) ou absentes, la vente simulée reste invendue."""
+        sont plus basses (tendance retombée) ou absentes, la vente simulée reste invendue (None)."""
         prices = await self.db.observed_prices_since(row["card_id"], utcnow() - SIM_MARKET_WINDOW,
                                                      self.settings.price_recent_sales, rarity=row["rarity"],
                                                      shiny=bool(bid["is_shiny"]) if bid else None)
-        return bool(prices) and statistics.median(prices) >= row["base_amount"]
+        market = round(statistics.median(prices)) if prices else 0
+        return market if prices and market >= row["base_amount"] else None
 
     async def _unsold(self, row, bid, label: str) -> None:
         """Invendue : remise en vente à prix réduit, puis carte gardée (réel comme simulé)."""
         if not bid:
             return
         if row["relist_count"] < self.settings.position_max_relists:
-            price = max(1, round(row["base_amount"] * self.settings.position_relist_discount))
+            # Jamais sous le prix d'achat (commission comprise) : une revente à perte n'a pas d'intérêt.
+            floor = list_price(bid["amount"], 0.0, self.settings.sale_fee_pct)
+            price = max(floor, round(row["base_amount"] * self.settings.position_relist_discount))
             self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
             await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
                                  rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
