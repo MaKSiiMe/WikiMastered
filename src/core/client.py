@@ -548,6 +548,14 @@ class WikiMastersClient:
         log.warning("Route %s en pause %.0f s (%s, échec #%d) ; les autres routes continuent",
                     name, delay, cause, failures)
 
+    def _fail_route_or_all(self, name: str, cause: str, retry_after: float = 0.0) -> None:
+        """Panne d'écriture : isolée (une seule route, sans autre panne en cours), seule cette route attend
+        (ex. ouverture de paquets en panne : le sniper continue) ; sinon, pause générale."""
+        if self._failures == 0 and self._server_error_route in (None, name):
+            self._route_server_error(name, cause)
+        else:
+            self._backoff(f"{name}: {cause}", limited=False, retry_after=retry_after)
+
     def route_paused_for(self, name: str) -> float:
         until, _ = self._route_pause.get(name, (0.0, 0))
         return max(0.0, until - time.monotonic())
@@ -737,13 +745,15 @@ class WikiMastersClient:
         if not (self.settings.is_live(name) if live is None else live):
             log.info("[DRY RUN] %s %s %s", req.method, req.url, json.dumps(req.json, ensure_ascii=False))
             return MutationResult(0, None, dry_run=True)
+        if self.route_paused_for(name) > 0:
+            raise RateLimited(name)  # route en pause (erreur ou limite) : rien n'est envoyé
         try:
             resp = await self._send(req)
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
             self._backoff(f"{name}: {type(exc).__name__}", limited=False)
             raise ApiError(0, None, name, "requête non envoyée (connexion impossible)") from exc
         except httpx.HTTPError as exc:
-            self._backoff(f"{name}: {type(exc).__name__}", limited=False)
+            self._fail_route_or_all(name, type(exc).__name__)
             raise UncertainMutation(f"{name}: réponse perdue ({type(exc).__name__})") from exc
 
         payload = _json_or_none(resp)
@@ -775,8 +785,7 @@ class WikiMastersClient:
                           retry_after=_retry_after_seconds(resp))
             raise RateLimited(name)
         if kind == "server":
-            self._backoff(f"{name}: HTTP {resp.status_code}", limited=False,
-                          retry_after=_retry_after_seconds(resp))
+            self._fail_route_or_all(name, f"HTTP {resp.status_code}", _retry_after_seconds(resp))
             raise UncertainMutation(f"{name}: HTTP {resp.status_code}, résultat à vérifier")
         return MutationResult(resp.status_code, payload)
 
