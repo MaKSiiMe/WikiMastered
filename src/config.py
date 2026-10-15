@@ -176,6 +176,10 @@ class Settings(BaseSettings):
     # Revente d'une position : c'est une enchère, les joueurs font monter le prix. Le prix de départ est le prix
     # d'achat + cette marge (commission comprise) ; jamais sous le prix d'achat, même remise en vente.
     position_list_margin: float = 0.15
+    # Prix de départ relevé : prix d'achat + cette part du bénéfice attendu à l'achat. Les enchères montent peu
+    # (relevé du 16/10 : prix final / prix de départ, médiane ×1,11 en UR, ×1,23 en L ; 41 % et 29 % sans
+    # surenchère) et les 5 places de vente sont rares : un départ bas vendrait presque au prix d'achat.
+    position_list_profit_share: float = 0.5
     position_list_at_peak: bool = True    # fin de vente dans LISTING_END_WINDOW
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2

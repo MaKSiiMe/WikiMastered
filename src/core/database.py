@@ -345,9 +345,10 @@ class Database:
         """Positions détenues (achetées, pas encore revendues) : nombre et coût, réelles / simulées."""
         rows = await self._all(f"SELECT dry_run, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS cost "
                                f"FROM bids WHERE {HELD} GROUP BY dry_run")
-        out = {"count": 0, "real_cost": 0, "sim_cost": 0}
+        out = {"count": 0, "real_count": 0, "real_cost": 0, "sim_cost": 0}
         for r in rows:
             out["count"] += r["n"]
+            out["real_count"] += 0 if r["dry_run"] else r["n"]
             out["sim_cost" if r["dry_run"] else "real_cost"] += r["cost"]
         return out
 
@@ -364,14 +365,16 @@ class Database:
         """Mises du bot pas encore réglées, enchère finie ou non : elles comptent tant que leur résultat
         n'est pas relu (sinon, entre la fin de l'enchère et ce relevé, elles échappent aux plafonds).
 
-        `positions` : mises de positions (hors collection) ; `sim_cost` : WikiBidous des mises simulées."""
+        `positions` : mises de positions (hors collection), `real_positions` les réelles seulement ;
+        `sim_cost` : WikiBidous des mises simulées."""
         row = await self._one(
             "SELECT COALESCE(SUM(reason NOT LIKE 'collection%'), 0) AS positions, "
+            "COALESCE(SUM(reason NOT LIKE 'collection%' AND dry_run = 0), 0) AS real_positions, "
             "COALESCE(SUM(CASE WHEN status = 'simulated' THEN amount ELSE 0 END), 0) AS sim_cost "
             "FROM bids b WHERE status IN ('placed', 'simulated', 'uncertain') "
             "AND id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)")
-        return {"positions": int(row["positions"]), "sim_cost": int(row["sim_cost"])} if row else \
-            {"positions": 0, "sim_cost": 0}
+        return {"positions": int(row["positions"]), "real_positions": int(row["real_positions"]),
+                "sim_cost": int(row["sim_cost"])} if row else {"positions": 0, "real_positions": 0, "sim_cost": 0}
 
     # --------------------------------------------------------------- ventes
     async def schedule_listing(self, *, owned_card_id: str, card_id: str, title: str, rarity: str | None,
