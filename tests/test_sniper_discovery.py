@@ -193,3 +193,72 @@ async def test_unread_collection_target_is_logged(tmp_path, caplog):
     sniper._prune(now)
     assert any("11 septembre" in r.message and "pas relue à temps" in r.message for r in caplog.records)
     await db.close()
+
+
+def _bare_handler(calls, market):
+    def handler(request):
+        path, params = request.url.path, request.url.params
+        calls.append(f"{request.method} {path}")
+        if path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if "mine" in params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        if path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        if path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": [], "hasMore": False})
+        if path.startswith("/api/marketplace/"):
+            return httpx.Response(200, json={"auction": market[path.rsplit("/", 1)[1]]})
+        raise AssertionError(f"route inattendue {request.url}")
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_collection_guard_holds_slow_work(tmp_path):
+    """Une carte de collection entre dans sa fenêtre de mise dans 5 s : la revente déjà dans la sienne attend,
+    le sniper se réveille à l'entrée de la carte (15/10 : « 7 octobre à 10 WB … pas relue à temps »)."""
+    now = datetime.now(timezone.utc)
+    market = {"u1": sale("u1", "Jean Racine", "UR", 15), "d1": sale("d1", "7 octobre", "UR", 25, base=10)}
+    calls = []
+    client, notifier = make_client(tmp_path, _bare_handler(calls, market), sniper_resale_rarities=["UR", "L"],
+                                   collection_sets=["jours"], collection_max_price=50)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    await db.kv_set("collection", {"owned": [], "missing": ["7 octobre"], "total": 366})
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    for aid, data in market.items():
+        sniper._targets[aid] = Target(Auction.model_validate(data), now - timedelta(seconds=30))
+    calls.clear()
+    delay = await sniper.step()
+    # Seulement solde et places de vente mis en cache : ni relecture de u1, ni repérage.
+    assert sorted(calls) == ["GET /api/marketplace/mine", "GET /api/wikibidous"]
+    assert 4 < delay < 6
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_late_discovery_goes_before_resale_rereads(tmp_path):
+    now = datetime.now(timezone.utc)
+    market = {"u1": sale("u1", "Jean Racine", "UR", 15)}
+    calls = []
+    client, notifier = make_client(tmp_path, _bare_handler(calls, market), sniper_resale_rarities=["UR"])
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    sniper._targets["u1"] = Target(Auction.model_validate(market["u1"]), now - timedelta(seconds=30))
+    sniper._last_read = {("recent", "UR"): now - timedelta(seconds=5), ("ended", "UR"): now}
+    calls.clear()
+    await sniper.step()  # repérage à jour : la revente est relue
+    assert "GET /api/marketplace/u1" in calls
+    sniper._targets["u1"] = Target(Auction.model_validate(market["u1"]), now - timedelta(seconds=30))
+    sniper._last_read[("recent", "UR")] = now - timedelta(seconds=25)  # plus de deux fois la période (10 s)
+    calls.clear()
+    await sniper.step()
+    assert calls.count("GET /api/marketplace") == 1 and "GET /api/marketplace/u1" not in calls
+    await db.close()
