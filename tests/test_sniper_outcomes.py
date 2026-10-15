@@ -10,7 +10,8 @@ import pytest
 from src.core.api import WikiMastersAPI
 from src.core.database import Database
 from src.core.pricing import PriceService
-from src.workers.auction_sniper import AuctionSniper
+from src.core.models import Auction
+from src.workers.auction_sniper import AuctionSniper, Target
 from src.workers.base import Context
 from src.workers.collection import progress_lines
 from tests.test_integration import make_client
@@ -42,7 +43,10 @@ async def start(tmp_path, market: dict, replies: list, state: dict | None = None
         if path.endswith("/sales"):
             return httpx.Response(404, json={})
         if path.startswith("/api/marketplace/"):
-            return httpx.Response(200, json={"auction": market[path.rsplit("/", 1)[1]]})
+            aid = path.rsplit("/", 1)[1]
+            if aid not in market:
+                return httpx.Response(404, json={"error": "Enchère introuvable"})
+            return httpx.Response(200, json={"auction": market[aid]})
         if path == "/api/marketplace":
             return httpx.Response(200, json={"auctions": list(market.values()), "hasMore": False})
         raise AssertionError(f"route inattendue {request.url}")
@@ -116,4 +120,34 @@ async def test_won_collection_card_counts_at_once(tmp_path):
     assert saved["missing"] == ["15 octobre"] and "14 octobre" in saved["owned"]
     lines = progress_lines(saved, {}, datetime.now(timezone.utc))
     assert lines[0] == "Jours de l'année : 2/366 (0,5 %)" and lines[1].startswith("+1 en 7 jours : 14 octobre")
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_vanished_auction_closes_the_bid_without_failing(tmp_path):
+    """Récap du 16/10 à 00:00 : « auction_detail: Enchère introuvable » faisait échouer le passage du sniper."""
+    sniper, db, notifier = await start(tmp_path, {}, [])
+    ended = datetime.now(timezone.utc) - timedelta(minutes=5)
+    for aid, dry_run, status in (("gone-sim", True, "simulated"), ("gone-real", False, "placed")):
+        await db.record_bid(auction_id=aid, card_id="card-x", title="Le Parrain", rarity="L", is_shiny=False,
+                            amount=150, reference_price=550, reason="revente ~550 WB", night=False,
+                            dry_run=dry_run, status=status, end_at=ended)
+    await sniper._settle()  # aucune exception
+    assert (await db.last_bid("gone-sim"))["status"] == "sim_lost"
+    assert (await db.last_bid("gone-real"))["status"] == "lost"
+    assert notifier.sent.count(("WARNING", "Mise à vérifier")) == 1  # seulement pour la mise réelle
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_missed_collection_card_counted_apart(tmp_path):
+    """Récap du 16/10 : 1933 « pas relue à temps » sur 2091, sans savoir combien de cartes de collection."""
+    sniper, db, _ = await start(tmp_path, {}, [])
+    now = datetime.now(timezone.utc)
+    for aid, title in (("col", "14 octobre"), ("ur", "Miley Cyrus")):
+        sniper._targets[aid] = Target(Auction.model_validate(sale(aid, title, 5)), now)
+    sniper._prune(now)
+    assert sniper._outcomes == {"col": "collection : pas relue à temps", "ur": "pas relue à temps"}
+    counted = sniper.recap()[1].split(" : ", 1)[1].split(" · ")
+    assert sorted(counted) == ["collection : pas relue à temps 1", "pas relue à temps 1"]
     await db.close()
