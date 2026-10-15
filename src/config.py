@@ -173,7 +173,9 @@ class Settings(BaseSettings):
     portfolio_min_profit_ratio: float = 0.25  # bénéfice attendu ≥ 25 % du budget d'une position
     portfolio_min_profit: int = 30        # plancher absolu du bénéfice attendu
     sale_fee_pct: float = 0.0             # commission éventuelle du site sur une vente
-    position_list_ratio: float = 1.0      # prix de départ = estimation × ratio
+    # Revente d'une position : c'est une enchère, les joueurs font monter le prix. Le prix de départ est le prix
+    # d'achat + cette marge (commission comprise) ; jamais sous le prix d'achat, même remise en vente.
+    position_list_margin: float = 0.15
     position_list_at_peak: bool = True    # fin de vente dans LISTING_END_WINDOW
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2

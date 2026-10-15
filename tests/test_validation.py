@@ -65,8 +65,33 @@ async def test_simulated_resale_sells_when_the_market_pays(tmp_path):
     bid = await simulated_position(db, 400)
     await seed_observed(db, "c1", [420, 400, 450])
     await inv.settle_listings()
-    assert (await db.get_bid(bid))["sale_price"] == 400
-    assert (await db.validation_stats(datetime.now(timezone.utc), 2))["sim_profit"] == 300
+    # Une enchère : les joueurs la font monter au prix du marché (médiane observée), pas seulement au départ.
+    assert (await db.get_bid(bid))["sale_price"] == 420
+    assert (await db.validation_stats(datetime.now(timezone.utc), 2))["sim_profit"] == 320
+    await db.close()
+
+
+def test_list_price_is_cost_plus_margin():
+    from src.workers.inventory_manager import list_price
+
+    assert list_price(100, 0.15) == 115
+    assert list_price(100, 0.15, fee=0.05) == 122  # la commission payée, il reste 15 % de marge
+    assert list_price(3, 0.0) == 4                 # toujours au-dessus du prix d'achat
+
+
+@pytest.mark.asyncio
+async def test_relist_never_below_purchase_price(tmp_path):
+    """Achetée 100, en vente à 105 : la remise à −10 % (95) vendrait à perte, elle repart à 101."""
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500))
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await simulated_position(db, 105)
+    await seed_observed(db, "c1", [80, 90, 85])
+    await inv.settle_listings()
+    rows = await db._all("SELECT status, base_amount FROM listings ORDER BY id")
+    assert [(r["status"], r["base_amount"]) for r in rows] == [("sim_unsold", 105), ("scheduled", 101)]
     await db.close()
 
 
