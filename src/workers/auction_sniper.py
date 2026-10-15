@@ -903,6 +903,7 @@ class AuctionSniper(Worker):
             auction_id=auction.id, card_id=auction.catalog_id, title=auction.title, rarity=auction.rarity,
             is_shiny=auction.shiny, amount=decision.amount, reference_price=decision.reference,
             reason=decision.reason, night=params.night, dry_run=not live, end_at=auction.end_at,
+            ceiling=decision.ceiling,
         )
         label = f"{auction.title} ({auction.rarity}{' ✨' if auction.shiny else ''})"
         try:
@@ -982,13 +983,13 @@ class AuctionSniper(Worker):
                 await self.db.update_bid(row["id"], end_at=auction.end_at)  # prolongée
                 continue
             simulated = row["status"] == "simulated"
+            final = auction.final_price if auction.final_price is not None else auction.current_bid
             if simulated:
-                final = auction.final_price if auction.final_price is not None else auction.current_bid
                 won = auction.status == "settled_unsold" or final is None or final < row["amount"]
             else:
                 winner = (auction.winner_id or auction.current_bidder_id or "").lower()
                 won = auction.status == "settled_sold" and me is not None and winner == me
-            await self._close_bid(row, won, simulated, auction.card)
+            await self._close_bid(row, won, simulated, auction.card, final=final)
 
     async def _settled_auction(self, row) -> Auction | None:
         """Relit l'enchère d'une mise. Disparue du site (404 « Enchère introuvable », relevé du 15/10 au soir) :
@@ -1008,12 +1009,13 @@ class AuctionSniper(Worker):
                                   "Vérifie dans ta collection si la carte est arrivée.")
         return None
 
-    async def _close_bid(self, row, won: bool, simulated: bool, card: Card | None = None) -> None:
-        """Enregistre le résultat d'une enchère terminée ; une carte gagnée devient une position."""
+    async def _close_bid(self, row, won: bool, simulated: bool, card: Card | None = None,
+                         final: int | None = None) -> None:
+        """Enregistre le résultat d'une enchère terminée (et son prix final) ; une carte gagnée devient une position."""
         status = ("sim_won" if won else "sim_lost") if simulated else ("won" if won else "lost")
         # Un achat « collection » est gardé : ce n'est pas une position à revendre.
         closed = int(won and str(row["reason"] or "").startswith(COLLECTION_PREFIX))
-        await self.db.update_bid(row["id"], status=status, settled_at=utcnow(), closed=closed)
+        await self.db.update_bid(row["id"], status=status, settled_at=utcnow(), closed=closed, final_price=final)
         self._leading.pop(row["auction_id"], None)
         self._engaged.pop(row["auction_id"], None)
         if not won:
@@ -1062,7 +1064,9 @@ class AuctionSniper(Worker):
             label = f"{row['title']} ({row['rarity']}), {row['amount']} WB"
             if auction.status != "active":
                 won = auction.status == "settled_sold" and leader == me
-                await self._close_bid(row, won, simulated=False, card=auction.card)
+                await self._close_bid(row, won, simulated=False, card=auction.card,
+                                      final=auction.final_price if auction.final_price is not None
+                                      else auction.current_bid)
                 verdict = "enchère remportée" if won else "enchère perdue ou mise non passée"
             elif leader == me:
                 amount = auction.current_bid or row["amount"]
