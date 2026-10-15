@@ -151,10 +151,6 @@ class PackOpener(Worker):
             if pack.human_verification_required or "human_verification_required" in str(payload):
                 await self._pause_for_verification()
                 return
-            if self.state.verification_required and result.ok:
-                self.notifier.success("Paquets : vérification levée", "Les ouvertures reprennent.", live=self.live)
-                await self.db.clear_pack_check()
-            self.state.verification_required, self.state.verification_since = False, None
 
             if pack.rate_limit_daily:
                 resume = next_local(time(0, 0)) + timedelta(minutes=random.uniform(5, 30))
@@ -176,12 +172,21 @@ class PackOpener(Worker):
                 continue
 
             if not result.ok or not pulled:
-                if not (result.status == 400 and pack.packs_remaining == 0):
+                # Stock vide : 400 + packs_remaining=0, ou 403 « Plus de paquets disponibles » (relevé du
+                # 15/10/2026). Ce n'est pas un échec : on attend la régénération au rythme normal.
+                if pack.packs_remaining == 0 or "plus de paquets" in (pack.error or pack.message or "").lower():
+                    self.state.remaining = 0
+                else:
                     self._retry_soon = True  # refus inconnu : nouvel essai dans 5 à 10 min
                     self.log.warning("ouverture refusée (HTTP %s) : %s", result.status,
                                      pack.error or pack.message or str(payload)[:200])
+                # Un refus ne prouve pas que la vérification humaine est levée : seul un paquet ouvert le prouve.
                 break
 
+            if self.state.verification_required:
+                self.notifier.success("Paquets : vérification levée", "Les ouvertures reprennent.", live=self.live)
+                await self.db.clear_pack_check()
+            self.state.verification_required, self.state.verification_since = False, None
             opened += 1
             cards_pulled += len(pulled)
             highlights += await self._record(pulled)

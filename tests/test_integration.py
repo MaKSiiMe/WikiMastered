@@ -791,3 +791,46 @@ async def test_human_checks_are_recorded_with_their_context(tmp_path):
     assert report[1].startswith("Entre deux vérifications : médiane 2 (de 2 à 2) booster(s)")
     assert "2 booster(s) et 0 min depuis la précédente" in report[3] and report[3].endswith("en attente")
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_empty_stock_refusal_keeps_pending_verification(tmp_path):
+    """15/10 : vérification en attente, puis 403 « Plus de paquets disponibles », puis vérification à nouveau.
+    Le refus ne lève pas la vérification (pas de 2e alerte) et vaut stock vide (rythme normal, pas d'avertissement)."""
+    from src.workers.pack_opener import PackOpener
+
+    state = {"answer": "verify"}
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":  # sonde de session après le 403
+            return httpx.Response(200, json={"balance": 1})
+        if state["answer"] == "verify":
+            return httpx.Response(200, json={"human_verification_required": True})
+        if state["answer"] == "empty":
+            return httpx.Response(403, json={"error": "Plus de paquets disponibles"})
+        return httpx.Response(200, json={"cards": [{"id": "c1", "wikipedia_title": "Ada", "rarity": "C"}],
+                                         "packs_remaining": 0})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await opener.setup()
+
+    async def attempt(answer):
+        state["answer"] = answer
+        opener._next_open = datetime.now(timezone.utc)
+        opener.state.last_regen_at = None  # stock supposé plein : la tentative part tout de suite
+        await opener.step()
+        return (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60
+
+    await attempt("verify")
+    assert await attempt("empty") >= 14.9  # stock vide : rythme normal, pas un nouvel essai dans 5 à 10 min
+    assert opener.state.remaining == 0 and opener.blocked  # toujours en attente
+    await attempt("verify")
+    assert [t for _, t in notifier.sent if "vérification" in t] == ["Paquets : vérification humaine demandée"]
+    assert len(await db.pack_checks()) == 1
+    await attempt("ok")
+    assert ("SUCCESS", "Paquets : vérification levée") in notifier.sent and opener.blocked is None
+    await db.close()

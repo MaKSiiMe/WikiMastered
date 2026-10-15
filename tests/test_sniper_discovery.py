@@ -12,8 +12,9 @@ from src.core.api import WikiMastersAPI
 from src.core.database import Database
 from src.core.models import Auction
 from src.core.pricing import PriceService, Quote
-from src.workers.auction_sniper import AuctionSniper, decide, snipe_params
+from src.workers.auction_sniper import AuctionSniper, Target, decide, snipe_params
 from src.workers.base import Context
+from src.workers.collection import collection_key
 from tests.test_integration import make_client, seed_observed
 
 SELLER = "22222222-2222-2222-2222-222222222222"
@@ -120,7 +121,75 @@ async def test_missed_new_sales_are_reported(tmp_path, caplog):
     assert sniper._gaps == 0
     later = [Auction.model_validate(sale(f"b{i}", "T", "UR", 3600)) for i in range(50)]
     sniper._check_gap("UR", later, True, now)
-    sniper._check_gap("UR", page, True, now)
+    sniper._check_gap("UR", page, True, now, 95.0)
     assert sniper._gaps == 2
-    assert len([r for r in caplog.records if "certaines ont été manquées" in r.message]) == 1  # une fois par heure
+    warned = [r.message for r in caplog.records if "certaines ont été manquées" in r.message]
+    assert len(warned) == 1  # une fois par heure
+    assert "en ? entre deux lectures" in warned[0]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bid_follows_the_reread_without_other_requests(tmp_path):
+    """Solde, places de vente et cote sont lus avant de relire l'enchère : la mise part juste après la relecture.
+    Une carte de collection manquante passe avant une revente dans la fenêtre de mise."""
+    now = datetime.now(timezone.utc)
+    market = {"u1": sale("u1", "Jean Racine", "UR", 14), "d1": sale("d1", "11 décembre", "SR", 16, base=10)}
+    calls = []
+
+    def handler(request):
+        path, params = request.url.path, request.url.params
+        calls.append(f"{request.method} {path}")
+        if path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if "mine" in params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        if path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        if path.endswith("/bid"):
+            return httpx.Response(200, json={"current_bid": 10, "bidder_balance": 2990})
+        if path.startswith("/api/marketplace/"):
+            return httpx.Response(200, json={"auction": market[path.rsplit("/", 1)[1]]})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, sniper_resale_rarities=["UR", "L"],
+                                   collection_sets=["jours"], collection_max_price=50,
+                                   dry_run=False)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    await db.kv_set("collection", {"owned": [], "missing": [collection_key("11 décembre")], "total": 366})
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    params = snipe_params(client.settings, night=False)
+    for aid, data in market.items():
+        sniper._targets[aid] = Target(Auction.model_validate(data), now - timedelta(seconds=30))
+    sniper._balance = None  # solde à relire
+    assert sniper._next_due(params, now).auction.id == "d1"  # la collection d'abord, même si u1 finit avant
+
+    calls.clear()
+    await sniper.step()
+    read = calls.index("GET /api/marketplace/d1")
+    assert "GET /api/wikibidous" in calls[:read]  # solde lu avant la relecture
+    assert calls[read + 1] == "POST /api/marketplace/d1/bid"  # puis la mise, sans autre requête entre les deux
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_unread_collection_target_is_logged(tmp_path, caplog):
+    caplog.set_level("INFO")
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"bidding": [], "balance": 0}),
+                                   collection_sets=["jours"])
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    await db.kv_set("collection", {"owned": [], "missing": ["11 septembre"], "total": 366})
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    now = datetime.now(timezone.utc)
+    sniper._targets["s1"] = Target(Auction.model_validate(sale("s1", "11 septembre", "UR", 5)), now)
+    sniper._prune(now)
+    assert any("11 septembre" in r.message and "pas relue à temps" in r.message for r in caplog.records)
     await db.close()

@@ -298,6 +298,8 @@ class AuctionSniper(Worker):
         self._prune(now)
         target = self._next_due(params, now)
         if target is not None:
+            if not target.recheck:
+                await self._prepare(target.auction, now)
             await self._refresh_target(target)
         elif not await self._prefetch(now):
             await self._discover(params, now)
@@ -341,10 +343,11 @@ class AuctionSniper(Worker):
                     overdue.append((late, (kind, rarity)))
         if overdue:
             kind, rarity = max(overdue)[1]
+            previous = self._last_read.get((kind, rarity))
             self._last_read[(kind, rarity)] = now
             if kind == "recent":
                 auctions, more = await self.api.market_page(sort="recent", rarity=rarity, limit=MARKET_LIMIT)
-                self._check_gap(rarity, auctions, more, now)
+                self._check_gap(rarity, auctions, more, now, (now - previous).total_seconds() if previous else None)
                 await self._ingest(auctions, params, now)
             else:
                 # Ventes terminées pas encore clôturées : leur dernier prix devient une vente observée.
@@ -370,8 +373,11 @@ class AuctionSniper(Worker):
         key = self._day_queue.pop(0)
         return self._day_titles.get(key, key)
 
-    def _check_gap(self, rarity: str, auctions: list[Auction], more: bool, now: datetime) -> None:
-        """Deux lectures « recent » sans vente commune : des ventes créées entre les deux ont été manquées."""
+    def _check_gap(self, rarity: str, auctions: list[Auction], more: bool, now: datetime,
+                   elapsed: float | None = None) -> None:
+        """Deux lectures « recent » sans vente commune : des ventes créées entre les deux ont été manquées.
+
+        L'avertissement n'est écrit qu'une fois par heure ; le récap compte tous les trous."""
         ids = {a.id for a in auctions}
         previous = self._recent_ids.get(rarity)
         self._recent_ids[rarity] = ids
@@ -380,9 +386,12 @@ class AuctionSniper(Worker):
         self._gaps += 1
         if now - self._gap_warned_at > timedelta(hours=1):
             self._gap_warned_at = now
-            self.log.warning("repérage %s : plus de %d nouvelles ventes entre deux lectures, certaines ont été "
-                             "manquées (SNIPER_DISCOVERY_SECONDS=%s)", rarity, len(auctions),
-                             self.settings.sniper_discovery_seconds)
+            # Le délai réel dépasse souvent SNIPER_DISCOVERY_SECONDS : toutes les requêtes du bot se partagent
+            # un créneau toutes les HTTP_MIN_SPACING_SECONDS, et relire une cible passe avant le repérage.
+            gap = f"{elapsed:.0f} s" if elapsed is not None else "?"
+            self.log.warning("repérage %s : plus de %d nouvelles ventes en %s entre deux lectures, certaines ont "
+                             "été manquées (visé : %s s ; avertissement suivant dans 1 h au plus tôt)", rarity,
+                             len(auctions), gap, f"{self.settings.sniper_discovery_seconds:g}")
 
     async def _ingest(self, auctions: list[Auction], params: SnipeParams, now: datetime) -> None:
         """Met à jour les cibles connues et en ajoute : jour manquant, rareté achetée, revente possible."""
@@ -422,20 +431,32 @@ class AuctionSniper(Worker):
             del self._targets[aid]
             if aid not in self._outcomes:
                 self._outcome(t.auction, "pas relue à temps")
+                self._log_collection_outcomes([t.auction])
         if len(self._targets) > 5000:  # garde-fou mémoire : les plus lointaines d'abord
             for aid, _ in sorted(self._targets.items(), key=lambda kv: kv[1].auction.end_at)[4000:]:
                 del self._targets[aid]
 
     def _next_due(self, params: SnipeParams, now: datetime) -> Target | None:
-        """Cible à relire maintenant : dans sa fenêtre de mise (la plus proche de la fin d'abord),
-        sinon une cible misée dont la fin est passée (prolongée ou terminée ?)."""
+        """Cible à relire maintenant : dans sa fenêtre de mise (cartes de collection manquantes d'abord,
+        puis la plus proche de la fin), sinon une cible misée dont la fin est passée (prolongée ou terminée ?)."""
         low = self.settings.sniper_min_seconds_left + 1
         in_window_ = [t for t in self._targets.values() if not t.recheck and now - t.seen_at > FRESH
                       and low < t.auction.seconds_left(now) <= params.window_seconds]
         if in_window_:
-            return min(in_window_, key=lambda t: t.auction.end_at)
+            return min(in_window_, key=lambda t: (collection_key(t.auction.title) not in self._collection_missing,
+                                                  t.auction.end_at))
         ended = [t for t in self._targets.values() if t.recheck and t.auction.seconds_left(now) < -3]
         return min(ended, key=lambda t: t.auction.end_at) if ended else None
+
+    async def _prepare(self, auction: Auction, now: datetime) -> None:
+        """Avant la relecture d'une cible : solde, places de vente et cote mis en cache, pour miser juste
+        après la relecture sans autre requête (chacune coûte ~1,5 s, l'enchère vieillirait sous le seuil)."""
+        await self.portfolio(now)
+        if auction.rarity in self.settings.sniper_resale_rarities:
+            try:
+                await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
+            except (RateLimited, ApiError):
+                pass
 
     async def _refresh_target(self, target: Target) -> None:
         aid = target.auction.id
@@ -444,6 +465,8 @@ class AuctionSniper(Worker):
         except ApiError as exc:
             self.log.debug("cible %s illisible (%s) : abandonnée", target.auction.title, exc)
             self._targets.pop(aid, None)
+            self._outcome(target.auction, "illisible")
+            self._log_collection_outcomes([target.auction])
             return
         now = utcnow()
         await self._remember([auction], now)
@@ -692,13 +715,18 @@ class AuctionSniper(Worker):
                 return None
             if last["status"] in ("placed", "outbid") and not self.settings.sniper_allow_rebid:
                 return None
-        # Sans attendre : si la route des cotes est limitée, l'enchère est simplement ignorée.
-        try:
-            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
-        except (RateLimited, ApiError):
-            quote = None
-        collection_cap = await self._collection_cap(auction)
         resale = auction.rarity in self.settings.sniper_resale_rarities
+        if resale:
+            # Sans attendre : si la route des cotes est limitée, l'enchère est simplement ignorée.
+            try:
+                quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False,
+                                                    shiny=auction.shiny)
+            except (RateLimited, ApiError):
+                quote = None
+        else:
+            # Rareté jamais revendue : la cote ne sert que de repère, prise dans les ventes observées (sans requête).
+            quote = (await self.ctx.prices.observed_quote(auction.catalog_id)).get(auction.rarity or "")
+        collection_cap = await self._collection_cap(auction)
         decision = decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
                           collection_cap=collection_cap, resale=resale)
         if decision is None:
