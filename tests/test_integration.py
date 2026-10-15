@@ -834,3 +834,20 @@ async def test_empty_stock_refusal_keeps_pending_verification(tmp_path):
     await attempt("ok")
     assert ("SUCCESS", "Paquets : vérification levée") in notifier.sent and opener.blocked is None
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_lone_timeout_pauses_only_its_route(tmp_path):
+    """15/10 17:50 : un ReadTimeout sur la cote figeait tout le bot 35 s."""
+    from src.core.client import RateLimited
+
+    def handler(request):
+        if request.url.path.endswith("/sales"):
+            raise httpx.ReadTimeout("lent", request=request)
+        return httpx.Response(200, json={"balance": 3})
+
+    client, _ = make_client(tmp_path, handler, backoff_base_seconds=60)
+    with pytest.raises(RateLimited):
+        await client.get("sales_summary", card_id="x", wait=False)
+    assert client.route_paused_for("sales_summary") > 50 and client._failures == 0
+    assert await asyncio.wait_for(WikiMastersAPI(client).balance(), timeout=1) == 3

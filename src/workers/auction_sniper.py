@@ -48,6 +48,8 @@ COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, p
 MARKET_LIMIT = 50
 # Une enchère lue il y a plus longtemps est relue avant d'y miser.
 FRESH = timedelta(seconds=3)
+# Une carte de collection manquante entre dans la fenêtre de mise d'ici N s : le sniper ne lance plus rien de lent.
+COLLECTION_GUARD_SECONDS = 10
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -236,7 +238,6 @@ class AuctionSniper(Worker):
         self._recent_ids: dict[str, set[str]] = {}
         self._day_queue: list[str] = []
         self._day_titles: dict[str, str] = {}
-        self._last_day_search = _EPOCH
         self._gap_warned_at = _EPOCH
         # Depuis le dernier récap : trous dans les nouvelles ventes, ventes de jours manquants trouvées.
         self._gaps = self._days_found = 0
@@ -290,18 +291,24 @@ class AuctionSniper(Worker):
         night = in_window(now_local(), self.settings.night_start, self.settings.night_end)
         params = snipe_params(self.settings, night)
         me = self.api.user_id
-        if self._ticks % 20 == 0:
+        # Une carte de collection manquante va entrer dans sa fenêtre de mise : aucune requête lente d'ici là
+        # (cote, règlements…), sinon le passage en cours la ferait manquer (« 7 octobre … pas relue à temps »).
+        guard = self._collection_soon(params, now) is not None
+        if self._ticks % 20 == 0 and not guard:
             await self._refresh_engaged()
             await self._load_collection()
 
-        # Une requête par passage : relire une cible dans sa fenêtre de mise passe avant tout le reste.
+        # Une requête par passage, par priorité : carte de collection dans sa fenêtre de mise ou cible misée à
+        # relire à sa fin ; repérage très en retard ; revente dans sa fenêtre ; cote à l'avance ; repérage.
         self._prune(now)
         target = self._next_due(params, now)
-        if target is not None:
-            if not target.recheck:
-                await self._prepare(target.auction, now)
-            await self._refresh_target(target)
-        elif not await self._prefetch(now):
+        if target is not None and (target.recheck or self._wanted(target.auction)):
+            await self._read_target(target, now)
+        elif guard:
+            await self.portfolio(now)  # solde et places de vente en cache pour la mise qui vient
+        elif target is not None and not self._discovery_late(params, now):
+            await self._read_target(target, now)
+        elif self._discovery_late(params, now) or not await self._prefetch(now):
             await self._discover(params, now)
 
         now = utcnow()
@@ -322,7 +329,7 @@ class AuctionSniper(Worker):
 
         if self._ticks % 10 == 5:
             await self.db.harvest_ended_auctions(now - timedelta(seconds=30))
-        if self._ticks % 10 == 0:
+        if self._ticks % 10 == 0 and not guard:
             await self._settle()
             await self._reconcile()
         self._flush_digest(now)
@@ -332,44 +339,49 @@ class AuctionSniper(Worker):
     def _watched_rarities(self, params: SnipeParams) -> list[str]:
         return list(dict.fromkeys([*self.settings.sniper_resale_rarities, *params.rarity_caps]))
 
+    def _lateness(self, params: SnipeParams, now: datetime) -> list[tuple[float, float, tuple[str, str]]]:
+        """(retard en s, période visée, source) de chaque source de repérage : nouvelles ventes et ventes
+        terminées de chaque rareté suivie, jours manquants de la collection."""
+        sources = [((kind, rarity), every) for rarity in self._watched_rarities(params)
+                   for kind, every in (("recent", self.settings.sniper_discovery_seconds),
+                                       ("ended", self.settings.sniper_observe_seconds))]
+        if self._collection_missing:
+            sources.append((("day", ""), self.settings.collection_search_seconds))
+        return [((now - self._last_read.get(key, _EPOCH)).total_seconds() - every, every, key)
+                for key, every in sources]
+
+    def _discovery_late(self, params: SnipeParams, now: datetime) -> bool:
+        """Une source attend depuis plus de deux fois sa période : elle passe avant les reventes à relire,
+        qui sinon prennent toutes les requêtes (le 15/10 : 2622 s entre deux lectures des nouvelles UR)."""
+        return any(late >= every for late, every, _ in self._lateness(params, now))
+
     async def _discover(self, params: SnipeParams, now: datetime) -> None:
         """Lit la source de repérage la plus en retard : nouvelles ventes, ventes terminées ou jour manquant."""
-        overdue: list[tuple[float, tuple[str, str]]] = []
-        for rarity in self._watched_rarities(params):
-            for kind, every in (("recent", self.settings.sniper_discovery_seconds),
-                                ("ended", self.settings.sniper_observe_seconds)):
-                late = (now - self._last_read.get((kind, rarity), _EPOCH)).total_seconds() - every
-                if late >= 0:
-                    overdue.append((late, (kind, rarity)))
-        if overdue:
-            kind, rarity = max(overdue)[1]
-            previous = self._last_read.get((kind, rarity))
-            self._last_read[(kind, rarity)] = now
-            if kind == "recent":
-                auctions, more = await self.api.market_page(sort="recent", rarity=rarity, limit=MARKET_LIMIT)
-                self._check_gap(rarity, auctions, more, now, (now - previous).total_seconds() if previous else None)
-                await self._ingest(auctions, params, now)
-            else:
-                # Ventes terminées pas encore clôturées : leur dernier prix devient une vente observée.
-                auctions, _ = await self.api.market_page(sort="ending_soon", rarity=rarity, limit=MARKET_LIMIT)
-                await self._remember(auctions, now)
-                await self._ingest(auctions, params, now)
+        overdue = [(late, key) for late, _, key in self._lateness(params, now) if late >= 0]
+        if not overdue:
             return
-        day = self._next_day(now)
-        if day is not None:
-            auctions, _ = await self.api.market_page(sort="ending_soon", q=day, limit=MARKET_LIMIT)
+        kind, rarity = max(overdue)[1]
+        previous = self._last_read.get((kind, rarity))
+        self._last_read[(kind, rarity)] = now
+        if kind == "recent":
+            auctions, more = await self.api.market_page(sort="recent", rarity=rarity, limit=MARKET_LIMIT)
+            self._check_gap(rarity, auctions, more, now, (now - previous).total_seconds() if previous else None)
+            await self._ingest(auctions, params, now)
+        elif kind == "ended":
+            # Ventes terminées pas encore clôturées : leur dernier prix devient une vente observée.
+            auctions, _ = await self.api.market_page(sort="ending_soon", rarity=rarity, limit=MARKET_LIMIT)
+            await self._remember(auctions, now)
+            await self._ingest(auctions, params, now)
+        else:
+            auctions, _ = await self.api.market_page(sort="ending_soon", q=self._next_day(), limit=MARKET_LIMIT)
             await self._ingest(auctions, params, now)
 
-    def _next_day(self, now: datetime) -> str | None:
-        """Prochain jour manquant à chercher (rotation), au plus un toutes les COLLECTION_SEARCH_SECONDS."""
-        if not self._collection_missing or (now - self._last_day_search).total_seconds() < \
-                self.settings.collection_search_seconds:
-            return None
+    def _next_day(self) -> str:
+        """Prochain jour manquant à chercher (rotation sur tous les jours manquants)."""
         while self._day_queue and self._day_queue[0] not in self._collection_missing:
             self._day_queue.pop(0)
         if not self._day_queue:
             self._day_queue = sorted(self._collection_missing)
-        self._last_day_search = now
         key = self._day_queue.pop(0)
         return self._day_titles.get(key, key)
 
@@ -443,16 +455,32 @@ class AuctionSniper(Worker):
         in_window_ = [t for t in self._targets.values() if not t.recheck and now - t.seen_at > FRESH
                       and low < t.auction.seconds_left(now) <= params.window_seconds]
         if in_window_:
-            return min(in_window_, key=lambda t: (collection_key(t.auction.title) not in self._collection_missing,
-                                                  t.auction.end_at))
+            return min(in_window_, key=lambda t: (not self._wanted(t.auction), t.auction.end_at))
         ended = [t for t in self._targets.values() if t.recheck and t.auction.seconds_left(now) < -3]
         return min(ended, key=lambda t: t.auction.end_at) if ended else None
 
+    def _wanted(self, auction: Auction) -> bool:
+        """Carte manquante à la collection (gardée, pas revendue)."""
+        return collection_key(auction.title) in self._collection_missing
+
+    def _collection_soon(self, params: SnipeParams, now: datetime) -> float | None:
+        """Secondes avant qu'une carte de collection manquante entre dans sa fenêtre de mise (si ≤ la garde)."""
+        soon = [left - params.window_seconds for t in self._targets.values()
+                if not t.recheck and self._wanted(t.auction)
+                and 0 < (left := t.auction.seconds_left(now)) - params.window_seconds <= COLLECTION_GUARD_SECONDS]
+        return min(soon) if soon else None
+
+    async def _read_target(self, target: Target, now: datetime) -> None:
+        if not target.recheck:
+            await self._prepare(target.auction, now)
+        await self._refresh_target(target)
+
     async def _prepare(self, auction: Auction, now: datetime) -> None:
         """Avant la relecture d'une cible : solde, places de vente et cote mis en cache, pour miser juste
-        après la relecture sans autre requête (chacune coûte ~1,5 s, l'enchère vieillirait sous le seuil)."""
+        après la relecture sans autre requête (chacune coûte ~1,5 s, l'enchère vieillirait sous le seuil).
+        Pas de cote pour une carte de collection : sa mise n'en dépend pas, et la route des cotes est lente."""
         await self.portfolio(now)
-        if auction.rarity in self.settings.sniper_resale_rarities:
+        if auction.rarity in self.settings.sniper_resale_rarities and not self._wanted(auction):
             try:
                 await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
             except (RateLimited, ApiError):
@@ -500,8 +528,12 @@ class AuctionSniper(Worker):
 
     def _delay(self, params: SnipeParams, now: datetime) -> float:
         """Rythme normal, raccourci pour relire une cible dès son entrée dans la fenêtre de mise."""
-        if self._next_due(params, now) is not None:
+        due = self._next_due(params, now)
+        guard = self._collection_soon(params, now)
+        if due is not None and (guard is None or due.recheck or self._wanted(due.auction)):
             return 0.0  # une autre cible attend (les requêtes restent espacées par le client)
+        if guard is not None:
+            return guard + 0.1  # réveil à l'entrée de la carte de collection dans sa fenêtre de mise
         delay = random.uniform(self.settings.sniper_poll_min_seconds, self.settings.sniper_poll_max_seconds)
         for t in self._targets.values():
             left = t.auction.seconds_left(now)
@@ -717,12 +749,9 @@ class AuctionSniper(Worker):
                 return None
         resale = auction.rarity in self.settings.sniper_resale_rarities
         if resale:
-            # Sans attendre : si la route des cotes est limitée, l'enchère est simplement ignorée.
-            try:
-                quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False,
-                                                    shiny=auction.shiny)
-            except (RateLimited, ApiError):
-                quote = None
+            # Sans requête : la cote a été mise en cache avant la relecture (_prepare, _prefetch). Une requête
+            # ici ferait vieillir l'enchère, et les suivantes du même passage, sous le seuil de mise.
+            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False)
         else:
             # Rareté jamais revendue : la cote ne sert que de repère, prise dans les ventes observées (sans requête).
             quote = (await self.ctx.prices.observed_quote(auction.catalog_id)).get(auction.rarity or "")

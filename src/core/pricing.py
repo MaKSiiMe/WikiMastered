@@ -122,20 +122,24 @@ class PriceService:
             if r in RARITIES and (s.average is None or s.average >= 0)
         }
 
-    async def _market(self, card_id: str, max_age: timedelta, wait: bool) -> dict[str, tuple[float | None, int | None]]:
+    async def _market(self, card_id: str, max_age: timedelta, wait: bool,
+                      fetch: bool = True) -> dict[str, tuple[float | None, int | None]]:
         cached = await self.db.price_get(card_id)
         if cached and utcnow() - cached[0] <= max_age:
             return cached[1]
+        if not fetch:
+            return {}
         data = await self._fetch(card_id, wait)
         await self.db.price_put(card_id, data)
         return data
 
     async def quotes(self, card_id: str, *, max_age: timedelta | None = None, wait: bool = True,
-                     shiny: bool = False) -> dict[str, Quote]:
-        """Estimation par rareté (clé ANY : toutes raretés, seulement si le site ne les distingue pas)."""
+                     shiny: bool = False, fetch: bool = True) -> dict[str, Quote]:
+        """Estimation par rareté (clé ANY : toutes raretés, seulement si le site ne les distingue pas).
+        `fetch=False` : sans aucune requête (ventes observées et cote du site en cache)."""
         observed = trusted(await self.db.observed_by_rarity(card_id, self.recent_n, shiny))
         try:
-            market = await self._market(card_id, max_age or self.default_ttl, wait)
+            market = await self._market(card_id, max_age or self.default_ttl, wait, fetch)
         except (RateLimited, ApiError):
             if not observed:
                 raise
@@ -160,7 +164,7 @@ class PriceService:
         return bool(cached and utcnow() - cached[0] <= self.default_ttl)
 
     async def quote(self, card_id: str, rarity: str | None, *, max_age: timedelta | None = None,
-                    wait: bool = True, shiny: bool = False) -> Quote:
+                    wait: bool = True, shiny: bool = False, fetch: bool = True) -> Quote:
         """Estimation pour cette rareté (et shiny ou non) ; jamais celle d'une autre rareté."""
-        quotes = await self.quotes(card_id, max_age=max_age, wait=wait, shiny=shiny)
+        quotes = await self.quotes(card_id, max_age=max_age, wait=wait, shiny=shiny, fetch=fetch)
         return (quotes.get(rarity) if rarity else None) or quotes.get(ANY) or Quote(None, 0)
