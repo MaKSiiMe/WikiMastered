@@ -238,3 +238,19 @@ async def test_owned_days_get_the_date_tag(tmp_path):
     # 1er janvier : l'exemplaire favori est étiqueté ; 2 janvier l'est déjà.
     assert inserted == [{"user_card_id": "o2", "tag_id": 7}] and state["tagged"] == 1 and state["to_tag"] == 0
     await db.close()
+
+
+def test_completion_tracks_when_each_card_was_obtained():
+    from datetime import datetime, timedelta, timezone
+
+    from src.workers.collection import first_owned, progress_lines
+
+    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    first = first_owned({}, {"1 janvier", "2 janvier"}, now - timedelta(days=10))
+    assert first == {"1 janvier": None, "2 janvier": None}  # déjà là au 1er relevé : date inconnue
+    later = first_owned({"first_owned": first}, {"1 janvier", "2 janvier", "14 octobre"}, now - timedelta(days=1))
+    assert later["14 octobre"] == (now - timedelta(days=1)).isoformat() and later["1 janvier"] is None
+    state = {"owned": sorted(later), "total": 368, "first_owned": later,
+             "sets": {"Jours de l'année": [3, 366], "Titres": [0, 2]}}
+    assert progress_lines(state, {"14 octobre": "14 octobre"}, now) == [
+        "Jours de l'année : 3/366 (0,8 %)", "Titres : 0/2 (0,0 %)", "+1 en 7 jours : 14 octobre (14/10)"]

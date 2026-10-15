@@ -290,7 +290,8 @@ async def collection_status(settings: Settings) -> None:
         if state["unknown_sets"]:
             print(f"Ensemble(s) inconnu(s) : {state['unknown_sets']} — valeur attendue : jours")
         by_key = targets(ctx)
-        print(summary_line(state, by_key).replace("**", ""))
+        from src.workers.collection import progress_lines
+        print("\n".join(progress_lines(state, by_key, datetime.now(timezone.utc), days=30)))
         print("Manquantes : " + (", ".join(by_key.get(k, k) for k in state["missing"]) or "aucune"))
         if state["unmatched"]:
             print("Titres trouvés mais non reconnus (format différent ?) : " + ", ".join(state["unmatched"]))

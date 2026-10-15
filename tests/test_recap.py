@@ -55,7 +55,8 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     assert "pas assez vue vendue 30" in blocks["🎯 Sniper"] and "✅" in blocks["🎯 Sniper"]
     assert "1 booster(s)" in blocks["🎴 Paquets"] and "❌ arrêté" in blocks["🎴 Paquets"]
     assert "⚠️ 2 erreur(s)" in blocks["💰 Ventes"]
-    assert blocks["📅 Collection"].startswith("37/366 possédées · 0 gagnée(s) · mises 0")
+    assert blocks["📅 Collection"].startswith("Collection : 37/366 (10,1 %)\nAucune nouvelle carte en 7 jours\n"
+                                             "Sniper : 0 gagnée(s) · mises 0")
     assert "📈 Tendances" not in blocks  # worker absent : pas de bloc
     assert description.startswith("Depuis ")
     assert workers[2].recent_errors == 0  # erreurs remises à zéro après le récap
