@@ -11,7 +11,7 @@ Il parle directement aux routes JSON du site, sans navigateur, et rend compte su
 | Inventaire | `src/workers/inventory_manager.py` | Revend les positions et les doublons, défausse protégée | 💰 Ventes |
 | Collection | `src/workers/collection.py` | Complète la collection des 366 jours, pose l'étiquette « date » | 📅 Collection |
 | Tendances | `src/workers/wiki_trends.py`, `google_trends.py` | Pics Wikipédia et recherches Google croisés avec le marché | 📈 Tendances |
-| Succès | `src/workers/achievements.py` | Réclame les récompenses des succès débloqués, toutes les ~3 h | 🏆 Succès |
+| Succès | `src/workers/achievements.py` | Réclame les récompenses des succès débloqués, chaque soir à 22:50 | 🏆 Succès |
 
 > **À lire avant de lancer**
 > - Automatiser un compte peut être contraire aux conditions d'utilisation de WikiMasters et mener à un bannissement. L'espacement des requêtes limite la charge sur le site ; il ne garantit rien.

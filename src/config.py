@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     enable_wiki_trends: bool = True
     enable_google_trends: bool = True
     enable_achievements: bool = True
-    achievements_interval_minutes: float = 180.0  # réclame les succès débloqués toutes les ~3 h
+    achievements_time: time = time(22, 50)  # succès réclamés une fois par jour, avant le bilan de 23:00
 
     # --- Module B : paquets -----------------------------------------------------
     pack_regen_minutes: float = 10.0

@@ -1,6 +1,6 @@
 """Module H : réclame les récompenses des succès débloqués (wikibidous gratuits).
 
-Toutes les ACHIEVEMENTS_INTERVAL_MINUTES (~3 h) : demande au site de recalculer les succès
+Une fois par jour à ACHIEVEMENTS_TIME (22:50, avant le bilan) : demande au site de recalculer les succès
 (POST /api/achievements/check), lit ceux qui sont débloqués et pas encore réclamés (tables
 Supabase `user_achievements` et `achievements`), puis les réclame un par un, espacés de
 quelques secondes (POST /api/achievements/claim). Routes relevées dans des projets publics,
@@ -13,9 +13,12 @@ from __future__ import annotations
 import asyncio
 import random
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from src.core.client import ApiError
+from src.core.database import utcnow
 from src.core.notifier import Topic
+from src.core.timeutils import next_local
 from src.workers.base import Worker
 
 
@@ -33,8 +36,22 @@ class AchievementsWorker(Worker):
     async def setup(self) -> None:
         self._claimed = 0   # depuis le dernier récap
         self._earned = 0
+        self._next_run = self._next_time()
+
+    def _next_time(self) -> datetime:
+        jitter = timedelta(minutes=random.uniform(0, 5))
+        return next_local(self.settings.achievements_time).astimezone(utcnow().tzinfo) + jitter
 
     async def step(self) -> float:
+        now = utcnow()
+        if now < self._next_run:
+            return min(1800.0, (self._next_run - now).total_seconds())
+        await self.claim_all()
+        self._next_run = self._next_time()
+        self.log.info("prochains succès vers %s", f"{self._next_run.astimezone():%d/%m %H:%M}")
+        return 60.0
+
+    async def claim_all(self) -> None:
         live = self.settings.is_live("claim_achievement")
         check = await self.api.achievements_check()
         if not check.dry_run and not check.ok:
@@ -63,8 +80,6 @@ class AchievementsWorker(Worker):
                                   live=live, wikibidous=f"+{total}")
         elif pending and live:
             self.log.info("%d succès à réclamer, aucun accepté", len(pending))
-        minutes = self.settings.achievements_interval_minutes
-        return random.uniform(0.8, 1.2) * minutes * 60
 
     async def unclaimed(self) -> list[Achievement]:
         """Succès débloqués et pas encore réclamés, avec leur titre et leur récompense."""
