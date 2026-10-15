@@ -395,8 +395,10 @@ def main(argv: list[str] | None = None) -> None:
     sim = sub.add_parser("reset-simulation", help="efface les mises et ventes simulées (sans --apply : compte)")
     sim.add_argument("--apply", action="store_true", help="efface vraiment")
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
-    inv.add_argument("action", choices=["scan", "list", "discard"])
+    inv.add_argument("action", choices=["scan", "report", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
+    inv.add_argument("--lookups", type=int, default=None,
+                     help="report : cotes demandées au site (route limitée ; défaut SELL_PRICE_LOOKUPS_PER_RUN)")
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -433,7 +435,7 @@ def main(argv: list[str] | None = None) -> None:
     elif command == "inventory":
         async def _inventory() -> None:
             async with build_context(settings) as ctx:
-                await inventory_cli(ctx, args.action, args.apply)
+                await inventory_cli(ctx, args.action, args.apply, args.lookups)
         asyncio.run(_inventory())
 
 

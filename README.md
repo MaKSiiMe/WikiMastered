@@ -86,7 +86,7 @@ Raccourci : dans DevTools, clic droit sur une requête `/api/…` > *Copier comm
 | `DRY_RUN=false` + `SIMULATE=sniper` | Tout est réel sauf les mises des positions du sniper. |
 | `DRY_RUN=false` | Tout est réel. |
 
-Groupes acceptés : `sniper`, `collection`, `packs`, `ventes`, `defausse`, `tags`, `succes`, `inventory` (= ventes + défausse). Tant que le sniper est simulé, le bilan du soir contient un bloc « Validation de la simulation » qui dit quand le passage en réel est envisageable.
+Groupes acceptés : `sniper`, `collection`, `packs`, `ventes`, `defausse`, `tags`, `succes`, `inventory` (= ventes + défausse). Tant que le sniper est simulé, le bilan du soir contient un bloc « Validation de la simulation » qui dit quand le passage en réel est envisageable. Une fois les mises réelles, `SNIPER_SHADOW=true` garde un sniper de test : il simule les achats que le sniper réel ne fait pas (au-dessus de `SNIPER_MAX_BID`, achats épuisés, plafond atteint, raretés `SNIPER_SHADOW_RARITIES`), avec ses propres limites (`SNIPER_SHADOW_MAX_BID`, `SNIPER_SHADOW_MAX_POSITIONS`), pour continuer à mesurer la stratégie. `NOTIFY_SIMULATED=false` réserve Discord au réel.
 
 ## Discord
 
@@ -121,6 +121,7 @@ python -m src.main run                          # le bot (commande par défaut d
 python -m src.main check                        # session, solde, renouvellement automatique
 python -m src.main inspect                      # compare les vraies réponses aux modèles (lecture seule)
 python -m src.main inventory scan               # ce qui serait vendu / défaussé, et pourquoi
+python -m src.main inventory report --lookups 300  # toute la collection cotée : résumé + data/inventaire-<date>.csv
 python -m src.main inventory list --apply       # programme les ventes
 python -m src.main inventory discard --apply    # défausse, après vérification des paliers
 python -m src.main report                       # envoie le bilan du jour sur Discord
