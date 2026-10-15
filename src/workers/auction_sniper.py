@@ -453,7 +453,9 @@ class AuctionSniper(Worker):
                 continue
             del self._targets[aid]
             if aid not in self._outcomes:
-                self._outcome(t.auction, "pas relue à temps")
+                # Séparées au récap : une carte de collection manquée compte, une revente simulée beaucoup moins.
+                self._outcome(t.auction, "collection : pas relue à temps" if self._wanted(t.auction)
+                              else "pas relue à temps")
                 self._log_collection_outcomes([t.auction])
         if len(self._targets) > 5000:  # garde-fou mémoire : les plus lointaines d'abord
             for aid, _ in sorted(self._targets.items(), key=lambda kv: kv[1].auction.end_at)[4000:]:
@@ -902,7 +904,9 @@ class AuctionSniper(Worker):
         cutoff = utcnow() - timedelta(seconds=self.settings.sniper_settle_grace_seconds)
         me = self.api.user_id
         for row in await self.db.bids_to_settle(cutoff, limit=3):
-            auction = await self.api.auction(row["auction_id"])
+            auction = await self._settled_auction(row)
+            if auction is None:
+                continue
             if auction.status == "active":
                 await self.db.update_bid(row["id"], end_at=auction.end_at)  # prolongée
                 continue
@@ -914,6 +918,24 @@ class AuctionSniper(Worker):
                 winner = (auction.winner_id or auction.current_bidder_id or "").lower()
                 won = auction.status == "settled_sold" and me is not None and winner == me
             await self._close_bid(row, won, simulated, auction.card)
+
+    async def _settled_auction(self, row) -> Auction | None:
+        """Relit l'enchère d'une mise. Disparue du site (404 « Enchère introuvable », relevé du 15/10 au soir) :
+        la mise est close comme perdue, au lieu de faire échouer le passage du sniper à chaque règlement."""
+        try:
+            return await self.api.auction(row["auction_id"])
+        except ApiError as exc:
+            if exc.status != 404:
+                raise
+        simulated = row["status"] == "simulated"
+        label = f"{row['title']} ({row['rarity']}), {row['amount']} WB"
+        self.log.info("%s : enchère introuvable sur le site, mise close comme perdue", label)
+        await self._close_bid(row, False, simulated)
+        await self.db.update_bid(row["id"], note="enchère introuvable sur le site")
+        if not simulated:
+            self.notifier.warning("Mise à vérifier", f"{label} : enchère introuvable sur le site, comptée perdue. "
+                                  "Vérifie dans ta collection si la carte est arrivée.")
+        return None
 
     async def _close_bid(self, row, won: bool, simulated: bool, card: Card | None = None) -> None:
         """Enregistre le résultat d'une enchère terminée ; une carte gagnée devient une position."""
@@ -956,7 +978,9 @@ class AuctionSniper(Worker):
         if me is None:
             return
         for row in await self.db.uncertain_bids(utcnow() - timedelta(seconds=30)):
-            auction = await self.api.auction(row["auction_id"])
+            auction = await self._settled_auction(row)
+            if auction is None:
+                continue
             leader = (auction.winner_id or auction.current_bidder_id or "").lower()
             label = f"{row['title']} ({row['rarity']}), {row['amount']} WB"
             if auction.status != "active":
