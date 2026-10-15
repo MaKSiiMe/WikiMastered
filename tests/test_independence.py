@@ -39,6 +39,25 @@ async def test_broken_pack_route_does_not_pause_other_routes(tmp_path):
     assert calls == []
 
 
+@pytest.mark.asyncio
+async def test_sniper_bid_jumps_the_request_queue(tmp_path):
+    """Le 15/10 au soir, la relecture et la mise du sniper attendaient derrière les requêtes des autres workers
+    et partaient à 0-8 s de la fin : une requête urgente prend le prochain créneau, l'espacement est gardé."""
+    sent = []
+
+    def handler(request):
+        sent.append(request.url.path)
+        return httpx.Response(200, json={"balance": 3})
+
+    client, _ = make_client(tmp_path, handler, http_min_spacing_seconds=0.05)
+    background = [asyncio.create_task(client.get("balance")) for _ in range(4)]
+    await asyncio.sleep(0.01)  # la 1re est partie, les 3 autres attendent leur créneau
+    await client.get("auction_detail", urgent=True, auction_id="a1")
+    await asyncio.gather(*background)
+    assert sent.index("/api/marketplace/a1") == 1  # juste après la requête déjà partie
+    assert sent.count("/api/wikibidous") == 4 and client._no_urgent.is_set()
+
+
 class Flaky(Worker):
     name = "flaky"
 

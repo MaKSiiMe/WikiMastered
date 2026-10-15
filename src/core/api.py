@@ -70,8 +70,9 @@ class WikiMastersAPI:
         )
         return result.items(), result.hasMore
 
-    async def auction(self, auction_id: str) -> Auction:
-        return AuctionDetail.model_validate(await self.client.get("auction_detail", auction_id=auction_id)).auction
+    async def auction(self, auction_id: str, *, urgent: bool = False) -> Auction:
+        return AuctionDetail.model_validate(
+            await self.client.get("auction_detail", urgent=urgent, auction_id=auction_id)).auction
 
     async def sales_summary(self, card_id: str, *, wait: bool = True) -> SalesSummary:
         return SalesSummary.model_validate(await self.client.get("sales_summary", card_id=card_id, wait=wait))
@@ -114,7 +115,9 @@ class WikiMastersAPI:
         return await self.client.mutate("open_pack")
 
     async def place_bid(self, auction_id: str, amount: int, *, live: bool | None = None) -> MutationResult:
-        return await self.client.mutate("place_bid", live=live, auction_id=auction_id, amount=int(amount))
+        # Mise du sniper dans les dernières secondes : elle passe devant les requêtes des autres workers.
+        return await self.client.mutate("place_bid", live=live, urgent=True, auction_id=auction_id,
+                                        amount=int(amount))
 
     async def create_listing(self, owned_card_id: str, base_amount: int, duration_minutes: int) -> MutationResult:
         return await self.client.mutate(
