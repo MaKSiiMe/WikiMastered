@@ -140,3 +140,51 @@ def test_position_posted_late_morning_for_12_hours():
     evening = datetime(2026, 10, 17, 21, 0, tzinfo=PARIS)  # achetée le soir : le lendemain matin
     post_at, _, _ = plan_position_time(evening, time(11), time(12), 720, durations)
     assert post_at.date() == evening.date() + timedelta(days=1) and post_at.hour == 11
+
+
+@pytest.mark.asyncio
+async def test_inventory_report_values_every_card(tmp_path, capsys):
+    """« Sur les presque 10k cartes » (16/10) : chaque doublon reçoit un verdict, le détail part dans un CSV."""
+    import csv
+
+    from src.workers.inventory_manager import report
+
+    def copy(oid, card, rarity, **kw):
+        return {"id": oid, "card_id": card, "card": {"id": card, "wikipedia_title": card.title(), "rarity": rarity},
+                **kw}
+
+    collection = ([copy(f"a{i}", "alpha", "C") for i in range(4)]        # cote 50 : à vendre
+                  + [copy(f"b{i}", "beta", "C") for i in range(3)]       # cote 1 : 2 à défausser
+                  + [copy(f"c{i}", "gamma", "R") for i in range(2)]      # cote 8, R jamais défaussée : gardée
+                  + [copy(f"d{i}", "delta", "C") for i in range(2)]      # pas de cote
+                  + [copy("a9", "alpha", "C", starred=True)])            # favori : l'exemplaire gardé
+    cotes = {"alpha": {"C": {"average": 50}}, "beta": {"C": {"average": 1}}, "gamma": {"R": {"average": 8}},
+             "delta": {}}
+
+    def handler(request):
+        if request.url.path == "/api/my-collection":
+            page = int(request.url.params["page"])
+            return httpx.Response(200, json={"collection": collection if page == 0 else []})
+        if request.url.path == "/api/trades":
+            return httpx.Response(200, json={"trades": []})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(200, json={"summary": cotes[request.url.path.split("/")[-2]]})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await inv.setup()
+    await report(inv.ctx, inv, lookups=10)
+    out = capsys.readouterr().out
+    assert "12 exemplaires, 4 cartes différentes" in out
+    assert "À vendre      : 4 doublon(s)" in out and "~200 WB" in out
+    assert "À défausser   : 2 doublon(s)" in out and "Gardés        : 1 doublon(s)" in out
+    assert "Sans cote     : 1 doublon(s)" in out
+    path = next(tmp_path.glob("inventaire-*.csv"))
+    rows = {r["carte"]: r for r in csv.DictReader(path.open(encoding="utf-8"))}
+    assert rows["Alpha"]["exemplaires"] == "5" and rows["Alpha"]["à vendre"] == "4"
+    assert rows["Beta"]["à défausser"] == "2" and rows["Delta"]["cote"] == ""
+    await db.close()

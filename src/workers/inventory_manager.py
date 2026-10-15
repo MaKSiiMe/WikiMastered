@@ -16,6 +16,7 @@ automatiques ne tournent que si AUTO_LIST / AUTO_DISCARD sont activés.
 
 from __future__ import annotations
 
+import csv
 import math
 import random
 import statistics
@@ -106,6 +107,35 @@ def select_for_discard(groups: dict[str, list[OwnedCard]], quotes: dict[str, dic
             if (avg is None and s.discard_unknown_price_is_worthless) or (avg is not None and avg <= s.discard_max_value):
                 out.append(DiscardCandidate(row, avg))
     return out
+
+
+def valuation(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]], excluded: set[str],
+              s: Settings) -> list[dict]:
+    """Une ligne par carte et rareté : exemplaires, cote, et ce que deviennent les doublons (mêmes règles que la
+    vente et la défausse automatiques). Les exemplaires gardés (1er exemplaire, favoris, shiny, étiquettes
+    protégées, en échange ou déjà en vente) ne sont ni vendus ni défaussés."""
+    sale = {c.owned.id: c for c in select_for_sale(groups, quotes, excluded, s)}
+    discard = {c.owned.id for c in select_for_discard(groups, quotes, excluded, s)}
+    keep = min(s.sell_keep_copies, max(1, s.discard_keep_copies))
+    rows: dict[tuple[str, str], dict] = {}
+    for card_id, copies in groups.items():
+        spare = {c.id for c in spare_copies(copies, keep, excluded)}
+        for copy in copies:
+            rarity = copy.rarity or "?"
+            q = quotes.get(card_id, {}).get(rarity) or quotes.get(card_id, {}).get(ANY)
+            row = rows.setdefault((card_id, rarity), {
+                "carte": copy.title, "rareté": rarity, "cote": round(q.average) if q and q.average is not None else None,
+                "exemplaires": 0, "à vendre": 0, "prix de vente": 0, "à défausser": 0, "doublons gardés": 0,
+                "sans cote": 0})
+            row["exemplaires"] += 1
+            if copy.id in sale:
+                row["à vendre"] += 1
+                row["prix de vente"] += sale[copy.id].price
+            elif copy.id in discard:
+                row["à défausser"] += 1
+            elif copy.id in spare:
+                row["sans cote" if row["cote"] is None else "doublons gardés"] += 1
+    return sorted(rows.values(), key=lambda r: (r["cote"] is None, -(r["cote"] or 0), r["carte"]))
 
 
 def achievement_guard(count: int, n_discard: int, milestones: list[int], margin: int,
@@ -208,7 +238,8 @@ class InventoryManager(Worker):
         return await self.schedule_sales(batch, slots=free)
 
     # ------------------------------------------------------------ analyse
-    async def snapshot(self) -> tuple[dict[str, list[OwnedCard]], set[str], dict[str, dict[str, Quote]], int]:
+    async def snapshot(self, lookups: int | None = None
+                       ) -> tuple[dict[str, list[OwnedCard]], set[str], dict[str, dict[str, Quote]], int]:
         rows = await self.api.load_collection()
         groups = group_by_card(rows)
         excluded = await self.api.protected_owned_ids({r.id for r in rows})
@@ -223,7 +254,7 @@ class InventoryManager(Worker):
         # Le cache (3 jours) se remplit ainsi au fil des passages.
         to_price.sort(key=lambda cid: len(groups[cid]), reverse=True)
         quotes: dict[str, dict[str, Quote]] = {}
-        budget = self.settings.sell_price_lookups_per_run
+        budget = self.settings.sell_price_lookups_per_run if lookups is None else lookups
         looked_up = 0
         for card_id in to_price:
             fresh = await self.ctx.prices.is_fresh(card_id, INVENTORY_PRICE_MAX_AGE)
@@ -383,7 +414,7 @@ class InventoryManager(Worker):
             if result is None or result.dry_run:
                 await self.db.update_listing(row["id"], status="simulated", posted_at=utcnow(), dry_run=1,
                                              duration_minutes=minutes, target_end=target_end)
-                if row["bid_id"]:  # positions : message immédiat ; doublons : bilan du soir
+                if row["bid_id"] and self.settings.notify_simulated:  # positions : message ; doublons : bilan
                     self.notifier.info("Mise en vente simulée", label, durée=f"{minutes} min")
             elif result.ok:
                 auction_id = await self._listing_auction_id(result.payload, row["card_id"])
@@ -459,6 +490,8 @@ class InventoryManager(Worker):
                 await self.db.update_listing(row["id"], status="sim_sold", sale_price=price, settled_at=utcnow())
                 if bid:
                     await self.db.close_position(bid["id"], price)
+                    self.log.info("revente simulée : %s, achetée %d, vendue %d WB", label, bid["amount"], price)
+                if bid and self.settings.notify_simulated:
                     self.notifier.info("Revente simulée", f"{label} : achetée {bid['amount']}, départ "
                                        f"{row['base_amount']}, vendue {price} WB ({price - bid['amount']:+d})")
                 continue
@@ -512,8 +545,9 @@ class InventoryManager(Worker):
                                  bid_id=bid["id"], relist_count=row["relist_count"] + 1)
         else:
             await self.db.close_position(bid["id"], None)
-            self.notifier.warning("Position invendue", f"{label} : invendue après "
-                                  f"{row['relist_count'] + 1} essai(s), carte gardée.")
+            if not bid["dry_run"] or self.settings.notify_simulated:
+                self.notifier.warning("Position invendue", f"{label} : invendue après "
+                                      f"{row['relist_count'] + 1} essai(s), carte gardée.")
 
     # ------------------------------------------------------------ défausse
     async def discard(self, groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
@@ -554,10 +588,51 @@ class InventoryManager(Worker):
 
 
 # ------------------------------------------------------------------- CLI
-async def cli(ctx: Context, action: str, apply: bool) -> None:
+async def report(ctx: Context, worker: InventoryManager, lookups: int) -> None:
+    """Toute la collection cotée : résumé à l'écran, détail par carte dans data/inventaire-<date>.csv."""
+    s = ctx.settings
+    groups, excluded, quotes, total = await worker.snapshot(lookups=lookups)
+    rows = valuation(groups, quotes, excluded, s)
+    path = s.data_dir / f"inventaire-{now_local():%Y%m%d-%H%M}.csv"
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["carte"])
+        writer.writeheader()
+        writer.writerows(rows)
+    count = lambda key: sum(r[key] for r in rows)  # noqa: E731
+    sell, wb, discard = count("à vendre"), count("prix de vente"), count("à défausser")
+    kept, unknown = count("doublons gardés"), count("sans cote")
+    allowed, why = achievement_guard(total if s.achievement_count_mode == "total" else len(groups), discard,
+                                     s.achievement_milestones, s.achievement_margin,
+                                     affects_count=s.achievement_count_mode == "total")
+    print(f"\n{total} exemplaires, {len(groups)} cartes différentes")
+    print(f"  À vendre      : {sell} doublon(s) coté(s) ≥ {s.sell_min_value} WB, ~{wb} WB au total "
+          f"(5 ventes à la fois : les mieux cotés d'abord)")
+    print(f"  À défausser   : {discard} doublon(s) {'/'.join(s.discard_rarities)} coté(s) ≤ {s.discard_max_value} WB, "
+          f"+{discard} WB ; {allowed} permis aujourd'hui ({why})")
+    print(f"  Gardés        : {kept} doublon(s) entre les deux seuils ou d'une rareté jamais défaussée")
+    print(f"  Sans cote     : {unknown} doublon(s) ; relance avec --lookups plus grand (cotes gardées 3 jours)")
+    by_rarity: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
+    for r in rows:
+        by_rarity[r["rareté"]][0] += r["à vendre"]
+        by_rarity[r["rareté"]][1] += r["prix de vente"]
+        by_rarity[r["rareté"]][2] += r["à défausser"]
+    print("\nPar rareté (à vendre / WB / à défausser) :")
+    for rarity, (n, value, d) in sorted(by_rarity.items(), key=lambda kv: -RARITY_RANK.get(kv[0], -1)):
+        print(f"  {rarity:>2} : {n} / {value} WB / {d}")
+    print("\nLes 25 ventes les plus intéressantes :")
+    for r in sorted(rows, key=lambda r: -r["prix de vente"])[:25]:
+        if r["à vendre"]:
+            print(f"  {r['rareté']:>2} {r['carte'][:45]:<45} cote {r['cote']:>5} × {r['à vendre']} = {r['prix de vente']} WB")
+    print(f"\nDétail par carte : {path}")
+
+
+async def cli(ctx: Context, action: str, apply: bool, lookups: int | None = None) -> None:
     worker = InventoryManager(ctx)
     await worker.setup()
     s = ctx.settings
+    if action == "report":
+        await report(ctx, worker, s.sell_price_lookups_per_run if lookups is None else lookups)
+        return
     if action == "scan" or not apply:
         groups, excluded, quotes, total = await worker.snapshot()
         sales = select_for_sale(groups, quotes, excluded, s)

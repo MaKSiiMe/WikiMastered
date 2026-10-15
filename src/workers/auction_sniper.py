@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta, timezone
 
 from src.config import Settings
@@ -51,7 +51,8 @@ FRESH = timedelta(seconds=3)
 # Une carte de collection manquante entre dans la fenêtre de mise d'ici N s : le sniper ne lance plus rien de lent.
 COLLECTION_GUARD_SECONDS = 10
 # Issues d'une mise acceptée (ou simulée) : la vente est relue à sa fin.
-PLACED = ("misée", "misée (collection)")
+SHADOW_PLACED = "simulée (sniper de test)"
+PLACED = ("misée", "misée (collection)", SHADOW_PLACED)
 # Refus d'une mise tant que la vérification humaine du site n'est pas faite : « Vérification anti-bot
 # requise. » (relevé du 15/10/2026, en même temps que celle des paquets).
 ANTIBOT_HINT = "anti-bot"
@@ -349,7 +350,18 @@ class AuctionSniper(Worker):
 
     # ------------------------------------------------------------ repérage
     def _watched_rarities(self, params: SnipeParams) -> list[str]:
-        return list(dict.fromkeys([*self.settings.sniper_resale_rarities, *params.rarity_caps]))
+        return list(dict.fromkeys([*self._resale_rarities, *params.rarity_caps]))
+
+    @property
+    def _shadow_on(self) -> bool:
+        """Sniper de test actif : mises de positions réelles, et simulation en plus."""
+        return self.settings.sniper_shadow and self.settings.is_live("place_bid")
+
+    @property
+    def _resale_rarities(self) -> list[str]:
+        """Raretés suivies pour la revente : celles du sniper réel, plus celles du sniper de test."""
+        extra = self.settings.sniper_shadow_rarities if self._shadow_on else []
+        return list(dict.fromkeys([*self.settings.sniper_resale_rarities, *extra]))
 
     def _lateness(self, params: SnipeParams, now: datetime) -> list[tuple[float, float, tuple[str, str]]]:
         """(retard en s, période visée, source) de chaque source de repérage : nouvelles ventes et ventes
@@ -439,8 +451,8 @@ class AuctionSniper(Worker):
         cap = rarity_ceiling(a, params)
         if cap is not None and a.min_bid <= cap:
             return True
-        if a.rarity not in self.settings.sniper_resale_rarities or self._buys_left == 0:
-            return False  # achats réels épuisés : les relectures servent aux cartes de collection
+        if a.rarity not in self._resale_rarities or (self._buys_left == 0 and not self._shadow_on):
+            return False  # achats réels épuisés, sans sniper de test : les relectures servent à la collection
         observed = trusted(await self.db.observed_by_rarity(a.catalog_id, self.settings.price_recent_sales, a.shiny))
         quote = combine(*observed.get(a.rarity or "", ([], 0)), None)
         return quote.reliable(self.settings.price_min_sales) and \
@@ -494,7 +506,7 @@ class AuctionSniper(Worker):
         après la relecture sans autre requête (chacune coûte ~1,5 s, l'enchère vieillirait sous le seuil).
         Pas de cote pour une carte de collection : sa mise n'en dépend pas, et la route des cotes est lente."""
         await self.portfolio(now)
-        if auction.rarity in self.settings.sniper_resale_rarities and not self._wanted(auction):
+        if auction.rarity in self._resale_rarities and not self._wanted(auction):
             try:
                 await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
             except (RateLimited, ApiError):
@@ -529,7 +541,7 @@ class AuctionSniper(Worker):
             return False
         self._next_prefetch = now + timedelta(seconds=self.settings.sniper_prefetch_seconds)
         soon = sorted((t.auction for t in self._targets.values()
-                       if not t.recheck and t.auction.rarity in self.settings.sniper_resale_rarities
+                       if not t.recheck and t.auction.rarity in self._resale_rarities
                        and t.auction.seconds_left(now) <= 900), key=lambda a: a.end_at)
         for a in soon:
             if await self.ctx.prices.is_cached(a.catalog_id):
@@ -608,6 +620,38 @@ class AuctionSniper(Worker):
             else:
                 self._outcome(auction, "mise refusée : vérification anti-bot" if self._antibot_since
                               else "mise refusée par le site")
+        if self._shadow_on:
+            await self._play_shadow([a for a in auctions if self._outcomes.get(a.id) not in PLACED], params, now)
+
+    async def _play_shadow(self, auctions: list[Auction], params: SnipeParams, now: datetime) -> None:
+        """Sniper de test : simule les achats que le sniper réel n'a pas faits (plafonds du test), avec ses propres
+        limites, pour continuer à mesurer la stratégie. Jamais une carte de collection ni une vente déjà misée."""
+        s = self.settings
+        portfolio = await self.shadow_portfolio(now)
+        shadow = replace(params, max_bid=s.sniper_shadow_max_bid)
+        candidates: list[tuple[float, Auction, Decision]] = []
+        for auction in auctions:
+            if auction.rarity not in self._resale_rarities or self._wanted(auction) \
+                    or self.is_manual_interest(auction) or await self.db.last_bid(auction.id) is not None:
+                continue
+            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False)
+            decision = decide(auction, shadow, quote, s.price_min_sales, portfolio, s.sale_fee_pct, resale=True)
+            if decision is not None and not decision.collection:
+                candidates.append((decision.profit or 0.0, auction, decision))
+        opened = spent = 0
+        for _, auction, decision in sorted(candidates, key=lambda c: c[0], reverse=True):
+            open_now = portfolio.open_positions + opened
+            if open_now >= portfolio.max_positions or auction.seconds_left() <= s.sniper_min_seconds_left:
+                continue
+            if open_now >= portfolio.sale_room and \
+                    (decision.profit or 0) < max(portfolio.min_profit, portfolio.queue_min_profit):
+                continue
+            if decision.amount > portfolio.available - spent:  # solde simulé : réel moins les engagements simulés
+                continue
+            if await self._bid(auction, decision, shadow, simulate=True):
+                self._outcomes[auction.id] = SHADOW_PLACED
+                opened += 1
+                spent += decision.amount
 
     async def portfolio(self, now: datetime) -> Portfolio:
         held = await self.db.positions_summary()
@@ -630,6 +674,18 @@ class AuctionSniper(Worker):
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
             engaged_real=engaged_real, engaged_sim=pending["sim_cost"], bot_engaged_count=engaged_count,
             max_positions=cap, sale_room=room,
+        )
+
+    async def shadow_portfolio(self, now: datetime) -> Portfolio:
+        """Positions du sniper de test : simulées seulement, avec leur propre plafond."""
+        held = await self.db.positions_summary()
+        pending = await self.db.pending_bids()
+        engaged_real = sum(amount for _, amount in self._leading.values())
+        return portfolio_state(
+            self.settings, balance=await self._current_balance(), held_count=held["count"] - held["real_count"],
+            held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"], engaged_real=engaged_real,
+            engaged_sim=pending["sim_cost"], bot_engaged_count=pending["positions"] - pending["real_positions"],
+            max_positions=self.settings.sniper_shadow_max_positions, sale_room=self.settings.portfolio_slots,
         )
 
     async def _current_balance(self) -> int:
@@ -774,7 +830,7 @@ class AuctionSniper(Worker):
                 return None
             if last["status"] in ("placed", "outbid") and not self.settings.sniper_allow_rebid:
                 return None
-        resale = auction.rarity in self.settings.sniper_resale_rarities
+        resale = auction.rarity in self.settings.sniper_resale_rarities  # SNIPER_SHADOW_RARITIES : test seulement
         if resale:
             # Sans requête : la cote a été mise en cache avant la relecture (_prepare, _prefetch). Une requête
             # ici ferait vieillir l'enchère, et les suivantes du même passage, sous le seuil de mise.
@@ -805,7 +861,7 @@ class AuctionSniper(Worker):
 
     def recap(self) -> list[str]:
         outcomes, self._outcomes = self._outcomes, {}
-        watched = "/".join(self.settings.sniper_resale_rarities)
+        watched = "/".join(self._resale_rarities)
         found = f"Repérage : {len(self._targets)} vente(s) suivie(s) ({watched} et jours manquants), " \
                 f"{self._days_found} vente(s) de jours manquants trouvée(s)"
         if self._gaps:
@@ -838,10 +894,11 @@ class AuctionSniper(Worker):
             return False
         return True
 
-    async def _bid(self, auction: Auction, decision: Decision, params: SnipeParams, *, retried: bool = False) -> bool:
-        """Place la mise ; renvoie True si elle est acceptée (ou simulée)."""
+    async def _bid(self, auction: Auction, decision: Decision, params: SnipeParams, *, retried: bool = False,
+                   simulate: bool = False) -> bool:
+        """Place la mise ; renvoie True si elle est acceptée (ou simulée). `simulate` : sniper de test."""
         # Mises de positions (« sniper ») et de collection (« collection ») : réelles ou simulées séparément.
-        live = self.settings.is_live("collection_bid" if decision.collection else "place_bid")
+        live = not simulate and self.settings.is_live("collection_bid" if decision.collection else "place_bid")
         common = dict(
             auction_id=auction.id, card_id=auction.catalog_id, title=auction.title, rarity=auction.rarity,
             is_shiny=auction.shiny, amount=decision.amount, reference_price=decision.reference,
@@ -906,6 +963,8 @@ class AuctionSniper(Worker):
 
     def _report_bid(self, title: str, summary: str, *, simulated: bool = False) -> None:
         self.log.info("%s : %s", title, summary)
+        if simulated and not self.settings.notify_simulated:
+            return  # sniper de test : logs, récap et bilan seulement
         if self.settings.notify_each_bid:
             self.notifier.info(title, summary)
         else:
@@ -970,6 +1029,9 @@ class AuctionSniper(Worker):
                 await record_win(self.ctx, row["title"])
             notify = self.notifier.info if simulated else self.notifier.success
             title = "Collection : carte obtenue (simulé)" if simulated else "Collection : carte obtenue !"
+            if simulated and not self.settings.notify_simulated:
+                self.log.info("%s : %s", title, row["title"])
+                return
             notify(title, f"{name}, gardée dans la collection", topic=Topic.COLLECTION, **look,
                    **{"rareté": row["rarity"] or "?", "prix": f"{row['amount']} WB"})
             return
@@ -980,7 +1042,10 @@ class AuctionSniper(Worker):
             fields["bénéfice attendu"] = f"~{ref - row['amount']:.0f} WB"
         fields["nuit"] = "oui" if row["night"] else "non"
         if simulated:
-            self.notifier.info("Achat simulé remporté", name, **look, **fields)
+            if self.settings.notify_simulated:
+                self.notifier.info("Achat simulé remporté", name, **look, **fields)
+            else:
+                self.log.info("achat simulé remporté : %s (%s), %d WB", row["title"], row["rarity"], row["amount"])
         else:
             self.notifier.success("Position achetée !", name, **look, **fields)
 
