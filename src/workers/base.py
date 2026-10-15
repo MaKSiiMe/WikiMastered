@@ -55,11 +55,16 @@ class Worker:
         raise NotImplementedError
 
     async def run(self) -> None:
-        await self.setup()
-        self.log.info("démarré")
+        ready = False
         while True:
             await self.ctx.client.wait_session()
             try:
+                if not ready:
+                    # Initialisation dans la boucle : un échec au démarrage (réseau…) est réessayé ici,
+                    # sans arrêter ce worker ni les autres.
+                    await self.setup()
+                    ready = True
+                    self.log.info("démarré")
                 delay = await self.step()
                 self._errors = 0
                 self.last_ok = utcnow()
@@ -68,8 +73,12 @@ class Worker:
             except (SessionExpired, RateLimited):
                 delay = 5  # le client gère déjà la pause et l'alerte
             except UncertainMutation as exc:
-                self.notifier.critical(f"{self.name} : résultat incertain", f"{exc}\nRien n'a été rejoué. Le bot relira le résultat sur le site "
-                                     "et enverra « … vérifiée ».")
+                if self._errors == 0:  # une alerte par série : une route en panne ne spamme pas Discord
+                    self.notifier.critical(f"{self.name} : résultat incertain", f"{exc}\nRien n'a été rejoué. Le bot "
+                                           "relira le résultat sur le site et enverra « … vérifiée ».")
+                self._errors += 1
+                self.recent_errors += 1
+                self.last_error = str(exc)[:200]
                 delay = 60
             except (ApiError, RuntimeError, ValueError, httpx.HTTPError) as exc:
                 delay = self._on_error(exc)
