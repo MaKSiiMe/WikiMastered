@@ -41,7 +41,7 @@ from src.core.text import normalize_title
 from src.core.timeutils import in_window, local_dt, now_local
 from src.workers.base import Worker
 from src.workers.collection import KV_KEY as COLLECTION_KV
-from src.workers.collection import collection_key, targets as collection_targets
+from src.workers.collection import collection_key, record_win, targets as collection_targets
 
 COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, pas revendues
 # Le site refuse plus de 50 enchères par page (403 dès limit=100, relevé du 15/10/2026).
@@ -50,6 +50,11 @@ MARKET_LIMIT = 50
 FRESH = timedelta(seconds=3)
 # Une carte de collection manquante entre dans la fenêtre de mise d'ici N s : le sniper ne lance plus rien de lent.
 COLLECTION_GUARD_SECONDS = 10
+# Issues d'une mise acceptée (ou simulée) : la vente est relue à sa fin.
+PLACED = ("misée", "misée (collection)")
+# Refus d'une mise tant que la vérification humaine du site n'est pas faite : « Vérification anti-bot
+# requise. » (relevé du 15/10/2026, en même temps que celle des paquets).
+ANTIBOT_HINT = "anti-bot"
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -258,6 +263,7 @@ class AuctionSniper(Worker):
         self._manual_auctions: set[str] = set()
         self._manual_cards: set[str] = set()
         self._sale_slots: tuple[datetime, int, int] | None = None  # (lu à, max, ventes en cours)
+        self._antibot_since: datetime | None = None  # mises refusées : vérification anti-bot à faire
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
         # Jours manquants d'après la dernière lecture (avant de retirer ceux que le bot a gagnés), et
@@ -316,10 +322,15 @@ class AuctionSniper(Worker):
                  if not t.recheck and now - t.seen_at <= FRESH
                  and in_snipe_window(t.auction, me, params.window_seconds, now, self.settings.sniper_min_seconds_left)]
         if ready:
+            for a in ready:
+                # Surenchérie puis rejouée : la nouvelle issue (ex. « trop chère ») remplace la mise précédente,
+                # sinon elle n'est ni journalisée ni comptée, et la vente est encore relue à sa fin pour rien.
+                if self._outcomes.get(a.id) in PLACED:
+                    del self._outcomes[a.id]
             await self._play(ready, params, now)
             self._log_collection_outcomes(ready)
             for a in ready:
-                if self._outcomes.get(a.id) in ("misée", "misée (collection)"):
+                if self._outcomes.get(a.id) in PLACED:
                     self._targets[a.id].recheck = True  # relue à sa fin : prolongée, elle sera rejouée
                 else:
                     self._targets.pop(a.id, None)
@@ -591,7 +602,8 @@ class AuctionSniper(Worker):
                     free -= 1
                     opened += 1
             else:
-                self._outcome(auction, "mise refusée par le site")
+                self._outcome(auction, "mise refusée : vérification anti-bot" if self._antibot_since
+                              else "mise refusée par le site")
 
     async def portfolio(self, now: datetime) -> Portfolio:
         held = await self.db.positions_summary()
@@ -766,8 +778,15 @@ class AuctionSniper(Worker):
 
     def _outcome(self, auction: Auction, outcome: str) -> None:
         """Retient l'issue d'une enchère ; une mise placée n'est plus remplacée par un refus ultérieur."""
-        if self._outcomes.get(auction.id) not in ("misée", "misée (collection)"):
+        if self._outcomes.get(auction.id) not in PLACED:
             self._outcomes[auction.id] = outcome
+
+    @property
+    def blocked(self) -> str | None:
+        if not self._antibot_since:
+            return None
+        return (f"mises refusées depuis {self._antibot_since.astimezone(timeutils.PARIS):%d/%m %H:%M} : "
+                "vérification anti-bot à faire dans ton navigateur")
 
     def recap(self) -> list[str]:
         outcomes, self._outcomes = self._outcomes, {}
@@ -844,6 +863,9 @@ class AuctionSniper(Worker):
             bid_id = await self.db.record_bid(**common, status="placed")
             self._leading[auction.id] = (bid_id, decision.amount)
             self._balance, self._balance_at = confirmed.bidder_balance, utcnow()
+            if self._antibot_since:
+                self._antibot_since = None
+                self.notifier.success("Sniper : vérification levée", "Les mises passent de nouveau.")
             self._engaged[auction.id] = auction.end_at
             self._bot_engaged.add(auction.id)
             self._report_bid("Enchère placée", f"{summary}, solde {confirmed.bidder_balance}")
@@ -853,6 +875,15 @@ class AuctionSniper(Worker):
         error = payload.get("error") or payload.get("message") or f"HTTP {result.status}"
         await self.db.record_bid(**common, status="rejected", note=str(error)[:300])
         self.log.info("mise refusée sur %s : %s", label, error)
+        if ANTIBOT_HINT in str(error).lower() or payload.get("human_verification_required"):
+            if not self._antibot_since:
+                self._antibot_since = utcnow()
+                self.notifier.critical(
+                    "Sniper : vérification anti-bot demandée",
+                    f"Le site refuse les mises tant qu'elle n'est pas faite ({label} : {decision.amount} WB "
+                    "refusée). Fais-la toi-même dans ton navigateur (page Paquets) ; le bot continue de miser "
+                    "et te prévient quand une mise repasse.")
+            return False
         if not retried and isinstance(server_min, int) and decision.amount < server_min <= decision.ceiling:
             return await self._bid(auction, Decision(server_min, decision.ceiling, decision.reason, decision.reference,
                                                      decision.profit), params, retried=True)
@@ -897,6 +928,11 @@ class AuctionSniper(Worker):
         name = f"**[{row['title']}]({link})**" if link else f"**{row['title']}**"
         look = {"thumbnail": card.image_url if card else None, "url": link}
         if closed:
+            # Plus manquante dès maintenant : une autre vente de la même carte ne doit pas être misée d'ici
+            # la prochaine lecture de la collection.
+            self._collection_missing.discard(collection_key(row["title"]))
+            if not simulated:
+                await record_win(self.ctx, row["title"])
             notify = self.notifier.info if simulated else self.notifier.success
             title = "Collection : carte obtenue (simulé)" if simulated else "Collection : carte obtenue !"
             notify(title, f"{name}, gardée dans la collection", topic=Topic.COLLECTION, **look,

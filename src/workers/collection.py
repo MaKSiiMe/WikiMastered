@@ -106,6 +106,21 @@ async def refresh(ctx: Context) -> dict:
     return state
 
 
+async def record_win(ctx: Context, title: str) -> None:
+    """Carte gagnée par le sniper : possédée tout de suite dans l'état (récap, bilan), sans attendre la
+    prochaine lecture (COLLECTION_REFRESH_MINUTES, 6 h par défaut), qui la confirmera."""
+    state = await ctx.db.kv_get(KV_KEY)
+    key = collection_key(title)
+    if not state or key not in state["missing"]:
+        return
+    state["missing"].remove(key)
+    state["owned"] = sorted({*state["owned"], key})
+    state["sets"] = set_progress(ctx, set(state["owned"]))
+    if "first_owned" in state:  # sinon, la première lecture n'a pas encore daté les cartes déjà là
+        state["first_owned"][key] = utcnow().isoformat()
+    await ctx.db.kv_set(KV_KEY, state)
+
+
 def set_progress(ctx: Context, owned: set[str]) -> dict[str, list[int]]:
     """Avancement de chaque collection : {nom : [possédées, total]}."""
     out: dict[str, list[int]] = {}
