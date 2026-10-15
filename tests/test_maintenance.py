@@ -102,3 +102,29 @@ async def test_reset_simulation_keeps_real_data(tmp_path):
     assert [r["auction_id"] for r in await db._all("SELECT * FROM bids")] == ["reel"]
     assert [r["owned_card_id"] for r in await db._all("SELECT * FROM listings")] == ["copie"]
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_suspect_sales_do_not_count_in_quotes(tmp_path):
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [("a1", "s1", "b1", 400), ("a2", "s2", "b2", 420),        # ventes ordinaires
+            ("a3", "s9", "b9", 5000), ("a4", "s9", "b9", 5200),      # même paire deux fois : factices
+            ("a5", "s7", "s7", 9000)]                                # vendeur = acheteur
+    await db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at, seller_id, "
+        "buyer_id) VALUES (?, 'x', 't', 'UR', 0, ?, ?, ?, ?)", [(a, p, now, s, b) for a, s, b, p in rows])
+    await db.db.commit()
+    prices, count = (await db.observed_by_rarity("x", 5))["UR"]
+    assert sorted(prices) == [400, 420] and count == 2
+    assert sorted((await db.observed_prices("x", 5, rarity="UR"))[0]) == [400, 420]
+    await db.close()
+
+
+def test_outlier_sales_are_ignored():
+    from src.core.pricing import robust_median
+    assert robust_median([400, 410, 3000]) == 405.0      # une vente gonflée
+    assert robust_median([400, 410, 20]) == 405.0        # une vente bradée par erreur
+    assert robust_median([400, 2000]) == 400.0           # deux ventes trop différentes : la plus basse
+    assert robust_median([400, 500]) == 450.0

@@ -14,6 +14,7 @@ from src.core.notifier import Level, Topic
 from src.core import timeutils
 from src.core.timeutils import now_local, sleep_until
 from src.workers.base import Context, Worker
+from src.workers.collection import progress_lines, targets
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ BLOCKS: list[tuple[str, tuple[str, ...]]] = [
     (Topic.PACKS.value, ("packs",)),
     (Topic.COLLECTION.value, ("collection",)),
     (Topic.TRENDS.value, ("trends", "gtrends")),
+    (Topic.ACHIEVEMENTS.value, ("succes",)),
 ]
 
 
@@ -65,9 +67,8 @@ def activity(name: str, stats: dict[str, int]) -> list[str]:
     if name == "packs":
         return [f"{stats['boosters']} booster(s), {stats['cards']} carte(s), {stats['notable']} remarquable(s)"]
     if name == "collection":
-        owned = f"{stats['collection_owned']}/{stats['collection_total']} possédées" if stats.get("collection_total") \
-            else "collection pas encore lue"
-        return [f"{owned} · {stats['won_collection']} gagnée(s) · mises {stats['bids_collection']}"]
+        return [*stats["collection_progress"],
+                f"Sniper : {stats['won_collection']} gagnée(s) · mises {stats['bids_collection']}"]
     if name == "trends":
         return [f"Signaux : Wikipédia {stats['signals_wiki']}, Google {stats['signals_google']}"]
     return []
@@ -93,8 +94,8 @@ async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
     """(anomalie trouvée, description, blocs)."""
     now = utcnow()
     stats = await ctx.db.recap_stats(since)
-    collection = await ctx.db.kv_get("collection") or {}
-    stats["collection_owned"], stats["collection_total"] = len(collection.get("owned", [])), collection.get("total", 0)
+    collection = await ctx.db.kv_get("collection")
+    stats["collection_progress"] = progress_lines(collection, targets(ctx) if collection else {}, now)
     pending = await ctx.db.pending_bids()
     by_name = {w.name: w for w in workers}
     problems = anomalies(ctx, stats, pending)

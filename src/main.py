@@ -34,6 +34,7 @@ from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sl
 from src.recap import recap_loop
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
+from src.workers.achievements import AchievementsWorker
 from src.workers.collection import CollectionWorker, summary_line, targets
 from src.workers.collection import refresh as refresh_collection
 from src.workers.google_trends import GoogleTrends
@@ -212,6 +213,8 @@ async def run_bot(settings: Settings) -> None:
             workers.append(GoogleTrends(ctx))
         if settings.collection_sets or settings.collection_titles:
             workers.append(CollectionWorker(ctx))
+        if settings.enable_achievements:
+            workers.append(AchievementsWorker(ctx))
 
         mode = settings.mode_label
         names = ", ".join(w.name for w in workers) or "aucun"
@@ -290,7 +293,8 @@ async def collection_status(settings: Settings) -> None:
         if state["unknown_sets"]:
             print(f"Ensemble(s) inconnu(s) : {state['unknown_sets']} — valeur attendue : jours")
         by_key = targets(ctx)
-        print(summary_line(state, by_key).replace("**", ""))
+        from src.workers.collection import progress_lines
+        print("\n".join(progress_lines(state, by_key, datetime.now(timezone.utc), days=30)))
         print("Manquantes : " + (", ".join(by_key.get(k, k) for k in state["missing"]) or "aucune"))
         if state["unmatched"]:
             print("Titres trouvés mais non reconnus (format différent ?) : " + ", ".join(state["unmatched"]))

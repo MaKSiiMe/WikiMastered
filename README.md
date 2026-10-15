@@ -11,6 +11,7 @@ Il parle directement aux routes JSON du site, sans navigateur, et rend compte su
 | Inventaire | `src/workers/inventory_manager.py` | Revend les positions et les doublons, défausse protégée | 💰 Ventes |
 | Collection | `src/workers/collection.py` | Complète la collection des 366 jours, pose l'étiquette « date » | 📅 Collection |
 | Tendances | `src/workers/wiki_trends.py`, `google_trends.py` | Pics Wikipédia et recherches Google croisés avec le marché | 📈 Tendances |
+| Succès | `src/workers/achievements.py` | Réclame les récompenses des succès débloqués, toutes les ~3 h | 🏆 Succès |
 
 > **À lire avant de lancer**
 > - Automatiser un compte peut être contraire aux conditions d'utilisation de WikiMasters et mener à un bannissement. L'espacement des requêtes limite la charge sur le site ; il ne garantit rien.
@@ -53,7 +54,7 @@ Raccourci : dans DevTools, clic droit sur une requête `/api/…` > *Copier comm
 | `DRY_RUN=false` + `SIMULATE=sniper` | Tout est réel sauf les mises des positions du sniper. |
 | `DRY_RUN=false` | Tout est réel. |
 
-Groupes acceptés : `sniper`, `collection`, `packs`, `ventes`, `defausse`, `tags`, `inventory` (= ventes + défausse). Tant que le sniper est simulé, le bilan du soir contient un bloc « Validation de la simulation » qui dit quand le passage en réel est envisageable.
+Groupes acceptés : `sniper`, `collection`, `packs`, `ventes`, `defausse`, `tags`, `succes`, `inventory` (= ventes + défausse). Tant que le sniper est simulé, le bilan du soir contient un bloc « Validation de la simulation » qui dit quand le passage en réel est envisageable.
 
 ## Discord
 

@@ -25,6 +25,7 @@ WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "packs": ("open_pack",), "paquets": ("open_pack",),
     "ventes": ("create_listing",), "inventory": ("create_listing", "bulk_discard"),
     "defausse": ("bulk_discard",), "tags": ("tag_card",),
+    "succes": ("achievements_check", "claim_achievement"),
 }
 
 CsvList = Annotated[list[str], NoDecode]
@@ -106,6 +107,8 @@ class Settings(BaseSettings):
     enable_inventory: bool = True
     enable_wiki_trends: bool = True
     enable_google_trends: bool = True
+    enable_achievements: bool = True
+    achievements_interval_minutes: float = 180.0  # réclame les succès débloqués toutes les ~3 h
 
     # --- Module B : paquets -----------------------------------------------------
     pack_regen_minutes: float = 10.0

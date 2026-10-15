@@ -669,7 +669,7 @@ class AuctionSniper(Worker):
             "auction_id": a.id, "card_id": a.catalog_id, "title": a.title, "norm_title": normalize_title(a.title),
             "rarity": a.rarity, "is_shiny": int(a.shiny), "current_bid": a.current_bid,
             "base_amount": a.base_amount, "min_bid": a.min_bid, "end_at": a.end_at.isoformat(),
-            "seen_at": now.isoformat(),
+            "seen_at": now.isoformat(), "seller_id": a.seller_id, "bidder_id": a.current_bidder_id,
         } for a in auctions])
 
     async def _track_outbids(self, auctions: list[Auction], me: str | None) -> None:

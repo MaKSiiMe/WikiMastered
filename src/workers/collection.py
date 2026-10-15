@@ -8,6 +8,9 @@
 - Jamais deux enchères en même temps pour la même carte ; jamais sur une carte que tu
   cherches toi-même (tu mises déjà dessus).
 
+- Suivi de complétion : avancement de chaque collection (jours, titres) et date d'obtention de
+  chaque carte (kv « collection », clé first_owned), pour le récap, le bilan et la commande.
+
 - Étiquette (COLLECTION_TAG, « date » par défaut) : ajoutée à un exemplaire de chaque carte
   possédée qui n'en a pas, comme le fait l'éditeur d'étiquettes du site (tables Supabase `tags`
   et `user_card_tags` [WP tags.js]). Avec PROTECTED_TAGS=date, cet exemplaire n'est jamais vendu.
@@ -20,9 +23,11 @@ cartes du site ; seuls les titres exacts comptent (pas « 14 août en sport » n
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 
 import logging
 
+from src.core import timeutils
 from src.core.client import ApiError
 from src.core.database import utcnow
 from src.core.models import OwnedCard
@@ -91,12 +96,53 @@ async def refresh(ctx: Context) -> dict:
             elif re.match(r"^\d", key):
                 near.add(row.title)
     owned = set(copies)
+    previous = await ctx.db.kv_get(KV_KEY) or {}
     state = {"owned": sorted(owned), "missing": sorted(set(wanted) - owned, key=list(wanted).index),
              "total": len(wanted), "unmatched": sorted(near)[:20], "unknown_sets": unknown,
-             "at": utcnow().isoformat()}
+             "at": utcnow().isoformat(), "sets": set_progress(ctx, owned),
+             "first_owned": first_owned(previous, owned, utcnow())}
     state.update(await tag_owned(ctx, copies))
     await ctx.db.kv_set(KV_KEY, state)
     return state
+
+
+def set_progress(ctx: Context, owned: set[str]) -> dict[str, list[int]]:
+    """Avancement de chaque collection : {nom : [possédées, total]}."""
+    out: dict[str, list[int]] = {}
+    if "jours" in sets(ctx)[0]:
+        days = {collection_key(t) for t in year_days()}
+        out["Jours de l'année"] = [len(days & owned), len(days)]
+    titles = {collection_key(t) for t in ctx.settings.collection_titles}
+    if titles:
+        out["Titres"] = [len(titles & owned), len(titles)]
+    return out
+
+
+def first_owned(previous: dict, owned: set[str], now: datetime) -> dict[str, str | None]:
+    """Date d'obtention de chaque carte possédée. À la première lecture, les cartes déjà là
+    n'ont pas de date (inconnue) : elles ne comptent pas comme des gains récents."""
+    known: dict[str, str | None] = previous.get("first_owned") or {}
+    first_run = "first_owned" not in previous
+    return {k: known[k] if k in known else (None if first_run else now.isoformat()) for k in sorted(owned)}
+
+
+def progress_lines(state: dict | None, titles: dict[str, str], now: datetime, days: int = 7) -> list[str]:
+    """Une ligne par collection, puis les cartes obtenues ces `days` derniers jours."""
+    if not state:
+        return ["Collection pas encore lue."]
+    progress = state.get("sets") or {"Collection": [len(state["owned"]), state["total"]]}
+    lines = [f"{name} : {owned}/{total} ({f'{100 * owned / total:.1f}'.replace('.', ',')} %)" if total
+             else f"{name} : vide"
+             for name, (owned, total) in progress.items()]
+    since = now - timedelta(days=days)
+    recent = sorted(((datetime.fromisoformat(at), key) for key, at in (state.get("first_owned") or {}).items()
+                     if at and datetime.fromisoformat(at) >= since), reverse=True)
+    if recent:
+        names = ", ".join(f"{titles.get(k, k)} ({at.astimezone(timeutils.PARIS):%d/%m})" for at, k in recent[:5])
+        lines.append(f"+{len(recent)} en {days} jours : {names}{'…' if len(recent) > 5 else ''}")
+    else:
+        lines.append(f"Aucune nouvelle carte en {days} jours")
+    return lines
 
 
 async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]]) -> dict:
@@ -144,7 +190,8 @@ def summary_line(state: dict | None, targets_by_key: dict[str, str]) -> str:
         return "Collection : pas encore lue."
     missing = [targets_by_key.get(k, k) for k in state["missing"]]
     shown = ", ".join(missing[:12]) + (f"… (+{len(missing) - 12})" if len(missing) > 12 else "")
-    return f"**Collection** : {len(state['owned'])}/{state['total']} — il manque : {shown or 'rien !'}"
+    progress = " · ".join(progress_lines(state, targets_by_key, utcnow()))
+    return f"**Collection** : {progress} — il manque : {shown or 'rien !'}"
 
 
 class CollectionWorker(Worker):
