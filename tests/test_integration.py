@@ -376,7 +376,7 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
             return httpx.Response(200, json={"auction": auction(status="settled_unsold")})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, position_list_at_peak=False, listing_min_duration_minutes=60)
+    client, notifier = make_client(tmp_path, handler, listing_min_duration_minutes=60)
     db = Database(tmp_path / "t.db")
     await db.connect()
     api = WikiMastersAPI(client)

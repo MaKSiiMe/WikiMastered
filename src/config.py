@@ -154,6 +154,9 @@ class Settings(BaseSettings):
     sniper_allow_rebid: bool = True
     sniper_settle_grace_seconds: int = 30
     sniper_max_concurrent_bids: int = 0   # 0 = illimité (le site n'impose pas de limite aux mises)
+    # Achats réels de positions au plus, depuis toujours (0 = illimité) : gagnées + mises en cours. Atteint, le
+    # sniper ne rachète plus rien à revendre, même quand une revente libère une place (test du 16/10 : 5).
+    sniper_max_buys: int = 0
     sniper_avoid_my_bids: bool = True     # ne jamais toucher aux cartes sur lesquelles tu mises toi-même
 
     # Arbitrage nocturne
@@ -180,7 +183,10 @@ class Settings(BaseSettings):
     # (relevé du 16/10 : prix final / prix de départ, médiane ×1,11 en UR, ×1,23 en L ; 41 % et 29 % sans
     # surenchère) et les 5 places de vente sont rares : un départ bas vendrait presque au prix d'achat.
     position_list_profit_share: float = 0.5
-    position_list_at_peak: bool = True    # fin de vente dans LISTING_END_WINDOW
+    # Revente d'une position : publiée entre ces heures (Paris), pour cette durée (12 h : fin vers 23 h-minuit).
+    position_post_start: time = time(11, 0)
+    position_post_end: time = time(12, 0)
+    position_list_duration_minutes: int = 720
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2
 
