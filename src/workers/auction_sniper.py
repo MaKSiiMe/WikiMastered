@@ -41,7 +41,7 @@ from src.core.text import normalize_title
 from src.core.timeutils import in_window, local_dt, now_local
 from src.workers.base import Worker
 from src.workers.collection import KV_KEY as COLLECTION_KV
-from src.workers.collection import collection_key, targets as collection_targets
+from src.workers.collection import collection_key, record_win, targets as collection_targets
 
 COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, pas revendues
 # Le site refuse plus de 50 enchères par page (403 dès limit=100, relevé du 15/10/2026).
@@ -928,6 +928,11 @@ class AuctionSniper(Worker):
         name = f"**[{row['title']}]({link})**" if link else f"**{row['title']}**"
         look = {"thumbnail": card.image_url if card else None, "url": link}
         if closed:
+            # Plus manquante dès maintenant : une autre vente de la même carte ne doit pas être misée d'ici
+            # la prochaine lecture de la collection.
+            self._collection_missing.discard(collection_key(row["title"]))
+            if not simulated:
+                await record_win(self.ctx, row["title"])
             notify = self.notifier.info if simulated else self.notifier.success
             title = "Collection : carte obtenue (simulé)" if simulated else "Collection : carte obtenue !"
             notify(title, f"{name}, gardée dans la collection", topic=Topic.COLLECTION, **look,
