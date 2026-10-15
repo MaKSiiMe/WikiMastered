@@ -104,6 +104,12 @@ class WikiMastersAPI:
         return protected & owned_ids
 
     # ------------------------------------------------------------ écriture
+    async def achievements_check(self) -> MutationResult:
+        return await self.client.mutate("achievements_check")
+
+    async def claim_achievement(self, achievement_id: str) -> MutationResult:
+        return await self.client.mutate("claim_achievement", achievement_id=achievement_id)
+
     async def open_pack(self) -> MutationResult:
         return await self.client.mutate("open_pack")
 

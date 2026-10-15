@@ -90,6 +90,18 @@ endpoints:
     path: /api/marketplace
     json: {card_id: "{owned_card_id}", base_amount: "{base_amount}", duration_minutes: "{duration_minutes}"}
 
+  # Succès [FW 3d3n-pyc/wikimasters-farm client.py, LB LockBlock-dev/wikimasters-bot types.ts],
+  # pas encore vérifiés sur le site : les premières réponses sont gardées dans data/inspect/writes/.
+  achievements_check:           # recalcule les succès débloqués (le site le fait à l'ouverture de la page)
+    method: POST
+    path: /api/achievements/check
+    json: {event: achievements_sync}
+
+  claim_achievement:            # -> { claimed_at, already_claimed, amount }
+    method: POST
+    path: /api/achievements/claim
+    json: {achievement_id: "{achievement_id}"}
+
   bulk_discard:                 # [WR api.js, discard.js] 50 exemplaires max par lot
     method: POST                # -> { discarded_count, failed: [] }
     path: /api/user-cards/bulk-discard

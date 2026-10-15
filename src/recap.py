@@ -28,6 +28,7 @@ BLOCKS: list[tuple[str, tuple[str, ...]]] = [
     (Topic.PACKS.value, ("packs",)),
     (Topic.COLLECTION.value, ("collection",)),
     (Topic.TRENDS.value, ("trends", "gtrends")),
+    (Topic.ACHIEVEMENTS.value, ("succes",)),
 ]
 
 
