@@ -114,6 +114,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("auctions_seen", "bidder_id", "TEXT"),
     ("observed_sales", "seller_id", "TEXT"),
     ("observed_sales", "buyer_id", "TEXT"),
+    ("observed_sales", "base_amount", "INTEGER"),
 ]
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
 WASH_PAIR_MIN = 2
@@ -485,10 +486,10 @@ class Database:
             done.append((r["auction_id"],))
             if r["current_bid"] and seen and (end - seen).total_seconds() <= max_gap_seconds:
                 sales.append((r["auction_id"], r["card_id"], r["title"], r["rarity"], r["is_shiny"],
-                              r["current_bid"], iso(end), r["seller_id"], r["bidder_id"]))
+                              r["current_bid"], iso(end), r["seller_id"], r["bidder_id"], r["base_amount"]))
         await self.db.executemany(
             "INSERT OR IGNORE INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at, "
-            "seller_id, buyer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", sales)
+            "seller_id, buyer_id, base_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", sales)
         await self.db.executemany("DELETE FROM auctions_seen WHERE auction_id = ?", done)
         await self.db.commit()
         return len(sales)
@@ -503,15 +504,19 @@ class Database:
         rows = await self._all(f"SELECT price FROM observed_sales o WHERE {where} ORDER BY ended_at DESC", params)
         return [r["price"] for r in rows[:limit]], len(rows)
 
-    async def observed_by_rarity(self, card_id: str, limit: int, shiny: bool = False) -> dict[str, tuple[list[int], int]]:
-        """Ventes observées d'une carte, par rareté : {rareté: (`limit` derniers prix, nombre)}."""
-        rows = await self._all("SELECT rarity, price FROM observed_sales o WHERE card_id = ? AND is_shiny = ? "
-                               f"AND rarity IS NOT NULL AND NOT {SUSPECT_SALE} ORDER BY ended_at DESC",
-                               (card_id, int(shiny)))
-        groups: dict[str, list[int]] = {}
+    async def observed_by_rarity(self, card_id: str, limit: int,
+                                 shiny: bool = False) -> dict[str, tuple[list[tuple[int, bool]], int]]:
+        """Ventes observées d'une carte, par rareté : {rareté: (`limit` dernières (prix, sans concurrence), nombre)}.
+
+        « Sans concurrence » : une seule mise, au prix de départ (prix final = prix de départ)."""
+        rows = await self._all("SELECT rarity, price, base_amount FROM observed_sales o WHERE card_id = ? "
+                               f"AND is_shiny = ? AND rarity IS NOT NULL AND NOT {SUSPECT_SALE} "
+                               "ORDER BY ended_at DESC", (card_id, int(shiny)))
+        groups: dict[str, list[tuple[int, bool]]] = {}
         for r in rows:
-            groups.setdefault(r["rarity"], []).append(r["price"])
-        return {rarity: (prices[:limit], len(prices)) for rarity, prices in groups.items()}
+            single = r["base_amount"] is not None and r["price"] <= r["base_amount"]
+            groups.setdefault(r["rarity"], []).append((r["price"], single))
+        return {rarity: (sales[:limit], len(sales)) for rarity, sales in groups.items()}
 
     async def observed_prices_since(self, card_id: str, since: datetime, limit: int, rarity: str | None = None,
                                     shiny: bool | None = None) -> list[int]:

@@ -13,6 +13,8 @@ Estimation = médiane observée, plafonnée par la moyenne du site quand elle ex
 Contre la manipulation des cotes (ventes factices entre comptes, relevé par la presse et JVFlux) :
 une vente plus de 3 fois au-dessus ou au-dessous de la médiane est écartée, et les ventes entre
 un vendeur et un acheteur qui ont déjà fait affaire ensemble ne comptent pas (core/database.py).
+Une vente sans concurrence (une seule mise, au prix de départ : le schéma d'une vente factice, prix
+de départ gonflé puis un complice qui mise une fois) ne peut pas faire monter l'estimation.
 `count` = nombre de ventes observées : sans observation, l'estimation n'est pas fiable.
 Les ventes observées sont comparées à rareté égale, et shiny à part : un exemplaire Commun ne
 s'estime pas sur les ventes de la même carte en UR ou en shiny.
@@ -56,6 +58,20 @@ def robust_median(prices: list[int]) -> float:
     if len(prices) == 2 and max(prices) > OUTLIER_FACTOR * min(prices):
         return float(min(prices))
     return float(statistics.median(prices))
+
+
+def trusted_prices(sales: list[tuple[int, bool]]) -> list[int]:
+    """Prix retenus : une vente sans concurrence est ramenée au plus à la médiane des ventes disputées,
+    ou, sans vente disputée, à la plus basse des ventes."""
+    if not sales:
+        return []
+    contested = [price for price, single in sales if not single]
+    ceiling = statistics.median(contested) if contested else min(price for price, _ in sales)
+    return [min(price, ceiling) if single else price for price, single in sales]
+
+
+def trusted(observed: dict[str, tuple[list[tuple[int, bool]], int]]) -> dict[str, tuple[list[int], int]]:
+    return {rarity: (trusted_prices(sales), n) for rarity, (sales, n) in observed.items()}
 
 
 def combine(observed: list[int], n_observed: int, site_average: float | None) -> Quote:
@@ -117,7 +133,7 @@ class PriceService:
     async def quotes(self, card_id: str, *, max_age: timedelta | None = None, wait: bool = True,
                      shiny: bool = False) -> dict[str, Quote]:
         """Estimation par rareté (clé ANY : toutes raretés, seulement si le site ne les distingue pas)."""
-        observed = await self.db.observed_by_rarity(card_id, self.recent_n, shiny)
+        observed = trusted(await self.db.observed_by_rarity(card_id, self.recent_n, shiny))
         try:
             market = await self._market(card_id, max_age or self.default_ttl, wait)
         except (RateLimited, ApiError):
@@ -133,7 +149,7 @@ class PriceService:
     async def observed_quote(self, card_id: str) -> dict[str, Quote]:
         """Estimation sans aucune requête : ventes observées seules, par rareté (vide si aucune)."""
         return {r: combine(prices, n, None) for r, (prices, n) in
-                (await self.db.observed_by_rarity(card_id, self.recent_n)).items()}
+                trusted(await self.db.observed_by_rarity(card_id, self.recent_n)).items()}
 
     async def is_fresh(self, card_id: str, max_age: timedelta) -> bool:
         cached = await self.db.price_get(card_id)

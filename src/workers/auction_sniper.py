@@ -36,7 +36,7 @@ from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import utcnow
 from src.core.models import Auction, BidResult, Card
 from src.core.notifier import Topic
-from src.core.pricing import Quote, combine
+from src.core.pricing import Quote, combine, trusted
 from src.core.text import normalize_title
 from src.core.timeutils import in_window, local_dt, now_local
 from src.workers.base import Worker
@@ -408,7 +408,7 @@ class AuctionSniper(Worker):
             return True
         if a.rarity not in self.settings.sniper_resale_rarities:
             return False
-        observed = await self.db.observed_by_rarity(a.catalog_id, self.settings.price_recent_sales, a.shiny)
+        observed = trusted(await self.db.observed_by_rarity(a.catalog_id, self.settings.price_recent_sales, a.shiny))
         quote = combine(*observed.get(a.rarity or "", ([], 0)), None)
         return quote.reliable(self.settings.price_min_sales) and \
             a.min_bid <= math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
