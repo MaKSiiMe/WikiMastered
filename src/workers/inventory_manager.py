@@ -383,7 +383,7 @@ class InventoryManager(Worker):
             if result is None or result.dry_run:
                 await self.db.update_listing(row["id"], status="simulated", posted_at=utcnow(), dry_run=1,
                                              duration_minutes=minutes, target_end=target_end)
-                if row["bid_id"]:  # positions : message immédiat ; doublons : bilan du soir
+                if row["bid_id"] and self.settings.notify_simulated:  # positions : message ; doublons : bilan
                     self.notifier.info("Mise en vente simulée", label, durée=f"{minutes} min")
             elif result.ok:
                 auction_id = await self._listing_auction_id(result.payload, row["card_id"])
@@ -459,6 +459,8 @@ class InventoryManager(Worker):
                 await self.db.update_listing(row["id"], status="sim_sold", sale_price=price, settled_at=utcnow())
                 if bid:
                     await self.db.close_position(bid["id"], price)
+                    self.log.info("revente simulée : %s, achetée %d, vendue %d WB", label, bid["amount"], price)
+                if bid and self.settings.notify_simulated:
                     self.notifier.info("Revente simulée", f"{label} : achetée {bid['amount']}, départ "
                                        f"{row['base_amount']}, vendue {price} WB ({price - bid['amount']:+d})")
                 continue
@@ -512,8 +514,9 @@ class InventoryManager(Worker):
                                  bid_id=bid["id"], relist_count=row["relist_count"] + 1)
         else:
             await self.db.close_position(bid["id"], None)
-            self.notifier.warning("Position invendue", f"{label} : invendue après "
-                                  f"{row['relist_count'] + 1} essai(s), carte gardée.")
+            if not bid["dry_run"] or self.settings.notify_simulated:
+                self.notifier.warning("Position invendue", f"{label} : invendue après "
+                                      f"{row['relist_count'] + 1} essai(s), carte gardée.")
 
     # ------------------------------------------------------------ défausse
     async def discard(self, groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
