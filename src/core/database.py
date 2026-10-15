@@ -118,6 +118,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # Récap de nuit du sniper : plafond de la mise, prix final payé par le gagnant.
     ("bids", "ceiling", "INTEGER"),
     ("bids", "final_price", "INTEGER"),
+    # Image animée (GIF) : se vend-elle mieux ? (commande gifs)
+    ("auctions_seen", "is_gif", "INTEGER NOT NULL DEFAULT 0"),
+    ("observed_sales", "is_gif", "INTEGER NOT NULL DEFAULT 0"),
 ]
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
 WASH_PAIR_MIN = 2
@@ -483,12 +486,12 @@ class Database:
     async def upsert_auctions(self, rows: list[dict[str, Any]]) -> None:
         if not rows:
             return
-        rows = [{"seller_id": None, "bidder_id": None, **r} for r in rows]
+        rows = [{"seller_id": None, "bidder_id": None, "is_gif": 0, **r} for r in rows]
         await self.db.executemany(
             "INSERT INTO auctions_seen (auction_id, card_id, title, norm_title, rarity, is_shiny, current_bid, "
-            "base_amount, min_bid, end_at, seen_at, seller_id, bidder_id) VALUES (:auction_id, :card_id, :title, "
-            ":norm_title, :rarity, :is_shiny, :current_bid, :base_amount, :min_bid, :end_at, :seen_at, :seller_id, "
-            ":bidder_id) ON CONFLICT(auction_id) DO UPDATE SET current_bid = excluded.current_bid, "
+            "base_amount, min_bid, end_at, seen_at, seller_id, bidder_id, is_gif) VALUES (:auction_id, :card_id, "
+            ":title, :norm_title, :rarity, :is_shiny, :current_bid, :base_amount, :min_bid, :end_at, :seen_at, "
+            ":seller_id, :bidder_id, :is_gif) ON CONFLICT(auction_id) DO UPDATE SET current_bid = excluded.current_bid, "
             "min_bid = excluded.min_bid, end_at = excluded.end_at, seen_at = excluded.seen_at, "
             "bidder_id = excluded.bidder_id",
             rows,
@@ -514,13 +517,21 @@ class Database:
             done.append((r["auction_id"],))
             if r["current_bid"] and seen and (end - seen).total_seconds() <= max_gap_seconds:
                 sales.append((r["auction_id"], r["card_id"], r["title"], r["rarity"], r["is_shiny"],
-                              r["current_bid"], iso(end), r["seller_id"], r["bidder_id"], r["base_amount"]))
+                              r["current_bid"], iso(end), r["seller_id"], r["bidder_id"], r["base_amount"],
+                              r["is_gif"]))
         await self.db.executemany(
             "INSERT OR IGNORE INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at, "
-            "seller_id, buyer_id, base_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", sales)
+            "seller_id, buyer_id, base_amount, is_gif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", sales)
         await self.db.executemany("DELETE FROM auctions_seen WHERE auction_id = ?", done)
         await self.db.commit()
         return len(sales)
+
+    async def gif_stats(self) -> list[aiosqlite.Row]:
+        """Ventes observées par rareté, GIF ou non : nombre, cartes, prix et rapport prix final / départ."""
+        return await self._all(
+            "SELECT rarity, is_gif, price, base_amount, card_id FROM observed_sales WHERE is_shiny = 0 "
+            "AND rarity IS NOT NULL AND ended_at >= (SELECT COALESCE(MIN(ended_at), '') FROM observed_sales "
+            "WHERE is_gif = 1)")
 
     async def observed_prices(self, card_id: str, limit: int, rarity: str | None = None,
                               shiny: bool | None = None) -> tuple[list[int], int]:

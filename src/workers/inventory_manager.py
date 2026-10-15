@@ -100,8 +100,8 @@ def select_for_discard(groups: dict[str, list[OwnedCard]], quotes: dict[str, dic
     keep = max(1, s.discard_keep_copies)  # on garde toujours au moins un exemplaire
     for card_id, copies in groups.items():
         for row in spare_copies(copies, keep, excluded):
-            if row.rarity not in s.discard_rarities:
-                continue
+            if row.rarity not in s.discard_rarities or row.card.is_gif:
+                continue  # GIF : se vendraient mieux (16/10), jamais défaussés tant que ce n'est pas mesuré
             q = quotes.get(card_id, {}).get(row.rarity or "")
             avg = q.average if q else None
             if (avg is None and s.discard_unknown_price_is_worthless) or (avg is not None and avg <= s.discard_max_value):
@@ -124,7 +124,8 @@ def valuation(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Qu
             rarity = copy.rarity or "?"
             q = quotes.get(card_id, {}).get(rarity) or quotes.get(card_id, {}).get(ANY)
             row = rows.setdefault((card_id, rarity), {
-                "carte": copy.title, "rareté": rarity, "cote": round(q.average) if q and q.average is not None else None,
+                "carte": copy.title, "rareté": rarity, "gif": "oui" if copy.card.is_gif else "",
+                "cote": round(q.average) if q and q.average is not None else None,
                 "exemplaires": 0, "à vendre": 0, "prix de vente": 0, "à défausser": 0, "doublons gardés": 0,
                 "sans cote": 0})
             row["exemplaires"] += 1

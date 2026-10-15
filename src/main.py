@@ -216,6 +216,31 @@ async def send_sniper_report(ctx: Context, hours: float, *, send: bool = True) -
     return "\n\n".join([f"{title}\n{summary}", *(f"== {name} ==\n{body}" for name, body in sections)])
 
 
+def gif_text(rows) -> str:
+    """Les cartes à image animée (GIF) se vendent-elles mieux ? Par rareté : ventes, prix médian, prix final /
+    prix de départ, part des ventes sans surenchère ; GIF contre images fixes, depuis le début du suivi."""
+    import statistics as st
+    groups: dict[tuple[str, bool], list] = {}
+    for r in rows:
+        groups.setdefault((r["rarity"], bool(r["is_gif"])), []).append(r)
+    if not any(gif for _, gif in groups):
+        return "Aucune vente de carte GIF observée pour l'instant (suivi depuis le déploiement)."
+    lines = ["Ventes observées depuis le début du suivi des GIF (shiny exclues) :"]
+    for rarity in sorted({r for r, _ in groups}, key=lambda r: -RARITY_RANK.get(r, -1)):
+        for gif in (True, False):
+            sales = groups.get((rarity, gif), [])
+            if not sales:
+                continue
+            ratios = [s["price"] / s["base_amount"] for s in sales if s["base_amount"]]
+            single = sum(1 for s in sales if s["base_amount"] and s["price"] <= s["base_amount"])
+            cards = len({s["card_id"] for s in sales})
+            lift = f", final/départ ×{st.median(ratios):.2f}, {single * 100 // max(1, len(ratios))} % sans " \
+                   "surenchère" if ratios else ""
+            lines.append(f"  {rarity:>2} {'GIF' if gif else 'img'} : {len(sales)} ventes ({cards} cartes), "
+                         f"prix médian {st.median(s['price'] for s in sales):.0f}{lift}")
+    return "\n".join(lines)
+
+
 async def heartbeat(ctx: Context) -> None:
     path = ctx.settings.data_dir / "heartbeat"
     while True:
@@ -419,6 +444,7 @@ def main(argv: list[str] | None = None) -> None:
     tr.add_argument("--days", type=int, default=7)
     sim = sub.add_parser("reset-simulation", help="efface les mises et ventes simulées (sans --apply : compte)")
     sim.add_argument("--apply", action="store_true", help="efface vraiment")
+    sub.add_parser("gifs", help="les cartes GIF se vendent-elles mieux ? (ventes observées, lecture seule)")
     snr = sub.add_parser("sniper-report", help="toutes les enchères misées sur les N dernières heures (lecture seule)")
     snr.add_argument("--hours", type=float, default=24)
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
@@ -459,6 +485,11 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_trends())
     elif command == "reset-simulation":
         asyncio.run(reset_simulation(settings, args.apply))
+    elif command == "gifs":
+        async def _gifs() -> None:
+            async with build_context(settings) as ctx:
+                print(gif_text(await ctx.db.gif_stats()))
+        asyncio.run(_gifs())
     elif command == "sniper-report":
         async def _sniper_report() -> None:
             async with build_context(settings) as ctx:
