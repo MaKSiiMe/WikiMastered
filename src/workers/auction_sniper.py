@@ -52,6 +52,9 @@ FRESH = timedelta(seconds=3)
 COLLECTION_GUARD_SECONDS = 10
 # Issues d'une mise acceptée (ou simulée) : la vente est relue à sa fin.
 PLACED = ("misée", "misée (collection)")
+# Refus d'une mise tant que la vérification humaine du site n'est pas faite : « Vérification anti-bot
+# requise. » (relevé du 15/10/2026, en même temps que celle des paquets).
+ANTIBOT_HINT = "anti-bot"
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -260,6 +263,7 @@ class AuctionSniper(Worker):
         self._manual_auctions: set[str] = set()
         self._manual_cards: set[str] = set()
         self._sale_slots: tuple[datetime, int, int] | None = None  # (lu à, max, ventes en cours)
+        self._antibot_since: datetime | None = None  # mises refusées : vérification anti-bot à faire
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
         # Jours manquants d'après la dernière lecture (avant de retirer ceux que le bot a gagnés), et
@@ -598,7 +602,8 @@ class AuctionSniper(Worker):
                     free -= 1
                     opened += 1
             else:
-                self._outcome(auction, "mise refusée par le site")
+                self._outcome(auction, "mise refusée : vérification anti-bot" if self._antibot_since
+                              else "mise refusée par le site")
 
     async def portfolio(self, now: datetime) -> Portfolio:
         held = await self.db.positions_summary()
@@ -776,6 +781,13 @@ class AuctionSniper(Worker):
         if self._outcomes.get(auction.id) not in PLACED:
             self._outcomes[auction.id] = outcome
 
+    @property
+    def blocked(self) -> str | None:
+        if not self._antibot_since:
+            return None
+        return (f"mises refusées depuis {self._antibot_since.astimezone(timeutils.PARIS):%d/%m %H:%M} : "
+                "vérification anti-bot à faire dans ton navigateur")
+
     def recap(self) -> list[str]:
         outcomes, self._outcomes = self._outcomes, {}
         watched = "/".join(self.settings.sniper_resale_rarities)
@@ -851,6 +863,9 @@ class AuctionSniper(Worker):
             bid_id = await self.db.record_bid(**common, status="placed")
             self._leading[auction.id] = (bid_id, decision.amount)
             self._balance, self._balance_at = confirmed.bidder_balance, utcnow()
+            if self._antibot_since:
+                self._antibot_since = None
+                self.notifier.success("Sniper : vérification levée", "Les mises passent de nouveau.")
             self._engaged[auction.id] = auction.end_at
             self._bot_engaged.add(auction.id)
             self._report_bid("Enchère placée", f"{summary}, solde {confirmed.bidder_balance}")
@@ -860,6 +875,15 @@ class AuctionSniper(Worker):
         error = payload.get("error") or payload.get("message") or f"HTTP {result.status}"
         await self.db.record_bid(**common, status="rejected", note=str(error)[:300])
         self.log.info("mise refusée sur %s : %s", label, error)
+        if ANTIBOT_HINT in str(error).lower() or payload.get("human_verification_required"):
+            if not self._antibot_since:
+                self._antibot_since = utcnow()
+                self.notifier.critical(
+                    "Sniper : vérification anti-bot demandée",
+                    f"Le site refuse les mises tant qu'elle n'est pas faite ({label} : {decision.amount} WB "
+                    "refusée). Fais-la toi-même dans ton navigateur (page Paquets) ; le bot continue de miser "
+                    "et te prévient quand une mise repasse.")
+            return False
         if not retried and isinstance(server_min, int) and decision.amount < server_min <= decision.ceiling:
             return await self._bid(auction, Decision(server_min, decision.ceiling, decision.reason, decision.reference,
                                                      decision.profit), params, retried=True)
