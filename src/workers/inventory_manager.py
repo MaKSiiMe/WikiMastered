@@ -650,8 +650,8 @@ async def cli(ctx: Context, action: str, apply: bool, lookups: int | None = None
         if action != "scan":
             print("\nAjoute --apply pour exécuter (toujours simulé tant que DRY_RUN=true).")
         return
-    report = await worker.run_cycle(list_cards=action == "list", discard=action == "discard")
+    outcome = await worker.run_cycle(list_cards=action == "list", discard=action == "discard")
     if action == "list":
-        print(f"{report.get('listed', 0)} vente(s) programmée(s) ; elles seront publiées par le bot en marche.")
+        print(f"{outcome.get('listed', 0)} vente(s) programmée(s) ; elles seront publiées par le bot en marche.")
     else:
-        print(report.get("discard"))
+        print(outcome.get("discard"))

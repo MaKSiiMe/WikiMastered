@@ -147,7 +147,7 @@ async def test_inventory_report_values_every_card(tmp_path, capsys):
     """« Sur les presque 10k cartes » (16/10) : chaque doublon reçoit un verdict, le détail part dans un CSV."""
     import csv
 
-    from src.workers.inventory_manager import report
+    from src.workers.inventory_manager import cli
 
     def copy(oid, card, rarity, **kw):
         return {"id": oid, "card_id": card, "card": {"id": card, "wikipedia_title": card.title(), "rarity": rarity},
@@ -176,8 +176,7 @@ async def test_inventory_report_values_every_card(tmp_path, capsys):
     await db.connect()
     api = WikiMastersAPI(client)
     inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
-    await inv.setup()
-    await report(inv.ctx, inv, lookups=10)
+    await cli(inv.ctx, "report", apply=False, lookups=10)  # par la commande, comme dans la console
     out = capsys.readouterr().out
     assert "12 exemplaires, 4 cartes différentes" in out
     assert "À vendre      : 4 doublon(s)" in out and "~200 WB" in out
