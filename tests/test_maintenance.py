@@ -116,8 +116,8 @@ async def test_suspect_sales_do_not_count_in_quotes(tmp_path):
         "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at, seller_id, "
         "buyer_id) VALUES (?, 'x', 't', 'UR', 0, ?, ?, ?, ?)", [(a, p, now, s, b) for a, s, b, p in rows])
     await db.db.commit()
-    prices, count = (await db.observed_by_rarity("x", 5))["UR"]
-    assert sorted(prices) == [400, 420] and count == 2
+    sales, count = (await db.observed_by_rarity("x", 5))["UR"]
+    assert sorted(sales) == [(400, False), (420, False)] and count == 2
     assert sorted((await db.observed_prices("x", 5, rarity="UR"))[0]) == [400, 420]
     await db.close()
 
@@ -128,3 +128,12 @@ def test_outlier_sales_are_ignored():
     assert robust_median([400, 410, 20]) == 405.0        # une vente bradée par erreur
     assert robust_median([400, 2000]) == 400.0           # deux ventes trop différentes : la plus basse
     assert robust_median([400, 500]) == 450.0
+
+
+def test_uncontested_sales_cannot_raise_the_estimate():
+    from src.core.pricing import trusted_prices
+    # Ventes disputées à 400 et 420 ; une vente à une seule mise à 1500 (prix de départ gonflé).
+    assert trusted_prices([(1500, True), (400, False), (420, False)]) == [410, 400, 420]
+    assert trusted_prices([(300, True), (400, False)]) == [300, 400]   # moins chère : gardée telle quelle
+    assert trusted_prices([(500, True), (900, True)]) == [500, 500]    # aucune vente disputée : la plus basse
+    assert trusted_prices([]) == []

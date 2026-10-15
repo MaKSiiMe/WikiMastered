@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -47,8 +48,10 @@ async def test_unlocked_achievements_are_claimed(tmp_path, monkeypatch, dry_run)
     worker = AchievementsWorker(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     monkeypatch.setattr("src.workers.achievements.asyncio.sleep", lambda _s: _noop())
     await worker.setup()
-    delay = await worker.step()
-    assert 0.8 * 180 * 60 <= delay <= 1.2 * 180 * 60
+    assert await worker.step() > 0 and posts == []  # pas avant ACHIEVEMENTS_TIME
+    worker._next_run = datetime.now(timezone.utc)
+    await worker.step()
+    assert timedelta(0) < worker._next_run - datetime.now(timezone.utc) <= timedelta(days=1, minutes=5)
     if dry_run:
         assert posts == [] and worker.recap() == ["Aucun succès à réclamer"]
     else:
