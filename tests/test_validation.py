@@ -118,3 +118,25 @@ async def test_first_real_writes_are_kept_for_checking(tmp_path):
     files = sorted(p.name for p in (tmp_path / "inspect" / "writes").iterdir())
     assert files == ["create_listing-1.json", "create_listing-2.json", "create_listing-3.json"]
     assert [t for _, t in notifier.sent] == ["Première réponse réelle : create_listing"]
+
+
+def test_position_posted_late_morning_for_12_hours():
+    """Revente publiée vers 11 h-12 h pour 12 h (fin vers 23 h-minuit), sans y penser."""
+    import random
+    from datetime import time
+
+    from src.core.timeutils import PARIS
+    from src.workers.inventory_manager import plan_position_time
+
+    durations = [10, 30, 60, 180, 360, 720, 1440]
+    night = datetime(2026, 10, 17, 3, 0, tzinfo=PARIS)  # achetée à 3 h : publiée le matin même
+    post_at, minutes, end = plan_position_time(night, time(11), time(12), 720, durations, random.Random(1))
+    assert post_at.date() == night.date() and time(11) <= post_at.time() <= time(12)
+    assert minutes == 720 and end == post_at + timedelta(hours=12)
+    noon = datetime(2026, 10, 17, 11, 30, tzinfo=PARIS)  # dans la fenêtre : avant midi, le jour même
+    for seed in range(20):
+        post_at = plan_position_time(noon, time(11), time(12), 720, durations, random.Random(seed))[0]
+        assert noon <= post_at <= datetime(2026, 10, 17, 12, 0, tzinfo=PARIS)
+    evening = datetime(2026, 10, 17, 21, 0, tzinfo=PARIS)  # achetée le soir : le lendemain matin
+    post_at, _, _ = plan_position_time(evening, time(11), time(12), 720, durations)
+    assert post_at.date() == evening.date() + timedelta(days=1) and post_at.hour == 11

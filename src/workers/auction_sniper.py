@@ -264,6 +264,7 @@ class AuctionSniper(Worker):
         self._manual_cards: set[str] = set()
         self._sale_slots: tuple[datetime, int, int] | None = None  # (lu à, max, ventes en cours)
         self._antibot_since: datetime | None = None  # mises refusées : vérification anti-bot à faire
+        self._buys_left: int | None = None  # achats réels encore permis (SNIPER_MAX_BUYS), None = illimité
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
         # Jours manquants d'après la dernière lecture (avant de retirer ceux que le bot a gagnés), et
@@ -438,8 +439,8 @@ class AuctionSniper(Worker):
         cap = rarity_ceiling(a, params)
         if cap is not None and a.min_bid <= cap:
             return True
-        if a.rarity not in self.settings.sniper_resale_rarities:
-            return False
+        if a.rarity not in self.settings.sniper_resale_rarities or self._buys_left == 0:
+            return False  # achats réels épuisés : les relectures servent aux cartes de collection
         observed = trusted(await self.db.observed_by_rarity(a.catalog_id, self.settings.price_recent_sales, a.shiny))
         quote = combine(*observed.get(a.rarity or "", ([], 0)), None)
         return quote.reliable(self.settings.price_min_sales) and \
@@ -616,12 +617,18 @@ class AuctionSniper(Worker):
         # Mises réelles : seules les positions réelles comptent dans le plafond. Les positions simulées d'avant
         # le passage en réel (6 le 16/10) bloqueraient sinon tout achat avec PORTFOLIO_MAX_POSITIONS=5.
         live = self.settings.is_live("place_bid")
+        held_count = held["real_count"] if live else held["count"]
+        engaged_count = pending["real_positions"] if live else pending["positions"]
+        self._buys_left = None
+        if live and self.settings.sniper_max_buys > 0:
+            # Achats permis épuisés : plus aucune nouvelle position, même quand une revente libère une place.
+            bought = await self.db.real_position_buys() + pending["real_positions"]
+            self._buys_left = max(0, self.settings.sniper_max_buys - bought)
+            cap = min(cap, held_count + engaged_count + self._buys_left)
         return portfolio_state(
-            self.settings, balance=await self._current_balance(),
-            held_count=held["real_count"] if live else held["count"],
+            self.settings, balance=await self._current_balance(), held_count=held_count,
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
-            engaged_real=engaged_real, engaged_sim=pending["sim_cost"],
-            bot_engaged_count=pending["real_positions"] if live else pending["positions"],
+            engaged_real=engaged_real, engaged_sim=pending["sim_cost"], bot_engaged_count=engaged_count,
             max_positions=cap, sale_room=room,
         )
 

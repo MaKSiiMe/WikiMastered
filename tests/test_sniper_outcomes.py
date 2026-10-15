@@ -14,7 +14,7 @@ from src.core.models import Auction
 from src.workers.auction_sniper import AuctionSniper, Target
 from src.workers.base import Context
 from src.workers.collection import progress_lines
-from tests.test_integration import make_client
+from tests.test_integration import make_client, seed_observed
 
 RIVAL = "33333333-3333-3333-3333-333333333333"
 
@@ -184,3 +184,46 @@ async def test_live_sniper_ignores_simulated_positions_in_its_cap(tmp_path, simu
     portfolio = await sniper.portfolio(now)
     assert portfolio.open_positions == open_positions and portfolio.can_open == (open_positions < 5)
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_no_rebuy_once_max_buys_reached(tmp_path):
+    """SNIPER_MAX_BUYS=5 : après 5 achats réels, plus aucune position, même revendues ; la collection continue."""
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3300})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, portfolio_max_positions=5, sniper_max_buys=5)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+    now = datetime.now(timezone.utc)
+    for i in range(5):
+        await db.record_bid(auction_id=f"r{i}", card_id=f"c{i}", title=f"Carte {i}", rarity="L", is_shiny=False,
+                            amount=400, reference_price=900, reason="revente ~900 WB", night=False, dry_run=False,
+                            status="won", end_at=now)
+        if i < 4:
+            assert (await sniper.portfolio(now)).can_open
+        await db._exec("UPDATE bids SET closed = 1, sale_price = 700")  # revendues : places libérées
+    portfolio = await sniper.portfolio(now)
+    assert portfolio.open_positions == 0 and not portfolio.can_open and sniper._buys_left == 0
+    # Une L bien cotée, pas chère : suivie tant qu'il reste des achats, plus suivie ensuite (relectures épargnées).
+    await seed_observed(db, "card-m", [900, 880, 920], rarity="L")
+    market_l = Auction.model_validate({**sale("x", "Miley Cyrus", 600), "card": {"id": "card-m",
+                                       "wikipedia_title": "Miley Cyrus", "rarity": "L"}})
+    assert not await sniper._worth_watching(market_l, sniper_params(client), now)
+    sniper._buys_left = 1
+    assert await sniper._worth_watching(market_l, sniper_params(client), now)
+    await db.close()
+
+
+def sniper_params(client):
+    from src.workers.auction_sniper import snipe_params
+    return snipe_params(client.settings, night=False)

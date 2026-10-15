@@ -29,7 +29,7 @@ from src.core.database import utcnow
 from src.core.models import DiscardResult, MyBids, OwnedCard
 from src.core.notifier import Topic
 from src.core.pricing import ANY, Quote
-from src.core.timeutils import now_local, random_in_window
+from src.core.timeutils import local_dt, now_local, random_in_window
 from src.workers.base import Context, Worker
 
 INVENTORY_PRICE_MAX_AGE = timedelta(days=3)  # la cote d'un doublon bouge peu
@@ -127,6 +127,21 @@ def achievement_guard(count: int, n_discard: int, milestones: list[int], margin:
 def parse_selling(mine: MyBids) -> list:
     from src.core.models import Auction, parse_items
     return parse_items(Auction, mine.selling, label="vente")
+
+
+def plan_position_time(now: datetime, start: time, end: time, minutes: int, durations: list[int],
+                       rng: random.Random | None = None) -> tuple[datetime, int, datetime]:
+    """(publication, durée, fin) d'une revente : publiée entre `start` et `end` (aujourd'hui si ce n'est pas
+    passé, sinon demain), pour la durée du site la plus proche de `minutes`."""
+    if durations:
+        minutes = min(durations, key=lambda d: abs(d - minutes))
+    post_at = random_in_window(now.date(), start, end, rng)
+    if post_at < now:
+        if local_dt(now.date(), end) > now:
+            post_at = now  # déjà dans la fenêtre : publiée tout de suite
+        else:
+            post_at = random_in_window(now.date() + timedelta(days=1), start, end, rng)
+    return post_at, minutes, post_at + timedelta(minutes=minutes)
 
 
 def plan_listing_time(now: datetime, start: time, end: time, durations: list[int], min_duration: int,
@@ -256,6 +271,16 @@ class InventoryManager(Worker):
         reserved = await self.db.pending_listings_count(real_only) + len(positions)
         return max(0, maximum - selling - reserved)
 
+    def _plan(self, now: datetime, *, position: bool, at_peak: bool) -> tuple[datetime, int, datetime]:
+        """Revente d'une position : publiée vers 11 h-12 h pour 12 h ; doublon : fin dans la fenêtre choisie."""
+        s = self.settings
+        if position:
+            return plan_position_time(now, s.position_post_start, s.position_post_end,
+                                      s.position_list_duration_minutes, s.listing_duration_options)
+        start, end = self._window(at_peak)
+        return plan_listing_time(now, start, end, s.listing_duration_options, s.listing_min_duration_minutes,
+                                 preferred=s.listing_preferred_duration_minutes)
+
     def _window(self, at_peak: bool) -> tuple[time, time]:
         s = self.settings
         soon = now_local() + timedelta(minutes=max(s.listing_min_duration_minutes,
@@ -267,11 +292,7 @@ class InventoryManager(Worker):
 
     async def _schedule(self, *, owned_id: str, card_id: str, title: str, rarity: str | None, price: int,
                         reason: str, at_peak: bool = True, bid_id: int | None = None, relist_count: int = 0) -> bool:
-        s = self.settings
-        start, end = self._window(at_peak)
-        post_at, minutes, target = plan_listing_time(now_local(), start, end, s.listing_duration_options,
-                                                     s.listing_min_duration_minutes,
-                                                     preferred=s.listing_preferred_duration_minutes)
+        post_at, minutes, target = self._plan(now_local(), position=bid_id is not None, at_peak=at_peak)
         listing_id = await self.db.schedule_listing(
             owned_card_id=owned_id, card_id=card_id, title=title, rarity=rarity, base_amount=price,
             duration_minutes=minutes, post_at=post_at, target_end=target, reason=reason, bid_id=bid_id,
@@ -317,8 +338,7 @@ class InventoryManager(Worker):
             price = list_price(row["amount"], s.position_list_margin, s.sale_fee_pct,
                                estimate=row["reference_price"], share=s.position_list_profit_share)
             await self._schedule(owned_id=owned_id, card_id=row["card_id"], title=row["title"], rarity=row["rarity"],
-                                 price=price, reason=f"position (achetée {row['amount']})",
-                                 at_peak=s.position_list_at_peak, bid_id=row["id"])
+                                 price=price, reason=f"position (achetée {row['amount']})", bid_id=row["id"])
 
     async def _find_copy(self, row) -> str | None:
         """Exemplaire acheté : le plus récent de cette carte dans la collection."""
@@ -418,12 +438,9 @@ class InventoryManager(Worker):
                 self.notifier.info("Mise en vente vérifiée", f"{label} : pas créée.{again}")
 
     async def _postpone(self, row) -> None:
-        """Plus de place de vente : on vise la même fenêtre de fin, le jour suivant."""
-        s = self.settings
-        start, end = self._window(row["bid_id"] is None or s.position_list_at_peak)
-        post_at, minutes, target = plan_listing_time(now_local() + timedelta(days=1), start, end,
-                                                     s.listing_duration_options, s.listing_min_duration_minutes,
-                                                     preferred=s.listing_preferred_duration_minutes)
+        """Plus de place de vente : même horaire, le jour suivant."""
+        post_at, minutes, target = self._plan(now_local() + timedelta(days=1), position=row["bid_id"] is not None,
+                                              at_peak=True)
         await self.db.update_listing(row["id"], post_at=max(post_at, now_local()), duration_minutes=minutes,
                                      target_end=target)
         self.log.info("ventes pleines : %s reportée, fin visée %s", row["title"], f"{target:%d/%m %H:%M}")
@@ -487,10 +504,12 @@ class InventoryManager(Worker):
             floor = list_price(bid["amount"], 0.0, self.settings.sale_fee_pct)
             price = max(floor, round(row["base_amount"] * self.settings.position_relist_discount))
             self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
+            if not bid["dry_run"]:
+                self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
+                                   f"(achetée {bid['amount']}).")
             await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
                                  rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
-                                 at_peak=self.settings.position_list_at_peak, bid_id=bid["id"],
-                                 relist_count=row["relist_count"] + 1)
+                                 bid_id=bid["id"], relist_count=row["relist_count"] + 1)
         else:
             await self.db.close_position(bid["id"], None)
             self.notifier.warning("Position invendue", f"{label} : invendue après "
