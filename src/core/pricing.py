@@ -10,6 +10,9 @@ Sources, de la plus fiable à la moins fiable :
 3. Moyenne ?scope=summary [KZ bridge/prices.js], sans nombre de ventes hors PRO.
 
 Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence).
+Contre la manipulation des cotes (ventes factices entre comptes, relevé par la presse et JVFlux) :
+une vente plus de 3 fois au-dessus ou au-dessous de la médiane est écartée, et les ventes entre
+un vendeur et un acheteur qui ont déjà fait affaire ensemble ne comptent pas (core/database.py).
 `count` = nombre de ventes observées : sans observation, l'estimation n'est pas fiable.
 Les ventes observées sont comparées à rareté égale, et shiny à part : un exemplaire Commun ne
 s'estime pas sur les ventes de la même carte en UR ou en shiny.
@@ -31,6 +34,7 @@ from src.core.models import SaleRow, SalesHistory
 log = logging.getLogger(__name__)
 
 ANY = "*"
+OUTLIER_FACTOR = 3.0
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -43,10 +47,21 @@ class Quote:
         return self.average is not None and (self.count is None or self.count >= min_sales)
 
 
+def robust_median(prices: list[int]) -> float:
+    """Médiane sans les ventes aberrantes ; deux ventes trop différentes : la plus basse, par prudence."""
+    if len(prices) >= 3:
+        mid = statistics.median(prices)
+        kept = [p for p in prices if mid / OUTLIER_FACTOR <= p <= mid * OUTLIER_FACTOR]
+        return float(statistics.median(kept or prices))
+    if len(prices) == 2 and max(prices) > OUTLIER_FACTOR * min(prices):
+        return float(min(prices))
+    return float(statistics.median(prices))
+
+
 def combine(observed: list[int], n_observed: int, site_average: float | None) -> Quote:
     """Médiane des ventes observées, plafonnée par la moyenne du site ; sinon la moyenne seule."""
     if observed:
-        estimate = float(statistics.median(observed))
+        estimate = robust_median(observed)
         if site_average is not None:
             estimate = min(estimate, site_average)
         return Quote(estimate, n_observed)

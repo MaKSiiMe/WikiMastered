@@ -110,9 +110,19 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("listings", "sale_price", "INTEGER"),
     ("listings", "settled_at", "TEXT"),
     ("listings", "relist_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("auctions_seen", "seller_id", "TEXT"),
+    ("auctions_seen", "bidder_id", "TEXT"),
+    ("observed_sales", "seller_id", "TEXT"),
+    ("observed_sales", "buyer_id", "TEXT"),
 ]
+# Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
+WASH_PAIR_MIN = 2
 
 HELD = "status IN ('won', 'sim_won') AND closed = 0"
+# Vente observée suspecte : vendeur = acheteur, ou paire vendeur -> acheteur déjà vue (alias o).
+SUSPECT_SALE = ("(o.seller_id IS NOT NULL AND o.buyer_id IS NOT NULL AND (o.seller_id = o.buyer_id OR "
+                "(SELECT COUNT(*) FROM observed_sales p WHERE p.seller_id = o.seller_id "
+                f"AND p.buyer_id = o.buyer_id) >= {WASH_PAIR_MIN}))")
 # Une vente « incertaine » a peut-être été créée : elle reste ouverte jusqu'à sa vérification.
 LISTING_OPEN = "('scheduled', 'posted', 'simulated', 'uncertain')"
 
@@ -125,7 +135,7 @@ def _observed_filter(card_id: str, rarity: str | None, shiny: bool | None) -> tu
     if shiny is not None:
         where += " AND is_shiny = ?"
         params.append(int(shiny))
-    return where, tuple(params)
+    return where + f" AND NOT {SUSPECT_SALE}", tuple(params)
 
 
 def utcnow() -> datetime:
@@ -161,6 +171,7 @@ class Database:
                 existing = {row[1] for row in await cur.fetchall()}
             if column not in existing:
                 await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        await self._db.execute("CREATE INDEX IF NOT EXISTS idx_observed_pair ON observed_sales (seller_id, buyer_id)")
         await self._db.commit()
 
     async def close(self) -> None:
@@ -443,12 +454,14 @@ class Database:
     async def upsert_auctions(self, rows: list[dict[str, Any]]) -> None:
         if not rows:
             return
+        rows = [{"seller_id": None, "bidder_id": None, **r} for r in rows]
         await self.db.executemany(
             "INSERT INTO auctions_seen (auction_id, card_id, title, norm_title, rarity, is_shiny, current_bid, "
-            "base_amount, min_bid, end_at, seen_at) VALUES (:auction_id, :card_id, :title, :norm_title, :rarity, "
-            ":is_shiny, :current_bid, :base_amount, :min_bid, :end_at, :seen_at) "
-            "ON CONFLICT(auction_id) DO UPDATE SET current_bid = excluded.current_bid, "
-            "min_bid = excluded.min_bid, end_at = excluded.end_at, seen_at = excluded.seen_at",
+            "base_amount, min_bid, end_at, seen_at, seller_id, bidder_id) VALUES (:auction_id, :card_id, :title, "
+            ":norm_title, :rarity, :is_shiny, :current_bid, :base_amount, :min_bid, :end_at, :seen_at, :seller_id, "
+            ":bidder_id) ON CONFLICT(auction_id) DO UPDATE SET current_bid = excluded.current_bid, "
+            "min_bid = excluded.min_bid, end_at = excluded.end_at, seen_at = excluded.seen_at, "
+            "bidder_id = excluded.bidder_id",
             rows,
         )
         await self.db.commit()
@@ -472,10 +485,10 @@ class Database:
             done.append((r["auction_id"],))
             if r["current_bid"] and seen and (end - seen).total_seconds() <= max_gap_seconds:
                 sales.append((r["auction_id"], r["card_id"], r["title"], r["rarity"], r["is_shiny"],
-                              r["current_bid"], iso(end)))
+                              r["current_bid"], iso(end), r["seller_id"], r["bidder_id"]))
         await self.db.executemany(
-            "INSERT OR IGNORE INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)", sales)
+            "INSERT OR IGNORE INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at, "
+            "seller_id, buyer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", sales)
         await self.db.executemany("DELETE FROM auctions_seen WHERE auction_id = ?", done)
         await self.db.commit()
         return len(sales)
@@ -487,13 +500,14 @@ class Database:
         Une même carte vaut très différemment selon sa rareté et si elle est shiny : `rarity`
         et `shiny` limitent aux ventes comparables (None = sans filtre)."""
         where, params = _observed_filter(card_id, rarity, shiny)
-        rows = await self._all(f"SELECT price FROM observed_sales WHERE {where} ORDER BY ended_at DESC", params)
+        rows = await self._all(f"SELECT price FROM observed_sales o WHERE {where} ORDER BY ended_at DESC", params)
         return [r["price"] for r in rows[:limit]], len(rows)
 
     async def observed_by_rarity(self, card_id: str, limit: int, shiny: bool = False) -> dict[str, tuple[list[int], int]]:
         """Ventes observées d'une carte, par rareté : {rareté: (`limit` derniers prix, nombre)}."""
-        rows = await self._all("SELECT rarity, price FROM observed_sales WHERE card_id = ? AND is_shiny = ? "
-                               "AND rarity IS NOT NULL ORDER BY ended_at DESC", (card_id, int(shiny)))
+        rows = await self._all("SELECT rarity, price FROM observed_sales o WHERE card_id = ? AND is_shiny = ? "
+                               f"AND rarity IS NOT NULL AND NOT {SUSPECT_SALE} ORDER BY ended_at DESC",
+                               (card_id, int(shiny)))
         groups: dict[str, list[int]] = {}
         for r in rows:
             groups.setdefault(r["rarity"], []).append(r["price"])
@@ -502,7 +516,7 @@ class Database:
     async def observed_prices_since(self, card_id: str, since: datetime, limit: int, rarity: str | None = None,
                                     shiny: bool | None = None) -> list[int]:
         where, params = _observed_filter(card_id, rarity, shiny)
-        rows = await self._all(f"SELECT price FROM observed_sales WHERE {where} AND ended_at >= ? "
+        rows = await self._all(f"SELECT price FROM observed_sales o WHERE {where} AND ended_at >= ? "
                                "ORDER BY ended_at DESC LIMIT ?", (*params, iso(since), limit))
         return [r["price"] for r in rows]
 
