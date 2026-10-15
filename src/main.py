@@ -118,8 +118,11 @@ def report_sections(stats: dict, pulls: dict[str, int], *, live_bids: bool) -> t
         packs += f"\n{rarities}"
     if stats["shiny_pulled"]:
         packs += f"\n✨ {stats['shiny_pulled']} shiny"
-    bids = (f"{stats['bids_placed']} mise(s) placée(s)" if live_bids
-            else f"{stats['bids_simulated']} mise(s) simulée(s)")
+    # Positions simulées et mises de collection réelles (SIMULATE=sniper) : les deux comptes, sinon les cartes
+    # gagnées (toujours réelles) semblaient venir des mises simulées.
+    counts = [f"{stats['bids_placed']} mise(s) placée(s)" if live_bids or stats["bids_placed"] else "",
+              f"{stats['bids_simulated']} mise(s) simulée(s)" if not live_bids or stats["bids_simulated"] else ""]
+    bids = ", ".join(c for c in counts if c)
     if stats["auctions_won"]:
         bids += f"\n{stats['auctions_won']} gagnée(s) pour {stats['spent_won']} WB"
     sales = [f"{stats['doublons_vendus']} doublon(s) vendu(s) pour {stats['doublons_recette']} WB"]

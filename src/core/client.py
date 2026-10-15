@@ -228,6 +228,11 @@ class WikiMastersClient:
         )
 
         self._slot_lock = asyncio.Lock()
+        # Requêtes urgentes (relecture d'une enchère juste avant d'y miser, mise) en attente d'un créneau :
+        # elles passent avant les autres. Plus aucune en attente : `_no_urgent` est levé.
+        self._urgent_waiting = 0
+        self._no_urgent = asyncio.Event()
+        self._no_urgent.set()
         self._next_slot = 0.0
         self._pause_until = 0.0
         self._failures = 0
@@ -473,21 +478,39 @@ class WikiMastersClient:
         return resp.status_code, _json_or_none(resp)
 
     # ------------------------------------------------------------ espacement
-    async def _acquire_slot(self) -> None:
-        async with self._slot_lock:
+    async def _acquire_slot(self, urgent: bool = False) -> None:
+        """Un créneau toutes les HTTP_MIN_SPACING_SECONDS, tous workers confondus. Une requête urgente passe
+        devant celles qui attendent : le 15/10 au soir, la relecture et la mise du sniper attendaient derrière
+        les autres workers et partaient à 0-8 s de la fin (mise qui prolonge l'enchère, ou cible manquée)."""
+        if urgent:
+            self._urgent_waiting += 1
+            self._no_urgent.clear()
+        try:
             while True:
-                wait = max(self._next_slot, self._pause_until) - time.monotonic()
-                if wait <= 0:
-                    break
+                if not urgent:
+                    await self._no_urgent.wait()
+                async with self._slot_lock:
+                    if urgent or not self._urgent_waiting:
+                        wait = max(self._next_slot, self._pause_until) - time.monotonic()
+                        if wait <= 0:
+                            self._next_slot = (
+                                time.monotonic()
+                                + self.settings.http_min_spacing_seconds
+                                + random.uniform(0, self.settings.http_jitter_seconds)
+                            )
+                            return
+                    else:
+                        wait = 0.0
+                # Attente hors du verrou : une requête urgente arrivée entre-temps prend le prochain créneau.
                 await asyncio.sleep(wait)
-            self._next_slot = (
-                time.monotonic()
-                + self.settings.http_min_spacing_seconds
-                + random.uniform(0, self.settings.http_jitter_seconds)
-            )
+        finally:
+            if urgent:
+                self._urgent_waiting -= 1
+                if not self._urgent_waiting:
+                    self._no_urgent.set()
 
-    async def _send(self, req: BuiltRequest) -> httpx.Response:
-        await self._acquire_slot()
+    async def _send(self, req: BuiltRequest, urgent: bool = False) -> httpx.Response:
+        await self._acquire_slot(urgent)
         resp = await self._http.request(
             req.method, req.url,
             params=req.params or None,
@@ -646,9 +669,10 @@ class WikiMastersClient:
             self.adopt_saved_session()
 
     # ------------------------------------------------------------- appels
-    async def get(self, name: str, *, wait: bool = True, **values: Any) -> Any:
+    async def get(self, name: str, *, wait: bool = True, urgent: bool = False, **values: Any) -> Any:
         """GET avec reprises. `wait=False` : lève RateLimited au lieu d'attendre la fin
-        d'une limitation propre à cette route (utile au sniper, qui ne peut pas attendre)."""
+        d'une limitation propre à cette route (utile au sniper, qui ne peut pas attendre).
+        `urgent` : passe devant les requêtes des autres workers (voir _acquire_slot)."""
         req = self.endpoints.build(name, **values)
         if req.is_mutation:
             raise ValueError(f"{name} est une écriture : utiliser mutate()")
@@ -665,7 +689,7 @@ class WikiMastersClient:
                     raise RateLimited(name)
                 await asyncio.sleep(paused)
             try:
-                resp = await self._send(req)
+                resp = await self._send(req, urgent)
             except httpx.HTTPError as exc:
                 attempts += 1
                 if attempts >= self.settings.http_get_max_attempts:
@@ -735,8 +759,10 @@ class WikiMastersClient:
                                f"HTTP {status}, clés : {keys or '—'}\n{server_message(payload)}\n"
                                f"Détail : data/inspect/writes/{name}-1.json")
 
-    async def mutate(self, name: str, *, live: bool | None = None, **values: Any) -> MutationResult:
-        """Écriture ; `live` force réel/simulé (sinon DRY_RUN, LIVE_WRITES et SIMULATE décident)."""
+    async def mutate(self, name: str, *, live: bool | None = None, urgent: bool = False,
+                     **values: Any) -> MutationResult:
+        """Écriture ; `live` force réel/simulé (sinon DRY_RUN, LIVE_WRITES et SIMULATE décident).
+        `urgent` : passe devant les requêtes des autres workers (voir _acquire_slot)."""
         req = self.endpoints.build(name, **values)
         if not req.is_mutation:
             raise ValueError(f"{name} n'est pas une écriture")
@@ -748,7 +774,7 @@ class WikiMastersClient:
         if self.route_paused_for(name) > 0:
             raise RateLimited(name)  # route en pause (erreur ou limite) : rien n'est envoyé
         try:
-            resp = await self._send(req)
+            resp = await self._send(req, urgent)
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
             self._backoff(f"{name}: {type(exc).__name__}", limited=False)
             raise ApiError(0, None, name, "requête non envoyée (connexion impossible)") from exc

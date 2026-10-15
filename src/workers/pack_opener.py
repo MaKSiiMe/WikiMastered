@@ -78,7 +78,8 @@ class PackOpener(Worker):
         self.state = PackState.from_json(await self.db.kv_get(STATE_KEY)) if self.live else PackState()
         # Première ouverture quelques minutes après le démarrage, puis toutes les 15 à 90 min.
         self._next_open = utcnow() + timedelta(minutes=random.uniform(1, 10))
-        self._retry_soon = False  # la dernière tentative a échoué : réessayer dans 5 à 10 min
+        # La dernière tentative a échoué (raison journalisée) : réessayer dans 5 à 10 min.
+        self._retry_reason: str | None = None
         self._started_at = utcnow()  # démarrage du bot, noté avec chaque vérification humaine
 
     def _schedule_next(self) -> None:
@@ -88,11 +89,11 @@ class PackOpener(Worker):
         self._next_open = utcnow() + timedelta(minutes=minutes)
         self.log.info("prochaine ouverture de paquets vers %s", f"{self._next_open.astimezone():%H:%M}")
 
-    def _schedule_retry(self) -> None:
+    def _schedule_retry(self, reason: str) -> None:
         s = self.settings
         minutes = random.uniform(s.pack_retry_min_minutes, max(s.pack_retry_min_minutes, s.pack_retry_max_minutes))
         self._next_open = utcnow() + timedelta(minutes=minutes)
-        self.log.info("ouverture échouée : nouvel essai vers %s", f"{self._next_open.astimezone():%H:%M}")
+        self.log.info("ouverture échouée (%s) : nouvel essai vers %s", reason, f"{self._next_open.astimezone():%H:%M}")
 
     async def _save(self) -> None:
         if self.live:
@@ -109,9 +110,9 @@ class PackOpener(Worker):
         wait = seconds_until_stock(self.state, self.target, self.period, now)
         if wait > 0:
             return min(wait, 600.0)
-        self._retry_soon = False
+        self._retry_reason = None
         await self._open_batch()
-        self._schedule_retry() if self._retry_soon else self._schedule_next()
+        self._schedule_retry(self._retry_reason) if self._retry_reason else self._schedule_next()
         return 1.0
 
     async def _refresh_status(self) -> None:
@@ -166,7 +167,7 @@ class PackOpener(Worker):
                 rate_retries += 1
                 if rate_retries > 5 or wait > 300:
                     self.log.warning("ouverture limitée par le serveur, nouvel essai dans quelques minutes")
-                    self._retry_soon = True
+                    self._retry_reason = "limitée par le serveur"
                     break
                 await asyncio.sleep(max(0.5, wait))
                 continue
@@ -177,7 +178,7 @@ class PackOpener(Worker):
                 if pack.packs_remaining == 0 or "plus de paquets" in (pack.error or pack.message or "").lower():
                     self.state.remaining = 0
                 else:
-                    self._retry_soon = True  # refus inconnu : nouvel essai dans 5 à 10 min
+                    self._retry_reason = f"refus HTTP {result.status}"  # refus inconnu : nouvel essai dans 5 à 10 min
                     self.log.warning("ouverture refusée (HTTP %s) : %s", result.status,
                                      pack.error or pack.message or str(payload)[:200])
                 # Un refus ne prouve pas que la vérification humaine est levée : seul un paquet ouvert le prouve.
@@ -212,7 +213,8 @@ class PackOpener(Worker):
         await self._save()
 
     async def _pause_for_verification(self) -> None:
-        self._retry_soon = True
+        # Le 15/10 au soir, une heure de « ouverture échouée » sans raison : l'alerte ne part qu'au premier refus.
+        self._retry_reason = "vérification humaine en attente"
         if not self.state.verification_required:
             self.notifier.critical(
                 "Paquets : vérification humaine demandée",

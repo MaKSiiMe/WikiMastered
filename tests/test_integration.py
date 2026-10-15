@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -719,7 +720,7 @@ async def test_trend_alert_one_line_per_card(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path):
+async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path, caplog):
     from src.workers.pack_opener import PackOpener
 
     state = {"verify": True}
@@ -736,12 +737,16 @@ async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path):
     api = WikiMastersAPI(client)
     opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     await opener.setup()
+    caplog.set_level(logging.INFO)
     for _ in range(3):  # trois échecs de suite : une seule alerte
         opener._next_open = datetime.now(timezone.utc)
         await opener.step()
         gap = (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60
         assert 4.9 <= gap <= 10
     assert [t for _, t in notifier.sent if "vérification" in t] == ["Paquets : vérification humaine demandée"]
+    # Chaque nouvel essai dit pourquoi (le 15/10 au soir : une heure de « ouverture échouée » sans raison).
+    retries = [r.getMessage() for r in caplog.records if r.getMessage().startswith("ouverture échouée")]
+    assert len(retries) == 3 and all("(vérification humaine en attente)" in m for m in retries)
     assert opener.blocked and opener.blocked.startswith("vérification humaine en attente depuis ")
     state["verify"] = False
     opener._next_open = datetime.now(timezone.utc)

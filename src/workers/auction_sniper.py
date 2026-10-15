@@ -500,7 +500,8 @@ class AuctionSniper(Worker):
     async def _refresh_target(self, target: Target) -> None:
         aid = target.auction.id
         try:
-            auction = await self.api.auction(aid)
+            # Relecture juste avant de miser : urgente. Une cible misée relue après sa fin ne l'est pas.
+            auction = await self.api.auction(aid, urgent=not target.recheck)
         except ApiError as exc:
             self.log.debug("cible %s illisible (%s) : abandonnée", target.auction.title, exc)
             self._targets.pop(aid, None)

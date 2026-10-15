@@ -73,6 +73,12 @@ def test_report_sections():
     assert "4 doublon(s) vendu(s) pour 96 WB" in blocks["Ventes"]
     assert "Bénéfice simulé : +310 WB" in blocks["Positions"]
     assert report_sections({**stats, "balance": "?"}, {}, live_bids=True)[0] == "Solde : inconnu"
+    # Positions simulées, collection réelle (SIMULATE=sniper) : les deux comptes, les cartes gagnées sont réelles.
+    mixed = {**stats, "bids_placed": 14, "bids_simulated": 76, "auctions_won": 12, "spent_won": 164}
+    assert dict(report_sections(mixed, {}, live_bids=False)[1])["Sniper"] == \
+        "14 mise(s) placée(s), 76 mise(s) simulée(s)\n12 gagnée(s) pour 164 WB"
+    assert dict(report_sections({**stats, "bids_simulated": 0}, {}, live_bids=True)[1])["Sniper"] == \
+        "0 mise(s) placée(s)"
 
     assert as_section("**Collection** : 33/366 — il manque : 2 janvier") == ("Collection", "33/366 — il manque : 2 janvier")
     assert as_section("**Validation de la simulation**\nMarché observé : 3") == ("Validation de la simulation",
