@@ -104,3 +104,22 @@ def test_log_line_carries_fields_and_sections(caplog):
     lines = [r.getMessage() for r in caplog.records]
     assert "[INFO] Boosters ouverts boosters : 7, cartes : 35" in lines
     assert "[WARNING] Récap Depuis 08:00 | À vérifier : • vérification humaine en attente" in lines
+
+
+def test_two_channels_main_keeps_money_and_alerts():
+    """« Beaucoup trop de messages » (16/10) : le salon principal garde l'argent et les alertes, le reste à part."""
+    activity = "https://discord/activity"
+    n = notifier(activity_webhook_url=activity)
+    route = lambda level, title, **kw: n._webhook_for(_Message(level, title, "", **kw))  # noqa: E731
+    assert route(Level.SUCCESS, "Position achetée !", topic=Topic.SNIPER) == MAIN
+    assert route(Level.SUCCESS, "Revente réussie", topic=Topic.SALES) == MAIN
+    assert route(Level.INFO, "Carte mise en vente", topic=Topic.SALES, important=True) == MAIN
+    assert route(Level.WARNING, "Mise en vente refusée", topic=Topic.SALES) == MAIN
+    assert route(Level.INFO, "Bilan du 16/10", topic=Topic.REPORT) == MAIN
+    assert route(Level.CRITICAL, "Sniper : vérification anti-bot demandée") == ALERT
+    assert route(Level.INFO, "Boosters ouverts", topic=Topic.PACKS) == activity
+    assert route(Level.INFO, "Sniper : 5 enchères", topic=Topic.SNIPER) == activity
+    assert route(Level.WARNING, "Récap des 4 dernières heures", topic=Topic.RECAP) == activity
+    # Sans salon d'activité : tout dans le principal, comme avant ; « off » : logs seulement.
+    assert notifier()._webhook_for(_Message(Level.INFO, "Boosters ouverts", "", topic=Topic.PACKS)) == MAIN
+    assert notifier(activity_webhook_url="off")._webhook_for(_Message(Level.INFO, "Boosters", "")) == ""

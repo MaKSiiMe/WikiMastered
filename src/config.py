@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     # --- Discord ----------------------------------------------------------------
     discord_webhook_url: str = ""
     discord_alert_webhook_url: str = ""
+    # Salon d'activité (paquets, digests, récap périodique, tendances, simulé) : vide = salon principal ;
+    # « off » = logs seulement. Le salon principal garde alertes, achats, ventes, cartes gagnées, bilans.
+    discord_activity_webhook_url: str = ""
     discord_mention: str = ""
     daily_report_time: time = time(23, 0)
     recap_interval_hours: int = 4  # récap des workers toutes les N heures (0 = aucun)

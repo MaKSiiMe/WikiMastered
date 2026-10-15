@@ -59,13 +59,29 @@ class _Message:
     sections: list[tuple[str, str]] = field(default_factory=list)  # blocs pleine largeur, dans l'ordre
     thumbnail: str | None = None
     url: str | None = None
+    important: bool = False  # message d'information qui va quand même dans le salon principal
+
+    @property
+    def main_channel(self) -> bool:
+        """Salon principal : alertes, réussites (achats, ventes, cartes gagnées), bilan du soir, et les messages
+        marqués importants. Le reste (paquets, digests, récap périodique, tendances, simulé) : salon d'activité."""
+        if self.important or self.topic is Topic.REPORT:
+            return True
+        return self.level is not Level.INFO and self.topic is not Topic.RECAP
+
+
+# DISCORD_ACTIVITY_WEBHOOK_URL=off : les messages d'activité ne vont que dans les logs.
+_OFF = {"off", "none", "aucun", "0", "false"}
 
 
 class DiscordNotifier:
     def __init__(self, webhook_url: str, alert_webhook_url: str = "", mention: str = "", dry_run: bool = True, *,
-                 footer: str = ""):
+                 footer: str = "", activity_webhook_url: str = ""):
         self._webhook = webhook_url
         self._alert_webhook = alert_webhook_url or webhook_url
+        # Salon d'activité : vide = salon principal (comme avant) ; « off » = logs seulement.
+        activity = activity_webhook_url.strip()
+        self._activity_webhook = "" if activity.casefold() in _OFF else (activity or webhook_url)
         self._mention = mention
         self._dry_run = dry_run
         self._footer = footer
@@ -88,18 +104,18 @@ class DiscordNotifier:
 
     def send(self, level: Level, title: str, description: str = "", *, live: bool = False,
              topic: Topic = Topic.SYSTEM, sections: list[tuple[str, str]] | None = None,
-             thumbnail: str | None = None, url: str | None = None, **fields: Any) -> None:
+             thumbnail: str | None = None, url: str | None = None, important: bool = False, **fields: Any) -> None:
         log_fn = log.warning if level in (Level.WARNING, Level.CRITICAL) else log.info
         # Les logs reprennent tout le message (champs et blocs), pas seulement le titre.
         parts = [description] if description else []
         parts += [", ".join(f"{k} : {v}" for k, v in fields.items() if v is not None)] if fields else []
         parts += [f"{name} : {body}" for name, body in sections or []]
         log_fn("[%s] %s %s", level.name, title, " | ".join(p for p in parts if p).replace("\n", " | "))
-        if not self._webhook:
+        msg = _Message(level, title, description, fields, live, topic, sections or [], thumbnail, url, important)
+        if not self._webhook_for(msg):
             return
         try:
-            self._queue.put_nowait(_Message(level, title, description, fields, live, topic, sections or [],
-                                            thumbnail, url))
+            self._queue.put_nowait(msg)
         except asyncio.QueueFull:
             log.error("File Discord pleine, message perdu : %s", title)
 
@@ -165,8 +181,15 @@ class DiscordNotifier:
                                     else msg.description[:max(0, room - 1)] + "…")
         return embed
 
+    def _webhook_for(self, msg: _Message) -> str:
+        if not self._webhook:
+            return ""
+        if msg.level is Level.CRITICAL:
+            return self._alert_webhook
+        return self._webhook if msg.main_channel else self._activity_webhook
+
     async def _deliver(self, msg: _Message) -> None:
-        url = self._alert_webhook if msg.level is Level.CRITICAL else self._webhook
+        url = self._webhook_for(msg)
         payload: dict[str, Any] = {"username": "WikiMastered", "embeds": [self.embed(msg)]}
         if msg.level is Level.CRITICAL and self._mention:
             payload["content"] = self._mention

@@ -68,7 +68,8 @@ def setup_logging(settings: Settings) -> None:
 async def build_context(settings: Settings):
     set_timezone(settings.timezone)
     notifier = DiscordNotifier(settings.discord_webhook_url, settings.discord_alert_webhook_url,
-                               settings.discord_mention, settings.dry_run, footer=f"Mode {settings.mode_label}")
+                               settings.discord_mention, settings.dry_run, footer=f"Mode {settings.mode_label}",
+                               activity_webhook_url=settings.discord_activity_webhook_url)
     notifier.start()
     endpoints = Endpoints.load(settings.endpoints_file, settings.wm_base_url)
     client = WikiMastersClient(settings, endpoints, notifier)
@@ -210,7 +211,7 @@ async def send_sniper_report(ctx: Context, hours: float, *, send: bool = True) -
     since = until - timedelta(hours=hours)
     if send:
         title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.sale_fee_pct)
-        ctx.notifier.info(title, summary, topic=Topic.SNIPER, sections=sections)
+        ctx.notifier.info(title, summary, topic=Topic.SNIPER, sections=sections, important=True)
     title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.sale_fee_pct, limit=None)
     return "\n\n".join([f"{title}\n{summary}", *(f"== {name} ==\n{body}" for name, body in sections)])
 
@@ -269,7 +270,8 @@ async def run_bot(settings: Settings) -> None:
         mode = settings.mode_label
         names = ", ".join(w.name for w in workers) or "aucun"
         log.info("Démarrage en mode %s — workers : %s — joueur %s", mode, names, ctx.client.user_id or "?")
-        ctx.notifier.info("Bot démarré", f"Mode {mode}\nWorkers : {names}\nSession : {ctx.client.session_status()}")
+        ctx.notifier.info("Bot démarré", f"Mode {mode}\nWorkers : {names}\nSession : {ctx.client.session_status()}",
+                          important=True)
 
         # Chaque tâche est supervisée à part : si l'une plante, elle est relancée et les autres continuent.
         started_at = datetime.now(timezone.utc)
