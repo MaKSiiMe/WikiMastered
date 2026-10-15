@@ -123,6 +123,7 @@ python -m src.main inspect                      # compare les vraies réponses a
 python -m src.main inventory scan               # ce qui serait vendu / défaussé, et pourquoi
 python -m src.main inventory report --lookups 300  # toute la collection cotée : résumé + data/inventaire-<date>.csv
 python -m src.main sniper-report --hours 12       # toutes les enchères misées : gagnées, perdues, gain latent et manqué
+python -m src.main gifs                           # les cartes GIF se vendent-elles mieux ? (ventes observées)
 python -m src.main inventory list --apply       # programme les ventes
 python -m src.main inventory discard --apply    # défausse, après vérification des paliers
 python -m src.main report                       # envoie le bilan du jour sur Discord

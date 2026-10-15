@@ -12,7 +12,7 @@ import logging
 import math
 from datetime import datetime, timezone
 from typing import Any, TypeVar
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -55,6 +55,12 @@ class Card(_Model):
     image_url: str | None = None
     wikipedia_url: str | None = None
     is_shiny: bool = False
+
+    @property
+    def is_gif(self) -> bool:
+        """Image animée : le fichier Wikimedia est un GIF (« …/330px-Franks_expansion.gif?utm_source=… », relevé du
+        16/10). Rares sur le marché (aucune sur 283 ventes), elles se vendraient mieux : à mesurer."""
+        return urlsplit(self.image_url or "").path.lower().endswith(".gif")
 
     @property
     def page_url(self) -> str | None:
