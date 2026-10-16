@@ -9,6 +9,7 @@
     python -m src.main packs [--hours 24]       # paquets ouverts récemment
     python -m src.main collection               # collection à compléter (jours de l'année…)
     python -m src.main market [--pages 4] [--rarity UR]  # où sont les fins imminentes dans le marché
+    python -m src.main profile                  # profil du joueur : solde, paquets, pity…
     python -m src.main hours [--rarity UR,L]     # à quelle heure de fin les enchères se vendent le mieux
 """
 
@@ -239,6 +240,22 @@ def gif_text(rows) -> str:
                    "surenchère" if ratios else ""
             lines.append(f"  {rarity:>2} {'GIF' if gif else 'img'} : {len(sales)} ventes ({cards} cartes), "
                          f"prix médian {st.median(s['price'] for s in sales):.0f}{lift}")
+    return "\n".join(lines)
+
+
+PROFILE_HIDDEN = ("email", "token", "secret", "password", "phone", "ip_address")  # jamais affichés, même collés ensuite
+
+
+def profile_text(profile) -> str:
+    """Réponse brute de `get_my_profile` (solde, paquets, régénération, pity…), une ligne par champ.
+    Les champs personnels (e-mail, jetons…) sont masqués."""
+    import json
+    if not isinstance(profile, dict):
+        return f"Réponse inattendue : {json.dumps(profile, ensure_ascii=False)[:300]}"
+    lines = ["Profil lu sur le site (get_my_profile) :"]
+    for key in sorted(profile):
+        value = "***" if any(h in key.lower() for h in PROFILE_HIDDEN) else json.dumps(profile[key], ensure_ascii=False)
+        lines.append(f"  {key} = {value[:200]}")
     return "\n".join(lines)
 
 
@@ -480,6 +497,7 @@ def main(argv: list[str] | None = None) -> None:
     sim = sub.add_parser("reset-simulation", help="efface les mises et ventes simulées (sans --apply : compte)")
     sim.add_argument("--apply", action="store_true", help="efface vraiment")
     sub.add_parser("gifs", help="les cartes GIF se vendent-elles mieux ? (ventes observées, lecture seule)")
+    sub.add_parser("profile", help="profil du joueur lu sur le site : solde, paquets, pity… (lecture seule)")
     hr = sub.add_parser("hours", help="à quelle heure de fin les enchères se vendent-elles le mieux ? (lecture seule)")
     hr.add_argument("--rarity", default="UR,L", help="raretés séparées par des virgules (défaut UR,L)")
     snr = sub.add_parser("sniper-report", help="toutes les enchères misées sur les N dernières heures (lecture seule)")
@@ -527,6 +545,12 @@ def main(argv: list[str] | None = None) -> None:
             async with build_context(settings) as ctx:
                 print(gif_text(await ctx.db.gif_stats()))
         asyncio.run(_gifs())
+    elif command == "profile":
+        async def _profile() -> None:
+            async with build_context(settings) as ctx:
+                status, data = await ctx.client.supabase("POST", "rpc/get_my_profile", json_body={})
+                print(profile_text(data) if status == 200 else f"HTTP {status} : {profile_text(data)}")
+        asyncio.run(_profile())
     elif command == "hours":
         async def _hours() -> None:
             rarities = [r.strip().upper() for r in args.rarity.split(",") if r.strip()]
