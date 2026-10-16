@@ -289,3 +289,25 @@ async def test_null_selling_count_does_not_crash_the_sniper(tmp_path):
     cap, room = await sniper._sale_capacity(datetime.now(timezone.utc))
     assert (cap, room) == position_cap(sniper.settings, 5, 0)
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_leading_bid_outbid_before_the_last_seconds_is_replayed(tmp_path, caplog):
+    """Rapport du 16/10 : surenchérie avant les 10 dernières secondes (pas de prolongation), la mise n'était relue
+    qu'après la fin et la vente partait sous notre plafond. La mise en tête est relue avant la fin et rejouée."""
+    market = {"col": sale("col", "14 octobre", 15)}
+    sniper, db, _ = await start(tmp_path, market, [(200, {"current_bid": 10, "bidder_balance": 2990}),
+                                                   (200, {"current_bid": 14, "bidder_balance": 2986})])
+    await sniper.step()
+    target = sniper._targets["col"]
+    assert target.recheck and "col" in sniper._leading
+
+    # Un rival mise 12 à 20 s de la fin : la dernière relecture le voit, et le bot remise 14 (12 × 1,1).
+    target.auction = target.auction.model_validate(sale("col", "14 octobre", 20))
+    market["col"] = sale("col", "14 octobre", 20, bid=12, bidder=RIVAL)
+    caplog.set_level("INFO", logger="worker.sniper")
+    await sniper.step()
+    assert "14 octobre surenchérie à" in caplog.text and ": rejouée" in caplog.text
+    assert "prolongée" not in caplog.text
+    assert sniper._leading["col"][1] == 14 and sniper._targets["col"].recheck
+    await db.close()

@@ -208,6 +208,12 @@ class InventoryManager(Worker):
         # (lire la collection coûte ~175 requêtes), consommés à chaque place libérée.
         self._sale_queue: list[SaleCandidate] = []
         self._queue_at: datetime | None = None
+        if self.settings.position_post_now:
+            # Programmées avec l'ancienne règle (lendemain 11 h-12 h) : publiées dès maintenant. Une seule fois, au
+            # démarrage : une revente reportée faute de place de vente ne doit pas être avancée en boucle.
+            advanced = await self.db.advance_position_listings(utcnow())
+            if advanced:
+                self.log.info("%d revente(s) programmée(s) avancée(s) : publiées maintenant", advanced)
 
     async def step(self) -> float:
         await self.reconcile_listings()
@@ -306,6 +312,10 @@ class InventoryManager(Worker):
     def _plan(self, now: datetime, *, position: bool, at_peak: bool) -> tuple[datetime, int, datetime]:
         """Revente d'une position : publiée vers 11 h-12 h pour 12 h ; doublon : fin dans la fenêtre choisie."""
         s = self.settings
+        if position and s.position_post_now:
+            minutes = min(s.listing_duration_options or [s.position_list_duration_minutes],
+                          key=lambda d: abs(d - s.position_list_duration_minutes))
+            return now, minutes, now + timedelta(minutes=minutes)
         if position:
             return plan_position_time(now, s.position_post_start, s.position_post_end,
                                       s.position_list_duration_minutes, s.listing_duration_options)

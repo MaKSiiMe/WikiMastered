@@ -459,6 +459,15 @@ class Database:
                               (iso(now),))
         return int(row["n"]) if row else 0
 
+    async def advance_position_listings(self, now: datetime) -> int:
+        """Reventes de positions programmées plus tard : avancées à maintenant (même durée). Renvoie leur nombre."""
+        rows = await self._all("SELECT id, duration_minutes FROM listings WHERE status = 'scheduled' "
+                               "AND bid_id IS NOT NULL AND post_at > ?", (iso(now),))
+        for r in rows:
+            await self.update_listing(r["id"], post_at=now,
+                                      target_end=now + timedelta(minutes=r["duration_minutes"] or 0))
+        return len(rows)
+
     async def update_listing(self, listing_id: int, **fields: Any) -> None:
         cols = ", ".join(f"{k} = ?" for k in fields)
         values = [iso(v) if isinstance(v, datetime) else v for v in fields.values()]

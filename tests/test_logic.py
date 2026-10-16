@@ -256,7 +256,8 @@ def test_never_bid_in_the_last_ten_seconds():
     assert not in_snipe_window(ending(10), ME, 20, NOW, min_left=11)
     assert not in_snipe_window(ending(25), ME, 20, NOW, min_left=11)
     s = settings()
-    assert snipe_params(s, night=True).window_seconds == snipe_params(s, night=False).window_seconds == 20
+    assert snipe_params(s, night=True).window_seconds == snipe_params(s, night=False).window_seconds == 60
+    assert s.sniper_min_seconds_left == 15  # 16/10 : fenêtre élargie à 60 s → 15 s
 
 
 def test_trend_terms_match_card_titles():

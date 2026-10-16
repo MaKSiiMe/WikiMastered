@@ -151,9 +151,11 @@ class Settings(BaseSettings):
     sniper_resale_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
     sniper_discovery_seconds: float = 10.0  # nouvelles ventes de chaque rareté suivie, toutes les N s
     sniper_observe_seconds: float = 30.0    # ventes tout juste terminées (prix observés), toutes les N s
-    sniper_window_seconds: int = 20
-    # Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais.
-    sniper_min_seconds_left: int = 11
+    # Fenêtre de mise : de 60 s à 15 s avant la fin. Large : le site lent (16/10) relisait trop peu de cibles dans
+    # une fenêtre de 9 s (139 sur 159 « pas relues à temps »). Une mise en tête est relue avant la fin et rejouée.
+    sniper_window_seconds: int = 60
+    # Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais (marge de 5 s).
+    sniper_min_seconds_left: int = 15
     # Achat « collection » par rareté : désactivé (le prix suit les tendances, pas la rareté).
     sniper_rarity_caps: dict[str, int] = Field(default_factory=dict)
     sniper_shiny_cap: int = 0
@@ -183,7 +185,7 @@ class Settings(BaseSettings):
     night_end: time = time(7, 30)
     night_deal_ratio_max: float = 0.80
     night_caps_multiplier: float = 1.3
-    night_window_seconds: int = 20
+    night_window_seconds: int = 60
     night_budget_bonus: int = 0
 
     # --- Capital : positions achetées pour être revendues ----------------------------
@@ -203,6 +205,9 @@ class Settings(BaseSettings):
     # surenchère) et les 5 places de vente sont rares : un départ bas vendrait presque au prix d'achat.
     position_list_profit_share: float = 0.5
     # Revente d'une position : publiée entre ces heures (Paris), pour cette durée (12 h : fin vers 23 h-minuit).
+    # Revente publiée dès que la carte est arrivée (16/10 : 2 L sur 3 attendaient le lendemain 11 h, capital
+    # immobilisé ; l'heure de fin change peu le prix, voir `python -m src.main hours`). False : fenêtre ci-dessous.
+    position_post_now: bool = True
     position_post_start: time = time(11, 0)
     position_post_end: time = time(12, 0)
     position_list_duration_minutes: int = 720
