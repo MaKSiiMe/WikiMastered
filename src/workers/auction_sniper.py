@@ -56,6 +56,10 @@ PLACED = ("misée", "misée (collection)", SHADOW_PLACED)
 # Refus d'une mise tant que la vérification humaine du site n'est pas faite : « Vérification anti-bot
 # requise. » (relevé du 15/10/2026, en même temps que celle des paquets).
 ANTIBOT_HINT = "anti-bot"
+# Tant qu'elle attend, une seule mise réelle part par période : elle teste si la vérification est levée. Le 16/10,
+# ~45 mises refusées en 1 h 30 (toutes inutiles), puis vérification des paquets demandée à son tour.
+ANTIBOT_RETRY = timedelta(minutes=5)
+PENDING_ANTIBOT = "pas tentée : vérification anti-bot en attente"
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -265,6 +269,7 @@ class AuctionSniper(Worker):
         self._manual_cards: set[str] = set()
         self._sale_slots: tuple[datetime, int, int] | None = None  # (lu à, max, ventes en cours)
         self._antibot_since: datetime | None = None  # mises refusées : vérification anti-bot à faire
+        self._antibot_retry_at = _EPOCH  # prochaine mise réelle permise tant que la vérification attend
         self._buys_left: int | None = None  # achats réels encore permis (SNIPER_MAX_BUYS), None = illimité
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
@@ -612,6 +617,10 @@ class AuctionSniper(Worker):
             if not await self._affordable(decision, params, portfolio):
                 self._outcome(auction, "solde ou budget du jour insuffisant")
                 continue
+            if self._antibot_pending(decision):
+                self.log.debug("%s : vérification anti-bot en attente, mise pas tentée", auction.title)
+                self._outcome(auction, PENDING_ANTIBOT)
+                continue
             if await self._bid(auction, decision, params):
                 self._outcome(auction, "misée (collection)" if decision.collection else "misée")
                 if not rebid:
@@ -853,6 +862,11 @@ class AuctionSniper(Worker):
         if self._outcomes.get(auction.id) not in PLACED:
             self._outcomes[auction.id] = outcome
 
+    def _antibot_pending(self, decision: Decision) -> bool:
+        """Mise réelle à ne pas tenter : la vérification anti-bot attend et la dernière tentative est trop récente."""
+        live = self.settings.is_live("collection_bid" if decision.collection else "place_bid")
+        return live and self._antibot_since is not None and utcnow() < self._antibot_retry_at
+
     @property
     def blocked(self) -> str | None:
         if not self._antibot_since:
@@ -950,13 +964,17 @@ class AuctionSniper(Worker):
         await self.db.record_bid(**common, status="rejected", note=str(error)[:300])
         self.log.info("mise refusée sur %s : %s", label, error)
         if ANTIBOT_HINT in str(error).lower() or payload.get("human_verification_required"):
+            self._antibot_retry_at = utcnow() + ANTIBOT_RETRY
             if not self._antibot_since:
                 self._antibot_since = utcnow()
+                # Le 16/10, les paquets s'ouvraient encore pendant que les mises étaient refusées : la page
+                # Paquets ne la propose pas forcément.
                 self.notifier.critical(
                     "Sniper : vérification anti-bot demandée",
                     f"Le site refuse les mises tant qu'elle n'est pas faite ({label} : {decision.amount} WB "
-                    "refusée). Fais-la toi-même dans ton navigateur (page Paquets) ; le bot continue de miser "
-                    "et te prévient quand une mise repasse.")
+                    "refusée). Fais-la toi-même dans ton navigateur : mise à la main sur le marché, ou page "
+                    f"Paquets si elle la demande. En attendant, le bot ne tente qu'une mise toutes les "
+                    f"{ANTIBOT_RETRY.seconds // 60} min et te prévient dès qu'une mise repasse.")
             return False
         if not retried and isinstance(server_min, int) and decision.amount < server_min <= decision.ceiling:
             return await self._bid(auction, Decision(server_min, decision.ceiling, decision.reason, decision.reference,
