@@ -187,3 +187,33 @@ async def test_inventory_report_values_every_card(tmp_path, capsys):
     assert rows["Alpha"]["exemplaires"] == "5" and rows["Alpha"]["à vendre"] == "4"
     assert rows["Beta"]["à défausser"] == "2" and rows["Delta"]["cote"] == ""
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_position_posted_now_and_old_schedules_advanced(tmp_path):
+    """16/10 : 2 L sur 3 attendaient le lendemain 11 h. Une revente part dès que la carte est là."""
+    from src.workers.inventory_manager import InventoryManager
+    from tests.test_integration import make_client
+    from src.core.api import WikiMastersAPI
+    from src.core.pricing import PriceService
+    from src.workers.base import Context
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    tomorrow = now + timedelta(hours=17)
+    await db.schedule_listing(owned_card_id="o1", card_id="c", title="Fabrice Arfi", rarity="L", base_amount=488,
+                              duration_minutes=720, post_at=tomorrow, target_end=tomorrow + timedelta(hours=12),
+                              reason="position", bid_id=1)
+    await db.schedule_listing(owned_card_id="o2", card_id="d", title="doublon", rarity="C", base_amount=20,
+                              duration_minutes=360, post_at=tomorrow, target_end=tomorrow, reason="cote")
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await inv.setup()
+    rows = {r["title"]: r for r in await db._all("SELECT title, post_at, target_end FROM listings")}
+    assert datetime.fromisoformat(rows["Fabrice Arfi"]["post_at"]) <= datetime.now(timezone.utc)
+    assert datetime.fromisoformat(rows["doublon"]["post_at"]) > now + timedelta(hours=16)  # doublon : inchangé
+    post_at, minutes, end = inv._plan(now, position=True, at_peak=True)
+    assert post_at == now and minutes == 720 and end == now + timedelta(hours=12)
+    await db.close()

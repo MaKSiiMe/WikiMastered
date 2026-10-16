@@ -205,6 +205,9 @@ class Settings(BaseSettings):
     # surenchère) et les 5 places de vente sont rares : un départ bas vendrait presque au prix d'achat.
     position_list_profit_share: float = 0.5
     # Revente d'une position : publiée entre ces heures (Paris), pour cette durée (12 h : fin vers 23 h-minuit).
+    # Revente publiée dès que la carte est arrivée (16/10 : 2 L sur 3 attendaient le lendemain 11 h, capital
+    # immobilisé ; l'heure de fin change peu le prix, voir `python -m src.main hours`). False : fenêtre ci-dessous.
+    position_post_now: bool = True
     position_post_start: time = time(11, 0)
     position_post_end: time = time(12, 0)
     position_list_duration_minutes: int = 720
