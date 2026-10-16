@@ -36,6 +36,10 @@ from src.workers.base import Context, Worker
 INVENTORY_PRICE_MAX_AGE = timedelta(days=3)  # la cote d'un doublon bouge peu
 # Refus du site : « Cette carte est en favori : retirez-la des favoris pour la mettre en vente » (relevé du 16/10).
 FAVORITE_HINT = "favori"
+# Remise en vente juste après une vente sans acheteur : « Vous ne possédez pas cette carte » tant que le site ne l'a
+# pas rendue (16/10 à 23:11, Cyril Féraud). Un nouvel essai part N min plus tard, au même prix.
+NOT_OWNED_HINT = "ne possédez pas"
+NOT_OWNED_RETRY = timedelta(minutes=5)
 POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la carte
 # Exemplaire d'une position pas trouvé (ou seul en favori) : nouvel essai dans N min, au lieu de relire la collection
 # à chaque passage (16/10 : 206 lectures et avertissements en 2 h pour Place publique).
@@ -475,6 +479,13 @@ class InventoryManager(Worker):
             else:
                 payload = result.payload if isinstance(result.payload, dict) else {}
                 error = payload.get("error") or payload.get("message") or f"HTTP {result.status}"
+                if row["bid_id"] and NOT_OWNED_HINT in str(error).lower() and not row["error"]:
+                    retry = utcnow() + NOT_OWNED_RETRY  # une fois : la carte invendue n'est pas encore revenue
+                    await self.db.update_listing(row["id"], error=str(error)[:300], post_at=retry,
+                                                 target_end=retry + timedelta(minutes=minutes))
+                    self.log.info("%s : carte pas encore revenue dans la collection, nouvel essai à %s", label,
+                                  f"{retry.astimezone(now_local().tzinfo):%H:%M}")
+                    continue
                 # Carte en favori : pas un échec (ne mène pas à l'abandon) ; l'exemplaire est recherché de nouveau.
                 status = "favorite" if FAVORITE_HINT in str(error).lower() else "failed"
                 await self.db.update_listing(row["id"], status=status, error=str(error)[:300])

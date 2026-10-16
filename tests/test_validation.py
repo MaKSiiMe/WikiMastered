@@ -287,3 +287,33 @@ async def test_missing_copy_is_retried_slowly_then_closed(tmp_path):
     assert await db.positions_to_list() == []  # close après ~2 h d'absence
     assert notifier.sent.count(("WARNING", "Revente abandonnée")) == 1
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_relist_waits_for_the_unsold_card_to_come_back(tmp_path):
+    """16/10 à 23:11 : Cyril Féraud invendue, remise à 375 refusée (« Vous ne possédez pas cette carte ») puis
+    reprise au prix de départ (417) : la remise de 10 % était perdue. Un nouvel essai part 5 min plus tard, à 375."""
+    def handler(request):
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        return httpx.Response(400, json={"error": "Vous ne possédez pas cette carte"})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    lid = await db.schedule_listing(owned_card_id="cf", card_id="c", title="Cyril Féraud", rarity="L", base_amount=375,
+                                    duration_minutes=720, post_at=now - timedelta(seconds=1), target_end=now,
+                                    reason="position", bid_id=3, relist_count=1)
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await inv.post_due_listings()
+    row = await db._one("SELECT status, post_at, base_amount FROM listings WHERE id = ?", (lid,))
+    assert row["status"] == "scheduled" and row["base_amount"] == 375
+    assert datetime.fromisoformat(row["post_at"]) > now + timedelta(minutes=4)
+    assert await db.failed_listings_count(3) == 0 and not any(t == "Mise en vente refusée" for _, t in notifier.sent)
+
+    await db.update_listing(lid, post_at=now - timedelta(seconds=1))  # toujours refusée : vrai échec
+    await inv.post_due_listings()
+    assert await db.failed_listings_count(3) == 1
+    await db.close()
