@@ -56,7 +56,8 @@ def activity(name: str, stats: dict[str, int]) -> list[str]:
         lines = [f"Mises : {stats['bids_real']} réelle(s), {stats['bids_sim']} simulée(s) · "
                  f"collection {stats['bids_collection']}",
                  f"Gagnées : {stats['won']} position(s), {stats['won_collection']} carte(s) de collection · "
-                 f"{stats['held']} position(s) détenue(s)"]
+                 f"{stats['held']} position(s) détenue(s)" +
+                 (f" (dont {stats['held_real']} réelle(s))" if stats["held_real"] != stats["held"] else "")]
         return lines
     if name == "inventory":
         lines = [f"Mises en vente : {stats['posted']} · vendues {stats['sold']} ({stats['sold_wb']} WB) · "
@@ -82,9 +83,14 @@ def anomalies(ctx: Context, stats: dict[str, int], pending: dict[str, int]) -> l
     found = []
     s = ctx.settings
     if s.enable_sniper:
-        open_positions = stats["held"] + pending["positions"]
+        # Comme le plafond du sniper : en réel, seules les positions réelles comptent. Les positions simulées
+        # d'avant le passage en réel déclenchaient « 11 positions ouvertes, plafond 5 » au récap de 16 h le 16/10.
+        live = s.is_live("place_bid")
+        open_positions = (stats["held_real"] + pending["real_positions"]) if live else \
+            (stats["held"] + pending["positions"])
         if open_positions > s.portfolio_max_positions:
-            found.append(f"sniper : {open_positions} positions ouvertes, plafond {s.portfolio_max_positions}")
+            found.append(f"sniper : {open_positions} positions {'réelles ' if live else ''}ouvertes, "
+                         f"plafond {s.portfolio_max_positions}")
         if pending["positions"] > 20:
             found.append(f"sniper : {pending['positions']} mises en attente de relecture")
         if not stats["observed"]:

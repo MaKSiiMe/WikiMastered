@@ -10,7 +10,7 @@ import pytest
 
 from src.config import Settings
 from src.core.database import Database
-from src.recap import build_recap, next_recap
+from src.recap import anomalies, build_recap, next_recap
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -85,3 +85,32 @@ def test_inventory_lines_say_what_unsold_means():
     assert activity("inventory", stats) == [
         "Mises en vente : 0 · vendues 0 (0 WB) · sans acheteur 1",
         "Reventes simulées : 5 vendue(s), 8 vente(s) sans acheteur (remise en vente ou carte gardée)"]
+
+
+@pytest.mark.asyncio
+async def test_recap_live_counts_only_real_positions_against_the_cap(tmp_path):
+    """Le 16/10 à 16 h : « 11 positions ouvertes, plafond 5 » alors que 6 étaient simulées (d'avant le réel)."""
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+
+    async def hold(i, dry_run):
+        await db.record_bid(auction_id=f"a{i}", card_id="c", title="t", rarity="L", is_shiny=False, amount=100,
+                            reference_price=300, reason="revente ~300 WB", night=False, dry_run=dry_run,
+                            status="sim_won" if dry_run else "won", end_at=now)
+
+    for i in range(6):
+        await hold(i, True)
+    for i in range(6, 9):
+        await hold(i, False)
+    live = SimpleNamespace(settings=Settings(_env_file=None, dry_run=False, portfolio_max_positions=5), db=db,
+                           client=SimpleNamespace(session_ok=True))
+    stats = await db.recap_stats(now - timedelta(hours=4))
+    pending = await db.pending_bids()
+    assert stats["held"] == 9 and stats["held_real"] == 3
+    assert not any("positions" in p for p in anomalies(live, stats, pending))
+    for i in range(9, 12):
+        await hold(i, False)
+    stats = await db.recap_stats(now - timedelta(hours=4))
+    assert "sniper : 6 positions réelles ouvertes, plafond 5" in anomalies(live, stats, pending)
+    await db.close()

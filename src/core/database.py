@@ -621,6 +621,7 @@ class Database:
             "won_collection": await one("SELECT COUNT(*) FROM bids WHERE settled_at >= ? "
                                         "AND status IN ('won', 'sim_won') AND reason LIKE 'collection%'"),
             "held": await one(f"SELECT COUNT(*) FROM bids WHERE {HELD} AND {position}", ()),
+            "held_real": await one(f"SELECT COUNT(*) FROM bids WHERE {HELD} AND {position} AND dry_run = 0", ()),
             "posted": await one("SELECT COUNT(*) FROM listings WHERE posted_at >= ? AND status <> 'simulated' "
                                 "AND dry_run = 0"),
             "sold": await one("SELECT COUNT(*) FROM listings WHERE settled_at >= ? AND status = 'sold'"),
