@@ -317,3 +317,29 @@ async def test_relist_waits_for_the_unsold_card_to_come_back(tmp_path):
     await inv.post_due_listings()
     assert await db.failed_listings_count(3) == 1
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_report_separates_rejected_bids_collection_and_simulated_positions(tmp_path):
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+
+    async def bid(aid, status, amount, reason="revente ~500 WB", dry_run=False):
+        await db.record_bid(auction_id=aid, card_id=aid, title=aid, rarity="L", is_shiny=False, amount=amount,
+                            reference_price=500, reason=reason, night=False, dry_run=dry_run, status=status, end_at=now)
+
+    await bid("p", "placed", 300)
+    await bid("r1", "rejected", 200)
+    await bid("r2", "rejected", 250)
+    await bid("w", "won", 270)
+    await bid("c", "won", 15, reason="collection : carte manquante ≤ 20")
+    await db._exec("UPDATE bids SET closed = 1 WHERE auction_id = 'c'")  # gardée, comme le fait le sniper
+    await bid("s", "sim_won", 600, dry_run=True)
+    report = await db.report(now - timedelta(hours=1))
+    assert (report["bids_placed"], report["bids_rejected"], report["bids_simulated"]) == (3, 2, 1)
+    assert (report["auctions_won"], report["spent_won"]) == (1, 270)
+    assert (report["won_collection"], report["spent_collection"]) == (1, 15)
+    assert (report["positions_held"], report["capital_in_positions"]) == (1, 270)
+    assert (report["positions_held_sim"], report["capital_simulated"]) == (1, 600)
+    await db.close()
