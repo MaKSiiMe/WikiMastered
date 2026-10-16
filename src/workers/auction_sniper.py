@@ -789,7 +789,9 @@ class AuctionSniper(Worker):
                 return position_cap(self.settings, None, 0)
             self._sale_slots = (now, maximum, selling)
         _, maximum, selling = self._sale_slots
-        manual_sales = max(0, selling - await self.db.posted_listings_count())
+        # Compteur absent de la réponse (le 16/10, site surchargé : TypeError à chaque passage pendant 5 min) :
+        # pas de vente manuelle déduite, comme l'inventaire qui compte alors les ventes du bot.
+        manual_sales = 0 if selling is None else max(0, selling - await self.db.posted_listings_count())
         return position_cap(self.settings, maximum, manual_sales)
 
     def _flush_digest(self, now: datetime) -> None:

@@ -11,7 +11,7 @@ from src.core.api import WikiMastersAPI
 from src.core.database import Database
 from src.core.pricing import PriceService
 from src.core.models import Auction
-from src.workers.auction_sniper import AuctionSniper, Target
+from src.workers.auction_sniper import AuctionSniper, Target, position_cap
 from src.workers.base import Context
 from src.workers.collection import progress_lines
 from tests.test_integration import make_client, seed_observed
@@ -278,4 +278,14 @@ async def test_shadow_sniper_simulates_what_the_live_one_skips(tmp_path):
     assert (await db.last_bid("dear"))["status"] == "simulated"
     assert sniper._outcomes == {"cheap": "misée", "dear": "simulée (sniper de test)"}
     assert ("INFO", "Enchère placée") in notifier.sent and ("INFO", "Enchère simulée") not in notifier.sent
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_null_selling_count_does_not_crash_the_sniper(tmp_path):
+    """Le 16/10 (site surchargé) : sellingCount absent, `None - int` faisait planter chaque passage pendant 5 min."""
+    sniper, db, _ = await start(tmp_path, {}, [])
+    sniper._sale_slots = (datetime.now(timezone.utc), 5, None)
+    cap, room = await sniper._sale_capacity(datetime.now(timezone.utc))
+    assert (cap, room) == position_cap(sniper.settings, 5, 0)
     await db.close()
