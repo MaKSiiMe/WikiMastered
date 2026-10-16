@@ -57,6 +57,13 @@ class RateLimited(Exception):
     pass
 
 
+class Halted(RuntimeError):
+    """Arrêt d'urgence (sanction du site) : plus aucune requête tant que data/HALT existe."""
+
+
+HALT_FILE = "HALT"  # dans DATA_DIR ; sa présence garde le bot à l'arrêt, même après un redémarrage
+
+
 class UncertainMutation(Exception):
     """L'écriture a peut-être abouti côté serveur : ne pas la rejouer, vérifier à la main."""
 
@@ -247,6 +254,10 @@ class WikiMastersClient:
         self._route_forbidden: dict[str, float] = {}
         self._session_ok = asyncio.Event()
         self._session_ok.set()
+        self._never = asyncio.Event()  # jamais posé : les workers d'un bot arrêté attendent ici
+        halt_file = settings.data_dir / HALT_FILE
+        self.halted: str | None = (halt_file.read_text(encoding="utf-8").strip() or "arrêt demandé") \
+            if halt_file.exists() else None
         self._probe_task: asyncio.Task[None] | None = None
         self._persisted_cookie = ""
         self._refresh_lock = asyncio.Lock()
@@ -384,6 +395,8 @@ class WikiMastersClient:
 
     async def _maybe_refresh(self) -> None:
         """Renouvelle la session avant l'expiration du jeton d'accès (comme le fait le navigateur)."""
+        if self.halted:
+            raise Halted(f"bot arrêté ({self.halted}) : supprime data/{HALT_FILE} pour reprendre")
         if not self.can_refresh:
             return
         session = self.auth_session()
@@ -479,6 +492,8 @@ class WikiMastersClient:
 
     # ------------------------------------------------------------ espacement
     async def _acquire_slot(self, urgent: bool = False) -> None:
+        if self.halted:
+            raise Halted(f"bot arrêté ({self.halted}) : supprime data/{HALT_FILE} pour reprendre")
         """Un créneau toutes les HTTP_MIN_SPACING_SECONDS, tous workers confondus. Une requête urgente passe
         devant celles qui attendent : le 15/10 au soir, la relecture et la mise du sniper attendaient derrière
         les autres workers et partaient à 0-8 s de la fin (mise qui prolonge l'enchère, ou cible manquée)."""
@@ -658,7 +673,24 @@ class WikiMastersClient:
                 self.notifier.success("Session rétablie", "Les workers reprennent.")
 
     async def wait_session(self) -> None:
+        if self.halted:
+            await self._never.wait()  # arrêt d'urgence : les workers ne repartent pas
         await self._session_ok.wait()
+
+    def halt(self, reason: str) -> None:
+        """Arrêt d'urgence : plus aucune requête au site, même après un redémarrage, tant que data/HALT existe."""
+        if self.halted:
+            return
+        self.halted = reason
+        try:
+            (self.settings.data_dir / HALT_FILE).write_text(reason + "\n", encoding="utf-8")
+        except OSError:
+            log.exception("data/%s non écrit : l'arrêt ne survivra pas à un redémarrage", HALT_FILE)
+        log.critical("ARRÊT D'URGENCE : %s", reason)
+        self.notifier.critical(
+            "Bot arrêté : sanction du site",
+            f"{reason}\nPlus aucune requête au site, même après un redémarrage. Regarde ton compte sur le site. "
+            f"Pour reprendre : `rm data/{HALT_FILE}` dans la console du conteneur, puis redémarre la stack.")
 
     @property
     def session_ok(self) -> bool:

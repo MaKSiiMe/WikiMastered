@@ -29,6 +29,7 @@ BLOCKS: list[tuple[str, tuple[str, ...]]] = [
     (Topic.COLLECTION.value, ("collection",)),
     (Topic.TRENDS.value, ("trends", "gtrends")),
     (Topic.ACHIEVEMENTS.value, ("succes",)),
+    ("🛡️ Garde", ("garde",)),
 ]
 
 
@@ -108,6 +109,8 @@ async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
     pending = await ctx.db.pending_bids()
     by_name = {w.name: w for w in workers}
     problems = anomalies(ctx, stats, pending)
+    if getattr(ctx.client, "halted", None):
+        problems.append(f"bot arrêté (sanction) : {ctx.client.halted} ; `rm data/HALT` pour reprendre")
     if not ctx.client.session_ok:
         problems.append("session en pause : les workers attendent un nouveau cookie")
     sections = []
