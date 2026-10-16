@@ -42,6 +42,7 @@ Il parle directement aux routes JSON du site, sans navigateur, et rend compte su
 | Succès réclamés chaque soir à 22:50 | Message « Succès réclamés », ou `data/inspect/writes/claim_achievement-1.json` (routes pas encore vérifiées) |
 | Cotes protégées (ventes aberrantes, factices, sans concurrence) | Rien à voir : elles rendent seulement les estimations plus prudentes |
 | Suivi des vérifications humaines | `python -m src.main packs` après quelques jours |
+| Meilleure heure de fin pour revendre | `python -m src.main hours` (ventes observées par heure de fin, UR et L ; `--rarity` pour d'autres) |
 | Étiquette « date » posée sur les jours obtenus | Message « Collection : étiquettes ajoutées » au prochain jour gagné |
 
 **Simulé, en attente de ta décision :** la revente du sniper (UR et L). Le bilan du soir contient un bloc « Validation de la simulation » ; passer en réel = retirer `sniper` de `SIMULATE`.

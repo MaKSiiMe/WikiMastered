@@ -9,7 +9,7 @@ import pytest
 from src.config import Settings
 from src.core.database import Database
 from src.core.models import Card, OwnedCard
-from src.main import gif_text
+from src.main import gif_text, hours_text
 from src.workers.inventory_manager import group_by_card, select_for_discard
 
 # Relevé du 16/10 : « Royaumes francs » (UR), seule carte GIF signalée sur le marché.
@@ -56,3 +56,26 @@ def test_gif_duplicates_are_never_discarded():
                             copy("b1", "avatar", AVATAR), copy("b2", "avatar", AVATAR)])
     chosen = select_for_discard(groups, {}, set(), s.model_copy(update={"discard_unknown_price_is_worthless": True}))
     assert [c.owned.id for c in chosen] == ["b2"]  # le doublon GIF est gardé
+
+
+@pytest.mark.asyncio
+async def test_hours_groups_sales_by_paris_end_hour(tmp_path):
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    day = datetime(2026, 10, 15, tzinfo=timezone.utc)  # Paris = UTC+2 : 10:00 UTC -> 12h, 21:00 UTC -> 23h
+
+    def seen(aid, hour, price, base, rarity="L", shiny=0):
+        end = day + timedelta(hours=hour)
+        return {"auction_id": aid, "card_id": aid, "title": aid, "norm_title": aid, "rarity": rarity, "is_shiny": shiny,
+                "current_bid": price, "base_amount": base, "min_bid": price + 1, "end_at": end.isoformat(),
+                "seen_at": (end - timedelta(seconds=5)).isoformat(), "is_gif": 0}
+
+    await db.upsert_auctions([seen("a", 10, 150, 100), seen("b", 10, 100, 100), seen("c", 21, 300, 100),
+                              seen("d", 10, 5, 5, rarity="C"), seen("e", 10, 9, 5, shiny=1)])
+    await db.harvest_ended_auctions(datetime.now(timezone.utc))
+    text = hours_text(await db.hour_stats(["L"]), ["L"])
+    assert "L : 3 ventes" in text
+    rows = {line.split()[0]: line.split() for line in text.splitlines() if line.strip()[:2].isdigit()}
+    assert rows["12h"][1:5] == ["2", "125", "×1.25", "50"] and rows["23h"][1:5] == ["1", "300", "×3.00", "0"]
+    assert "Aucune vente observée" in hours_text(await db.hour_stats(["UR"]), ["UR"])
+    await db.close()
