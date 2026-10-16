@@ -34,6 +34,8 @@ from src.core.timeutils import local_dt, now_local, random_in_window
 from src.workers.base import Context, Worker
 
 INVENTORY_PRICE_MAX_AGE = timedelta(days=3)  # la cote d'un doublon bouge peu
+# Refus du site : « Cette carte est en favori : retirez-la des favoris pour la mettre en vente » (relevé du 16/10).
+FAVORITE_HINT = "favori"
 POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la carte
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une revente simulée
@@ -208,6 +210,10 @@ class InventoryManager(Worker):
         # (lire la collection coûte ~175 requêtes), consommés à chaque place libérée.
         self._sale_queue: list[SaleCandidate] = []
         self._queue_at: datetime | None = None
+        self._starred_warned: set[int] = set()  # positions dont l'exemplaire est en favori (prévenu une fois)
+        reopened = await self.db.reopen_favorite_positions()
+        if reopened:
+            self.log.info("%d revente(s) abandonnée(s) pour une carte en favori : reprise(s)", reopened)
         if self.settings.position_post_now:
             # Programmées avec l'ancienne règle (lendemain 11 h-12 h) : publiées dès maintenant. Une seule fois, au
             # démarrage : une revente reportée faute de place de vente ne doit pas être avancée en boucle.
@@ -383,13 +389,23 @@ class InventoryManager(Worker):
                                  price=price, reason=f"position (achetée {row['amount']})", bid_id=row["id"])
 
     async def _find_copy(self, row) -> str | None:
-        """Exemplaire acheté : le plus récent de cette carte dans la collection."""
+        """Exemplaire acheté : le plus récent de cette carte dans la collection, jamais un favori (le site refuse
+        de le vendre : le 16/10, Place publique refusée 3 fois « en favori », puis revente abandonnée)."""
         page = await self.api.collection_page(0, sort="rarity", q=row["title"])
         taken = await self.db.scheduled_owned_ids()
         copies = [r for r in page.rows() if r.catalog_id == row["card_id"] and r.id not in taken]
         if not copies:
             self.log.warning("position %s : exemplaire introuvable dans la collection (réessai)", row["title"])
             return None
+        if all(c.starred for c in copies):
+            if row["id"] not in self._starred_warned:
+                self._starred_warned.add(row["id"])
+                self.notifier.warning("Revente en attente : carte en favori",
+                                      f"{row['title']} ({row['rarity']}) est en favori, le site refuse de la vendre. "
+                                      "Retire l'étoile pour que le bot la revende (il réessaie toutes les 10 min).")
+            self.log.debug("position %s : seul exemplaire en favori (réessai)", row["title"])
+            return None
+        copies = [c for c in copies if not c.starred]
         copies.sort(key=lambda r: r.obtained_at or _EPOCH, reverse=True)
         return copies[0].id
 
@@ -438,7 +454,9 @@ class InventoryManager(Worker):
             else:
                 payload = result.payload if isinstance(result.payload, dict) else {}
                 error = payload.get("error") or payload.get("message") or f"HTTP {result.status}"
-                await self.db.update_listing(row["id"], status="failed", error=str(error)[:300])
+                # Carte en favori : pas un échec (ne mène pas à l'abandon) ; l'exemplaire est recherché de nouveau.
+                status = "favorite" if FAVORITE_HINT in str(error).lower() else "failed"
+                await self.db.update_listing(row["id"], status=status, error=str(error)[:300])
                 self.notifier.warning("Mise en vente refusée", f"{label} : {error}")
 
     async def _listing_auction_id(self, payload, card_id: str) -> str | None:
