@@ -322,7 +322,16 @@ async def test_listings_respect_concurrent_limit(tmp_path):
     assert len(posted) == 1  # une seule place libre (4/5)
     rows = await db._all("SELECT status, post_at FROM listings ORDER BY id")
     assert rows[0]["status"] == "posted" and rows[1]["status"] == "scheduled"
-    assert datetime.fromisoformat(rows[1]["post_at"]) > now + timedelta(hours=12)  # reportée
+    assert datetime.fromisoformat(rows[1]["post_at"]) > now + timedelta(hours=12)  # doublon : reporté au lendemain
+
+    # Revente d'une position (16/10, Place publique reportée de 24 h) : nouvel essai dès SELL_CHECK_MINUTES.
+    await db.schedule_listing(owned_card_id="p1", card_id="c", title="Place publique", rarity="L", base_amount=356,
+                              duration_minutes=720, post_at=now - timedelta(minutes=1),
+                              target_end=now + timedelta(hours=12), reason="position", bid_id=7)
+    await inv.post_due_listings()
+    row = await db._one("SELECT status, post_at FROM listings WHERE title = 'Place publique'")
+    retry = datetime.fromisoformat(row["post_at"])
+    assert row["status"] == "scheduled" and now < retry <= now + timedelta(minutes=11)
     await db.close()
 
 

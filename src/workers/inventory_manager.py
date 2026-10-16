@@ -480,7 +480,17 @@ class InventoryManager(Worker):
                 self.notifier.info("Mise en vente vérifiée", f"{label} : pas créée.{again}")
 
     async def _postpone(self, row) -> None:
-        """Plus de place de vente : même horaire, le jour suivant."""
+        """Plus de place de vente. Revente d'une position publiée tout de suite (POSITION_POST_NOW) : nouvel essai
+        dans SELL_CHECK_MINUTES, dès qu'une place se libère (le 16/10, Place publique était reportée de 24 h).
+        Sinon : même horaire, le jour suivant."""
+        s = self.settings
+        if row["bid_id"] is not None and s.position_post_now:
+            retry = utcnow() + timedelta(minutes=s.sell_check_minutes)
+            await self.db.update_listing(row["id"], post_at=retry,
+                                         target_end=retry + timedelta(minutes=row["duration_minutes"] or 0))
+            self.log.debug("ventes pleines : %s attend une place (nouvel essai à %s)", row["title"],
+                           f"{retry.astimezone(now_local().tzinfo):%H:%M}")
+            return
         post_at, minutes, target = self._plan(now_local() + timedelta(days=1), position=row["bid_id"] is not None,
                                               at_peak=True)
         await self.db.update_listing(row["id"], post_at=max(post_at, now_local()), duration_minutes=minutes,
