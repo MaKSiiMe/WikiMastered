@@ -86,18 +86,26 @@ async def test_outbid_then_too_expensive_is_logged_and_not_rechecked(tmp_path, c
 async def test_antibot_refusal_alerts_once_until_a_bid_passes(tmp_path):
     market = {"a": sale("a", "14 octobre", 15)}
     refusal = (400, {"error": "Vérification anti-bot requise."})
-    sniper, db, notifier = await start(tmp_path, market, [refusal, refusal,
-                                                          (200, {"current_bid": 10, "bidder_balance": 2990})])
+    replies = [refusal, refusal, (200, {"current_bid": 10, "bidder_balance": 2990})]
+    sniper, db, notifier = await start(tmp_path, market, replies)
     await sniper.step()
     assert ("CRITICAL", "Sniper : vérification anti-bot demandée") in notifier.sent
     assert sniper.blocked and "vérification anti-bot" in sniper.blocked
     assert "mise refusée : vérification anti-bot 1" in sniper.recap()[1]
 
+    # Le 16/10 : ~45 mises refusées en 1 h 30. Tant que la vérification attend, pas de mise avant ANTIBOT_RETRY.
     market["b"] = sale("b", "15 octobre", 15)
+    await sniper.step()
+    assert len(replies) == 2 and "pas tentée : vérification anti-bot en attente 1" in sniper.recap()[1]
+
+    sniper._antibot_retry_at = datetime.now(timezone.utc)
+    market["c"] = sale("c", "15 octobre", 15)
     await sniper.step()  # encore refusée : pas de deuxième alerte
+    assert len(replies) == 1
     assert notifier.sent.count(("CRITICAL", "Sniper : vérification anti-bot demandée")) == 1
 
-    market["c"] = sale("c", "15 octobre", 15)
+    sniper._antibot_retry_at = datetime.now(timezone.utc)
+    market["d"] = sale("d", "15 octobre", 15)
     await sniper.step()
     assert ("SUCCESS", "Sniper : vérification levée") in notifier.sent and sniper.blocked is None
     await db.close()
