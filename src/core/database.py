@@ -774,7 +774,7 @@ class Database:
         s = iso(since)
         pulls = await self._all("SELECT rarity, is_shiny FROM pulls WHERE opened_at >= ?", (s,))
         bids = await self._all(
-            "SELECT status, amount, dry_run FROM bids b WHERE placed_at >= ? AND id = "
+            "SELECT status, amount, dry_run, reason FROM bids b WHERE placed_at >= ? AND id = "
             "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)", (s,)
         )
         listings = await self._all("SELECT status, base_amount FROM listings WHERE created_at >= ?", (s,))
@@ -782,6 +782,8 @@ class Database:
         closed = await self._all("SELECT dry_run, amount, sale_price FROM bids WHERE closed = 1 AND sold_at >= ? "
                                  "AND sale_price IS NOT NULL", (s,))
         held = await self.positions_summary()
+        won = [b for b in bids if b["status"] == "won"]
+        _collection = lambda b: (b["reason"] or "").startswith("collection")  # noqa: E731
         dup = await self._one("SELECT COUNT(*) AS n, COALESCE(SUM(sale_price), 0) AS wb FROM listings "
                               "WHERE bid_id IS NULL AND status = 'sold' AND settled_at >= ?", (s,))
         by_rarity: dict[str, int] = {}
@@ -793,10 +795,15 @@ class Database:
             "cards_pulled": len(pulls),
             "pulls_by_rarity": by_rarity,
             "shiny_pulled": sum(p["is_shiny"] for p in pulls),
-            "bids_placed": sum(1 for b in bids if not b["dry_run"]),
+            # Bilan du 16/10 : « 585 mise(s) placée(s) » comptait les refus (vérification, mise trop basse), et
+            # « 25 gagnée(s) » mêlait positions et cartes de collection.
+            "bids_placed": sum(1 for b in bids if not b["dry_run"] and b["status"] != "rejected"),
+            "bids_rejected": sum(1 for b in bids if not b["dry_run"] and b["status"] == "rejected"),
             "bids_simulated": sum(1 for b in bids if b["dry_run"]),
-            "auctions_won": sum(1 for b in bids if b["status"] == "won"),
-            "spent_won": sum(b["amount"] for b in bids if b["status"] == "won"),
+            "auctions_won": sum(1 for b in won if not _collection(b)),
+            "spent_won": sum(b["amount"] for b in won if not _collection(b)),
+            "won_collection": sum(1 for b in won if _collection(b)),
+            "spent_collection": sum(b["amount"] for b in won if _collection(b)),
             "listings_posted": sum(1 for x in listings if x["status"] == "posted"),
             "doublons_vendus": dup["n"] if dup else 0,
             "doublons_recette": dup["wb"] if dup else 0,
@@ -805,6 +812,9 @@ class Database:
             "positions_sold": sum(1 for c in closed if not c["dry_run"]),
             "profit": sum(c["sale_price"] - c["amount"] for c in closed if not c["dry_run"]),
             "profit_simulated": sum(c["sale_price"] - c["amount"] for c in closed if c["dry_run"]),
-            "positions_held": held["count"],
-            "capital_in_positions": held["real_cost"] + held["sim_cost"],
+            # Positions réelles seulement : les simulées (sniper de test) à part, sans WB réels immobilisés.
+            "positions_held": held["real_count"],
+            "capital_in_positions": held["real_cost"],
+            "positions_held_sim": held["count"] - held["real_count"],
+            "capital_simulated": held["sim_cost"],
         }

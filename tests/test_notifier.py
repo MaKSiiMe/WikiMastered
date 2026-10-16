@@ -74,9 +74,18 @@ def test_report_sections():
     assert "Bénéfice simulé : +310 WB" in blocks["Positions"]
     assert report_sections({**stats, "balance": "?"}, {}, live_bids=True)[0] == "Solde : inconnu"
     # Positions simulées, collection réelle (SIMULATE=sniper) : les deux comptes, les cartes gagnées sont réelles.
-    mixed = {**stats, "bids_placed": 14, "bids_simulated": 76, "auctions_won": 12, "spent_won": 164}
+    mixed = {**stats, "bids_placed": 14, "bids_simulated": 76, "won_collection": 12, "spent_collection": 164}
     assert dict(report_sections(mixed, {}, live_bids=False)[1])["Sniper"] == \
-        "14 mise(s) placée(s), 76 mise(s) simulée(s)\n12 gagnée(s) pour 164 WB"
+        "14 mise(s) placée(s), 76 mise(s) simulée(s)\nGagnées : 12 carte(s) de collection pour 164 WB"
+    # Bilan du 16/10 : refus comptés comme placées, positions et collection mêlées, positions simulées comptées.
+    live = {**stats, "bids_placed": 120, "bids_rejected": 465, "bids_simulated": 19, "auctions_won": 2,
+            "spent_won": 474, "won_collection": 23, "spent_collection": 1091, "positions_held": 5,
+            "capital_in_positions": 1338, "positions_held_sim": 5, "capital_simulated": 1273}
+    blocks = dict(report_sections(live, {}, live_bids=True)[1])
+    assert blocks["Sniper"] == ("120 mise(s) placée(s), 465 refusée(s) par le site, 19 mise(s) simulée(s)\n"
+                                "Gagnées : 2 position(s) pour 474 WB, 23 carte(s) de collection pour 1091 WB")
+    assert blocks["Positions"].startswith("5 réelle(s) détenue(s), 1338 WB immobilisés\n"
+                                          "5 simulée(s) (sniper de test, 1273 WB fictifs)")
     assert dict(report_sections({**stats, "bids_simulated": 0}, {}, live_bids=True)[1])["Sniper"] == \
         "0 mise(s) placée(s)"
 

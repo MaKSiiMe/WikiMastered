@@ -125,17 +125,25 @@ def report_sections(stats: dict, pulls: dict[str, int], *, live_bids: bool) -> t
         packs += f"\n✨ {stats['shiny_pulled']} shiny"
     # Positions simulées et mises de collection réelles (SIMULATE=sniper) : les deux comptes, sinon les cartes
     # gagnées (toujours réelles) semblaient venir des mises simulées.
+    rejected = stats.get("bids_rejected", 0)
     counts = [f"{stats['bids_placed']} mise(s) placée(s)" if live_bids or stats["bids_placed"] else "",
+              f"{rejected} refusée(s) par le site" if rejected else "",
               f"{stats['bids_simulated']} mise(s) simulée(s)" if not live_bids or stats["bids_simulated"] else ""]
     bids = ", ".join(c for c in counts if c)
-    if stats["auctions_won"]:
-        bids += f"\n{stats['auctions_won']} gagnée(s) pour {stats['spent_won']} WB"
+    won = [f"{stats['auctions_won']} position(s) pour {stats['spent_won']} WB" if stats["auctions_won"] else "",
+           f"{stats.get('won_collection', 0)} carte(s) de collection pour {stats.get('spent_collection', 0)} WB"
+           if stats.get("won_collection") else ""]
+    if any(won):
+        bids += "\nGagnées : " + ", ".join(w for w in won if w)
     sales = [f"{stats['doublons_vendus']} doublon(s) vendu(s) pour {stats['doublons_recette']} WB"]
     if stats["listings_posted"] or stats["listings_scheduled"]:
         sales.append(f"{stats['listings_posted']} mise(s) en vente, {stats['listings_scheduled']} programmée(s)")
     if stats["discarded"]:
         sales.append(f"{stats['discarded']} carte(s) défaussée(s)")
-    positions = [f"{stats['positions_held']} détenue(s), {stats['capital_in_positions']} WB immobilisés"]
+    positions = [f"{stats['positions_held']} réelle(s) détenue(s), {stats['capital_in_positions']} WB immobilisés"]
+    if stats.get("positions_held_sim"):
+        positions.append(f"{stats['positions_held_sim']} simulée(s) (sniper de test, "
+                         f"{stats.get('capital_simulated', 0)} WB fictifs)")
     if stats["positions_sold"]:
         positions.append(f"{stats['positions_sold']} revendue(s), bénéfice {stats['profit']:+d} WB")
     if stats["profit_simulated"]:
