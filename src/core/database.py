@@ -459,6 +459,17 @@ class Database:
                               (iso(now),))
         return int(row["n"]) if row else 0
 
+    async def reopen_favorite_positions(self) -> int:
+        """Positions closes faute de revente parce que la carte était en favori (16/10 : Place publique) : rouvertes,
+        et leurs refus « en favori » ne comptent plus comme des échecs. Renvoie leur nombre."""
+        favorite = "status = 'failed' AND error LIKE '%favori%'"
+        rows = await self._all(f"SELECT id FROM bids WHERE closed = 1 AND sale_price IS NULL AND id IN "
+                               f"(SELECT bid_id FROM listings WHERE {favorite})")
+        for r in rows:
+            await self.update_bid(r["id"], closed=0, sold_at=None)
+        await self._exec(f"UPDATE listings SET status = 'favorite' WHERE {favorite}")
+        return len(rows)
+
     async def advance_position_listings(self, now: datetime) -> int:
         """Reventes de positions programmées plus tard : avancées à maintenant (même durée). Renvoie leur nombre."""
         rows = await self._all("SELECT id, duration_minutes FROM listings WHERE status = 'scheduled' "

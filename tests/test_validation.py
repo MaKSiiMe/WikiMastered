@@ -217,3 +217,42 @@ async def test_position_posted_now_and_old_schedules_advanced(tmp_path):
     post_at, minutes, end = inv._plan(now, position=True, at_peak=True)
     assert post_at == now and minutes == 720 and end == now + timedelta(hours=12)
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_favorite_copy_is_never_listed_and_abandoned_resale_resumes(tmp_path):
+    """16/10 : Place publique refusée 3 fois « en favori », revente abandonnée et 270 WB immobilisés."""
+    rows = [{"id": "fav", "card_id": "pp", "starred": True, "obtained_at": "2026-10-16T16:04:54+00:00",
+             "card": {"id": "pp", "wikipedia_title": "Place publique", "rarity": "L"}}]
+
+    def handler(request):
+        return httpx.Response(200, json={"collection": rows})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    bid = await db.record_bid(auction_id="a", card_id="pp", title="Place publique", rarity="L", is_shiny=False,
+                              amount=270, reference_price=442, reason="revente ~442 WB", night=False, dry_run=False,
+                              status="won", end_at=now)
+    for i in range(3):
+        lid = await db.schedule_listing(owned_card_id=f"fav{i}", card_id="pp", title="Place publique", rarity="L",
+                                        base_amount=356, duration_minutes=720, post_at=now, target_end=now,
+                                        reason="position", bid_id=bid)
+        await db.update_listing(lid, status="failed", error="Cette carte est en favori : retirez-la des favoris "
+                                                            "pour la mettre en vente")
+    await db.close_position(bid, None)  # « Revente abandonnée »
+
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await inv.setup()  # reprise
+    pending = await db.positions_to_list()
+    assert [r["id"] for r in pending] == [bid] and await db.failed_listings_count(bid) == 0
+
+    # Seul exemplaire en favori : pas de mise en vente, un seul avertissement.
+    assert await inv._find_copy(pending[0]) is None and await inv._find_copy(pending[0]) is None
+    assert notifier.sent.count(("WARNING", "Revente en attente : carte en favori")) == 1
+    # Étoile retirée sur un autre exemplaire : c'est lui qui est vendu.
+    rows.append({**rows[0], "id": "free", "starred": False})
+    assert await inv._find_copy(pending[0]) == "free"
+    await db.close()
