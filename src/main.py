@@ -45,6 +45,7 @@ from src.workers.google_trends import GoogleTrends
 from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
 from src.workers.pack_opener import PackOpener
+from src.workers.profile_guard import ProfileGuard
 from src.workers.trend_report import day_line, trends_text
 from src.workers.wiki_trends import WikiTrends
 
@@ -343,6 +344,14 @@ async def run_bot(settings: Settings) -> None:
             workers.append(CollectionWorker(ctx))
         if settings.enable_achievements:
             workers.append(AchievementsWorker(ctx))
+        if settings.enable_profile_guard and settings.supabase_anon_key:
+            workers.insert(0, ProfileGuard(ctx))  # en premier : une sanction arrête le bot avant les autres
+        elif settings.enable_profile_guard:
+            ctx.notifier.warning("Garde des sanctions inactive", "SUPABASE_ANON_KEY manquante : le profil ne peut "
+                                 "pas être lu, une sanction du site n'arrêterait pas le bot.")
+        if ctx.client.halted:
+            ctx.notifier.critical("Bot à l'arrêt", f"{ctx.client.halted}\nAucune requête ne part. Pour reprendre : "
+                                  "`rm data/HALT` dans la console du conteneur, puis redémarre la stack.")
 
         mode = settings.mode_label
         names = ", ".join(w.name for w in workers) or "aucun"

@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     enable_wiki_trends: bool = True
     enable_google_trends: bool = True
     enable_achievements: bool = True
+    # Garde : profil relu toutes les N min ; une sanction du site arrête tout le bot (data/HALT).
+    enable_profile_guard: bool = True
+    profile_check_minutes: float = 15.0
     achievements_time: time = time(22, 50)  # succès réclamés une fois par jour, avant le bilan de 23:00
 
     # --- Module B : paquets -----------------------------------------------------

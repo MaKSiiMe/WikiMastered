@@ -50,6 +50,7 @@ Il parle directement aux routes JSON du site, sans navigateur, et rend compte su
 **Ce qui demande ton intervention (alerte 🔴 sur Discord) :**
 - **Vérification humaine des paquets** : à faire toi-même dans ton navigateur, le bot ne la contourne jamais. Rien n'est perdu tant que tu la fais avant que le stock atteigne 10 paquets (~1 h 30). Un redémarrage du bot semble la déclencher.
 - **Vérification anti-bot des enchères** : les mises réelles sont refusées tant que tu ne l'as pas faite dans ton navigateur (mise à la main sur le marché, ou page Paquets si elle la demande). En attendant, le bot ne tente qu'une mise toutes les 5 min et te prévient dès qu'une mise repasse.
+- **Sanction du site** : le bot relit ton profil toutes les 15 min. Au premier avertissement de triche (`cheat_strikes`), blocage d'activité ou sanction, il s'arrête net (plus aucune requête, même après un redémarrage) et t'alerte. Pour reprendre : `rm data/HALT` dans la console du conteneur, puis redémarre la stack.
 - **Session perdue** : seulement si le renouvellement est refusé (par exemple après « Déconnexion » sur le site avec la même session). Colle un nouveau cookie dans `data/session_cookie.txt`.
 
 ## Installer
