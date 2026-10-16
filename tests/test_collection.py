@@ -254,3 +254,21 @@ def test_completion_tracks_when_each_card_was_obtained():
              "sets": {"Jours de l'année": [3, 366], "Titres": [0, 2]}}
     assert progress_lines(state, {"14 octobre": "14 octobre"}, now) == [
         "Jours de l'année : 3/366 (0,8 %)", "Titres : 0/2 (0,0 %)", "+1 en 7 jours : 14 octobre (14/10)"]
+
+
+@pytest.mark.asyncio
+async def test_profile_command_reads_the_rpc_and_hides_personal_fields(tmp_path):
+    from src.main import profile_text
+    from tests.test_session import cookie_for
+
+    def handler(request):
+        assert request.url.host.endswith("supabase.co") and request.url.path == "/rest/v1/rpc/get_my_profile"
+        assert request.method == "POST" and request.headers["authorization"] == "Bearer a1"
+        return httpx.Response(200, json={"packs_remaining": 3, "pity_counter": 7, "email": "moi@exemple.fr"})
+
+    client, _ = make_client(tmp_path, handler, supabase_anon_key="anon-key", wm_cookie=cookie_for("a1", "r1", 3600))
+    status, data = await client.supabase("POST", "rpc/get_my_profile", json_body={})
+    text = profile_text(data)
+    assert status == 200 and "pity_counter = 7" in text and "packs_remaining = 3" in text
+    assert "email = ***" in text and "exemple.fr" not in text
+    assert "Réponse inattendue" in profile_text(None)
