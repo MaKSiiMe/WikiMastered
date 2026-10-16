@@ -533,6 +533,13 @@ class Database:
             "AND rarity IS NOT NULL AND ended_at >= (SELECT COALESCE(MIN(ended_at), '') FROM observed_sales "
             "WHERE is_gif = 1)")
 
+    async def hour_stats(self, rarities: list[str]) -> list[aiosqlite.Row]:
+        """Ventes observées de ces raretés (sans shiny ni ventes suspectes) : prix, départ et heure de fin."""
+        marks = ", ".join("?" for _ in rarities)
+        return await self._all(
+            "SELECT rarity, price, base_amount, ended_at FROM observed_sales o WHERE is_shiny = 0 "
+            f"AND rarity IN ({marks}) AND NOT {SUSPECT_SALE} ORDER BY ended_at", tuple(rarities))
+
     async def observed_prices(self, card_id: str, limit: int, rarity: str | None = None,
                               shiny: bool | None = None) -> tuple[list[int], int]:
         """(prix des `limit` dernières ventes observées, plus récentes d'abord ; nombre total).

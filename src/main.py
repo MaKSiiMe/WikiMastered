@@ -9,6 +9,7 @@
     python -m src.main packs [--hours 24]       # paquets ouverts récemment
     python -m src.main collection               # collection à compléter (jours de l'année…)
     python -m src.main market [--pages 4] [--rarity UR]  # où sont les fins imminentes dans le marché
+    python -m src.main hours [--rarity UR,L]     # à quelle heure de fin les enchères se vendent le mieux
 """
 
 from __future__ import annotations
@@ -241,6 +242,40 @@ def gif_text(rows) -> str:
     return "\n".join(lines)
 
 
+HOURS_MIN_SALES = 20  # en dessous, la médiane d'une heure ne dit rien : l'heure est marquée « ? »
+
+
+def hours_text(rows, rarities: list[str]) -> str:
+    """À quelle heure de fin (Paris) les enchères se vendent-elles le mieux ? Par rareté et par heure : ventes,
+    prix médian, prix final / prix de départ, part des ventes sans surenchère."""
+    import statistics as st
+    from src.core.timeutils import PARIS
+    if not rows:
+        return "Aucune vente observée pour ces raretés."
+    ends = [datetime.fromisoformat(r["ended_at"]).astimezone(PARIS) for r in rows]
+    lines = [f"Ventes observées du {min(ends):%d/%m %H:%M} au {max(ends):%d/%m %H:%M} (shiny et ventes suspectes "
+             f"exclues), par heure de fin (Paris). Seules les enchères vendues sont vues : le volume dépend aussi de "
+             f"l'offre, pas seulement de l'affluence. « ? » : moins de {HOURS_MIN_SALES} ventes."]
+    for rarity in sorted(rarities, key=lambda r: -RARITY_RANK.get(r, -1)):
+        sales = [(r, e) for r, e in zip(rows, ends) if r["rarity"] == rarity]
+        if not sales:
+            continue
+        lines.append(f"\n{rarity} : {len(sales)} ventes")
+        lines.append("  heure   ventes   prix médian   final/départ   sans surenchère")
+        for hour in range(24):
+            here = [r for r, e in sales if e.hour == hour]
+            if not here:
+                continue
+            ratios = [r["price"] / r["base_amount"] for r in here if r["base_amount"]]
+            single = sum(1 for r in here if r["base_amount"] and r["price"] <= r["base_amount"])
+            ratio = f"×{st.median(ratios):.2f}" if ratios else "-"
+            part = f"{single * 100 // len(ratios)} %" if ratios else "-"
+            flag = " ?" if len(here) < HOURS_MIN_SALES else ""
+            lines.append(f"  {hour:02d}h    {len(here):>6}   {st.median(r['price'] for r in here):>11.0f}   "
+                         f"{ratio:>12}   {part:>15}{flag}")
+    return "\n".join(lines)
+
+
 async def heartbeat(ctx: Context) -> None:
     path = ctx.settings.data_dir / "heartbeat"
     while True:
@@ -445,6 +480,8 @@ def main(argv: list[str] | None = None) -> None:
     sim = sub.add_parser("reset-simulation", help="efface les mises et ventes simulées (sans --apply : compte)")
     sim.add_argument("--apply", action="store_true", help="efface vraiment")
     sub.add_parser("gifs", help="les cartes GIF se vendent-elles mieux ? (ventes observées, lecture seule)")
+    hr = sub.add_parser("hours", help="à quelle heure de fin les enchères se vendent-elles le mieux ? (lecture seule)")
+    hr.add_argument("--rarity", default="UR,L", help="raretés séparées par des virgules (défaut UR,L)")
     snr = sub.add_parser("sniper-report", help="toutes les enchères misées sur les N dernières heures (lecture seule)")
     snr.add_argument("--hours", type=float, default=24)
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
@@ -490,6 +527,12 @@ def main(argv: list[str] | None = None) -> None:
             async with build_context(settings) as ctx:
                 print(gif_text(await ctx.db.gif_stats()))
         asyncio.run(_gifs())
+    elif command == "hours":
+        async def _hours() -> None:
+            rarities = [r.strip().upper() for r in args.rarity.split(",") if r.strip()]
+            async with build_context(settings) as ctx:
+                print(hours_text(await ctx.db.hour_stats(rarities), rarities))
+        asyncio.run(_hours())
     elif command == "sniper-report":
         async def _sniper_report() -> None:
             async with build_context(settings) as ctx:
