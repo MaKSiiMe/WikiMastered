@@ -50,6 +50,10 @@ MARKET_LIMIT = 50
 FRESH = timedelta(seconds=3)
 # Une carte de collection manquante entre dans la fenêtre de mise d'ici N s : le sniper ne lance plus rien de lent.
 COLLECTION_GUARD_SECONDS = 10
+# Mise en tête : relue une dernière fois quand il reste au plus SNIPER_MIN_SECONDS_LEFT + N s. Une surenchère avant
+# les 10 dernières secondes ne prolonge pas l'enchère : sans cette relecture, elle gagnait (rapport du 16/10 :
+# Chris Pratt, William de Galles… parties sous notre plafond).
+LAST_LOOK_SECONDS = 10
 # Issues d'une mise acceptée (ou simulée) : la vente est relue à sa fin.
 SHADOW_PLACED = "simulée (sniper de test)"
 PLACED = ("misée", "misée (collection)", SHADOW_PLACED)
@@ -69,6 +73,7 @@ class Target:
     auction: Auction
     seen_at: datetime
     recheck: bool = False
+    last_look: bool = False  # mise en tête relue avant la fin (une fois par mise)
 
 
 @dataclass(frozen=True)
@@ -485,6 +490,10 @@ class AuctionSniper(Worker):
         low = self.settings.sniper_min_seconds_left + 1
         in_window_ = [t for t in self._targets.values() if not t.recheck and now - t.seen_at > FRESH
                       and low < t.auction.seconds_left(now) <= params.window_seconds]
+        # Nos mises en tête, relues juste avant la fin : surenchéries, elles repassent dans la fenêtre de mise.
+        in_window_ += [t for t in self._targets.values() if t.recheck and not t.last_look
+                       and t.auction.id in self._leading
+                       and low < t.auction.seconds_left(now) <= low + LAST_LOOK_SECONDS]
         if in_window_:
             return min(in_window_, key=lambda t: (not self._wanted(t.auction), t.auction.end_at))
         ended = [t for t in self._targets.values() if t.recheck and t.auction.seconds_left(now) < -3]
@@ -520,8 +529,11 @@ class AuctionSniper(Worker):
     async def _refresh_target(self, target: Target) -> None:
         aid = target.auction.id
         try:
-            # Relecture juste avant de miser : urgente. Une cible misée relue après sa fin ne l'est pas.
-            auction = await self.api.auction(aid, urgent=not target.recheck)
+            # Relecture juste avant de miser, ou d'une mise en tête juste avant la fin : urgente. Une cible misée
+            # relue après sa fin ne l'est pas.
+            last_look = target.recheck and target.auction.seconds_left() > 0
+            target.last_look = target.last_look or last_look
+            auction = await self.api.auction(aid, urgent=not target.recheck or last_look)
         except ApiError as exc:
             self.log.debug("cible %s illisible (%s) : abandonnée", target.auction.title, exc)
             self._targets.pop(aid, None)
@@ -534,9 +546,16 @@ class AuctionSniper(Worker):
         if auction.status != "active" or auction.seconds_left(now) <= 0:
             self._targets.pop(aid, None)  # terminée : le règlement (_settle) s'en charge
             return
+        me = self.api.user_id
+        if target.recheck and me and (auction.current_bidder_id or "").lower() == me:
+            self._targets[aid] = Target(auction, now, recheck=True, last_look=target.last_look)  # toujours en tête
+            return
         if target.recheck:
-            self.log.info("%s prolongée jusqu'à %s : rejouée", auction.title,
-                          f"{auction.end_at.astimezone(timeutils.PARIS):%H:%M:%S}")
+            if auction.end_at > target.auction.end_at + timedelta(seconds=5):  # prolongée (60 s par mise tardive)
+                self.log.info("%s prolongée jusqu'à %s : rejouée", auction.title,
+                              f"{auction.end_at.astimezone(timeutils.PARIS):%H:%M:%S}")
+            else:
+                self.log.info("%s surenchérie à %.0f s de la fin : rejouée", auction.title, auction.seconds_left(now))
         self._targets[aid] = Target(auction, now)
 
     async def _prefetch(self, now: datetime) -> bool:
@@ -567,10 +586,13 @@ class AuctionSniper(Worker):
         if guard is not None:
             return guard + 0.1  # réveil à l'entrée de la carte de collection dans sa fenêtre de mise
         delay = random.uniform(self.settings.sniper_poll_min_seconds, self.settings.sniper_poll_max_seconds)
+        last_look = self.settings.sniper_min_seconds_left + 1 + LAST_LOOK_SECONDS
         for t in self._targets.values():
             left = t.auction.seconds_left(now)
             if not t.recheck and left > params.window_seconds:
                 delay = min(delay, left - params.window_seconds + 0.5)
+            elif t.recheck and not t.last_look and t.auction.id in self._leading and left > last_look:
+                delay = min(delay, left - last_look + 0.5)  # réveil pour la dernière relecture
         return delay
 
     async def _play(self, auctions: list[Auction], params: SnipeParams, now: datetime) -> None:
