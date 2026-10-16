@@ -37,6 +37,11 @@ INVENTORY_PRICE_MAX_AGE = timedelta(days=3)  # la cote d'un doublon bouge peu
 # Refus du site : « Cette carte est en favori : retirez-la des favoris pour la mettre en vente » (relevé du 16/10).
 FAVORITE_HINT = "favori"
 POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la carte
+# Exemplaire d'une position pas trouvé (ou seul en favori) : nouvel essai dans N min, au lieu de relire la collection
+# à chaque passage (16/10 : 206 lectures et avertissements en 2 h pour Place publique).
+POSITION_COPY_RETRY = timedelta(minutes=10)
+# Introuvable N fois de suite (~2 h) : la carte a quitté la collection (vendue ou échangée à la main ?).
+POSITION_MAX_COPY_MISSES = 12
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une revente simulée
 
@@ -203,6 +208,11 @@ class InventoryManager(Worker):
     name = "inventory"
     topic = Topic.SALES
 
+    def __init__(self, ctx: Context):
+        super().__init__(ctx)
+        self._starred_warned: set[int] = set()  # positions dont l'exemplaire est en favori (prévenu une fois)
+        self._copy_retry: dict[int, tuple[int, datetime]] = {}  # position -> (essais manqués, prochain essai)
+
     async def setup(self) -> None:
         self._next_scan = utcnow() + timedelta(minutes=2)
         self._next_sale_check = utcnow() + timedelta(minutes=2)
@@ -210,7 +220,6 @@ class InventoryManager(Worker):
         # (lire la collection coûte ~175 requêtes), consommés à chaque place libérée.
         self._sale_queue: list[SaleCandidate] = []
         self._queue_at: datetime | None = None
-        self._starred_warned: set[int] = set()  # positions dont l'exemplaire est en favori (prévenu une fois)
         reopened = await self.db.reopen_favorite_positions()
         if reopened:
             self.log.info("%d revente(s) abandonnée(s) pour une carte en favori : reprise(s)", reopened)
@@ -373,7 +382,9 @@ class InventoryManager(Worker):
     async def manage_positions(self) -> None:
         """Programme la revente des cartes achetées par le sniper (2 par passage au plus)."""
         s = self.settings
-        for row in (await self.db.positions_to_list())[:2]:
+        now = utcnow()
+        due = [r for r in await self.db.positions_to_list() if self._copy_retry.get(r["id"], (0, now))[1] <= now]
+        for row in due[:2]:
             failures = await self.db.failed_listings_count(row["id"])
             if failures >= POSITION_MAX_LIST_FAILURES:
                 await self.db.close_position(row["id"], None)
@@ -382,7 +393,15 @@ class InventoryManager(Worker):
                 continue
             owned_id = f"sim-{row['id']}" if row["dry_run"] else await self._find_copy(row)
             if not owned_id:
+                misses = self._copy_retry.get(row["id"], (0, now))[0] + 1
+                self._copy_retry[row["id"]] = (misses, now + POSITION_COPY_RETRY)
+                if misses >= POSITION_MAX_COPY_MISSES and row["id"] not in self._starred_warned:
+                    await self.db.close_position(row["id"], None)
+                    self._copy_retry.pop(row["id"], None)
+                    self.notifier.warning("Revente abandonnée", f"{row['title']} ({row['rarity']}) : introuvable dans "
+                                          "ta collection depuis ~2 h (vendue ou échangée à la main ?). Position close.")
                 continue
+            self._copy_retry.pop(row["id"], None)
             price = list_price(row["amount"], s.position_list_margin, s.sale_fee_pct,
                                estimate=row["reference_price"], share=s.position_list_profit_share)
             await self._schedule(owned_id=owned_id, card_id=row["card_id"], title=row["title"], rarity=row["rarity"],
@@ -395,7 +414,9 @@ class InventoryManager(Worker):
         taken = await self.db.scheduled_owned_ids()
         copies = [r for r in page.rows() if r.catalog_id == row["card_id"] and r.id not in taken]
         if not copies:
-            self.log.warning("position %s : exemplaire introuvable dans la collection (réessai)", row["title"])
+            log = self.log.warning if row["id"] not in self._copy_retry else self.log.debug  # une fois par série
+            log("position %s : exemplaire introuvable dans la collection (nouvel essai toutes les %d min)",
+                row["title"], POSITION_COPY_RETRY.seconds // 60)
             return None
         if all(c.starred for c in copies):
             if row["id"] not in self._starred_warned:

@@ -256,3 +256,34 @@ async def test_favorite_copy_is_never_listed_and_abandoned_resale_resumes(tmp_pa
     rows.append({**rows[0], "id": "free", "starred": False})
     assert await inv._find_copy(pending[0]) == "free"
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_copy_is_retried_slowly_then_closed(tmp_path):
+    """16/10 : Place publique introuvable, collection relue et avertissement toutes les ~35 s (206 en 2 h)."""
+    from src.workers import inventory_manager as im
+
+    reads = []
+
+    def handler(request):
+        reads.append(request.url.path)
+        return httpx.Response(200, json={"collection": []})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    bid = await db.record_bid(auction_id="a", card_id="pp", title="Place publique", rarity="L", is_shiny=False,
+                              amount=270, reference_price=442, reason="revente ~442 WB", night=False, dry_run=False,
+                              status="won", end_at=datetime.now(timezone.utc))
+    api = WikiMastersAPI(client)
+    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await inv.setup()
+    await inv.manage_positions()
+    await inv.manage_positions()  # pas de nouvelle lecture avant POSITION_COPY_RETRY
+    assert len(reads) == 1
+    for _ in range(im.POSITION_MAX_COPY_MISSES - 1):
+        inv._copy_retry[bid] = (inv._copy_retry[bid][0], datetime.now(timezone.utc))  # délai écoulé
+        await inv.manage_positions()
+    assert await db.positions_to_list() == []  # close après ~2 h d'absence
+    assert notifier.sent.count(("WARNING", "Revente abandonnée")) == 1
+    await db.close()
