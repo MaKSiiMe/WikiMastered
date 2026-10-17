@@ -235,6 +235,13 @@ async def send_sniper_report(ctx: Context, hours: float, *, send: bool = True) -
     return "\n\n".join([f"{title}\n{summary}", *(f"== {name} ==\n{body}" for name, body in sections)])
 
 
+def bid_lift(sales) -> tuple[list[float], int]:
+    """(prix final / prix de départ de chaque vente, nombre de ventes au prix de départ, sans surenchère)."""
+    ratios = [s["price"] / s["base_amount"] for s in sales if s["base_amount"]]
+    single = sum(1 for s in sales if s["base_amount"] and s["price"] <= s["base_amount"])
+    return ratios, single
+
+
 def gif_text(rows) -> str:
     """Les cartes à image animée (GIF) se vendent-elles mieux ? Par rareté : ventes, prix médian, prix final /
     prix de départ, part des ventes sans surenchère ; GIF contre images fixes, depuis le début du suivi."""
@@ -249,8 +256,7 @@ def gif_text(rows) -> str:
             sales = groups.get((rarity, gif), [])
             if not sales:
                 continue
-            ratios = [s["price"] / s["base_amount"] for s in sales if s["base_amount"]]
-            single = sum(1 for s in sales if s["base_amount"] and s["price"] <= s["base_amount"])
+            ratios, single = bid_lift(sales)
             cards = len({s["card_id"] for s in sales})
             lift = f", final/départ ×{st.median(ratios):.2f}, {single * 100 // max(1, len(ratios))} % sans " \
                    "surenchère" if ratios else ""
@@ -296,8 +302,7 @@ def hours_text(rows, rarities: list[str]) -> str:
             here = [r for r, e in sales if e.hour == hour]
             if not here:
                 continue
-            ratios = [r["price"] / r["base_amount"] for r in here if r["base_amount"]]
-            single = sum(1 for r in here if r["base_amount"] and r["price"] <= r["base_amount"])
+            ratios, single = bid_lift(here)
             ratio = f"×{st.median(ratios):.2f}" if ratios else "-"
             part = f"{single * 100 // len(ratios)} %" if ratios else "-"
             flag = " ?" if len(here) < HOURS_MIN_SALES else ""
