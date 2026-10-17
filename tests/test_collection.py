@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from src.core.api import WikiMastersAPI
-from tests.test_integration import make_client
+from tests.test_integration import make_client, make_context
 
 
 def copy(oid: str, card: str, title: str | None = None) -> dict:
@@ -33,9 +33,6 @@ async def test_collection_read_survives_changes_during_paging(tmp_path):
 @pytest.mark.asyncio
 async def test_duplicates_priced_within_quota(tmp_path):
     """Pas plus de SELL_PRICE_LOOKUPS_PER_RUN cotes demandées ; les autres cartes : ventes observées."""
-    from src.core.database import Database
-    from src.core.pricing import PriceService
-    from src.workers.base import Context
     from src.workers.inventory_manager import InventoryManager, select_for_sale
     from tests.test_integration import seed_observed
 
@@ -54,11 +51,10 @@ async def test_duplicates_priced_within_quota(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, sell_price_lookups_per_run=1)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await seed_observed(db, "B", [60, 70])
-    api = WikiMastersAPI(client)
-    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    inv = InventoryManager(ctx)
     groups, excluded, quotes, _ = await inv.snapshot()
     assert len(lookups) == 2  # A (3 exemplaires, prioritaire) : historique refusé puis moyenne, 1 seule carte
     assert quotes["C"] == {}  # ni cote ni vente observée : ignorée ce passage
@@ -69,9 +65,6 @@ async def test_duplicates_priced_within_quota(tmp_path):
 
 @pytest.mark.asyncio
 async def test_live_writes_open_packs_despite_dry_run(tmp_path):
-    from src.core.database import Database
-    from src.core.pricing import PriceService
-    from src.workers.base import Context
     from src.workers.pack_opener import PackOpener
 
     sent = []
@@ -84,11 +77,10 @@ async def test_live_writes_open_packs_despite_dry_run(tmp_path):
     client, notifier = make_client(tmp_path, handler, dry_run=True, live_writes=["open_pack"],
                                    pack_between_opens_min_seconds=0, pack_between_opens_max_seconds=0)
     assert client.settings.is_live("open_pack") and not client.settings.is_live("place_bid")
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
+    ctx = await make_context(tmp_path, client, notifier)
+    db, api = ctx.db, ctx.api
     assert (await api.place_bid("x", 5)).dry_run  # les mises restent simulées
-    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    opener = PackOpener(ctx)
     await opener.setup()
     await opener._open_batch()
     assert sent == ["/api/packs/open"]
@@ -126,9 +118,6 @@ def test_year_days_and_title_keys():
 
 @pytest.mark.asyncio
 async def test_collection_refresh_finds_owned_days(tmp_path):
-    from src.core.database import Database
-    from src.core.pricing import PriceService
-    from src.workers.base import Context
     from src.workers.collection import refresh
 
     def handler(request):
@@ -139,10 +128,9 @@ async def test_collection_refresh_finds_owned_days(tmp_path):
         return httpx.Response(200, json={"collection": rows})
 
     client, notifier = make_client(tmp_path, handler, collection_sets=["jours"])
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    state = await refresh(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    state = await refresh(ctx)
     assert state["owned"] == ["1 janvier", "14 octobre", "3 janvier"] and len(state["missing"]) == 363
     assert state["unmatched"] == ["14 octobre 1066"]
     assert (await db.kv_get("collection"))["total"] == 366
@@ -153,10 +141,7 @@ async def test_collection_refresh_finds_owned_days(tmp_path):
 async def test_sniper_completes_collection_one_auction_at_a_time(tmp_path):
     from datetime import datetime, timedelta
 
-    from src.core.database import Database
-    from src.core.pricing import PriceService
     from src.workers.auction_sniper import AuctionSniper
-    from src.workers.base import Context
 
     now = datetime.now(UTC)
 
@@ -183,11 +168,10 @@ async def test_sniper_completes_collection_one_auction_at_a_time(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, collection_sets=["jours"], collection_max_price=50)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await db.kv_set("collection", {"owned": ["3 mars"], "missing": ["14 octobre", "2 mars"], "total": 366})
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     await sniper.step()
     rows = await db._all("SELECT auction_id, amount, reason FROM bids")
@@ -205,9 +189,6 @@ async def test_sniper_completes_collection_one_auction_at_a_time(tmp_path):
 async def test_owned_days_get_the_date_tag(tmp_path):
     import json as jsonlib
 
-    from src.core.database import Database
-    from src.core.pricing import PriceService
-    from src.workers.base import Context
     from src.workers.collection import refresh
     from tests.test_session import cookie_for
 
@@ -232,10 +213,9 @@ async def test_owned_days_get_the_date_tag(tmp_path):
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, collection_sets=["Jours"],
                                    supabase_anon_key="anon-key", wm_cookie=cookie_for("a1", "r1", 3600))
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    state = await refresh(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    state = await refresh(ctx)
     assert state["owned"] == ["1 janvier", "2 janvier"] and state["unknown_sets"] == []
     # 1er janvier : l'exemplaire favori est étiqueté ; 2 janvier l'est déjà.
     assert inserted == [{"user_card_id": "o2", "tag_id": 7}] and state["tagged"] == 1 and state["to_tag"] == 0

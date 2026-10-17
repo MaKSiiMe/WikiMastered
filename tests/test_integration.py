@@ -59,6 +59,14 @@ def make_client(tmp_path: Path, handler, **overrides) -> tuple[WikiMastersClient
     return client, notifier
 
 
+async def make_context(tmp_path: Path, client: WikiMastersClient, notifier: Recorder) -> Context:
+    """Contexte complet des workers, sur une base neuve du dossier du test."""
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    api = WikiMastersAPI(client)
+    return Context(client.settings, client, api, db, notifier, PriceService(api, db, 30))
+
+
 @pytest.mark.asyncio
 async def test_rate_limit_backs_off_then_succeeds(tmp_path):
     calls = {"n": 0}
@@ -143,10 +151,8 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
         raise AssertionError(f"route inattendue {path}")
 
     client, notifier = make_client(tmp_path, handler)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    ctx = Context(client.settings, client, api, db, notifier, PriceService(api, db, 30))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await seed_observed(db, auction["card"]["id"], [200, 210, 195])
     sniper = AuctionSniper(ctx)
     await sniper.setup()
@@ -195,10 +201,9 @@ async def test_sniper_respects_concurrent_bid_limit(tmp_path):
 
     client, notifier = make_client(tmp_path, handler, sniper_rarity_caps={"SR": 15}, portfolio_max_positions=10,
                                    sniper_max_concurrent_bids=5)  # limite volontaire (le site n'en a pas)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     await sniper.step()
     rows = await db._all("SELECT amount FROM bids WHERE status = 'simulated' ORDER BY amount")
@@ -227,10 +232,9 @@ async def test_pack_opener_learns_stock_and_backs_off_when_empty(tmp_path):
 
     client, notifier = make_client(tmp_path, handler, dry_run=False,
                                    pack_between_opens_min_seconds=0, pack_between_opens_max_seconds=0)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    opener = PackOpener(ctx)
     await opener.setup()
     await opener._open_batch()
     assert stock["n"] == 0 and opener.state.remaining == 0
@@ -311,10 +315,9 @@ async def test_listings_respect_concurrent_limit(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, dry_run=False)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    inv = InventoryManager(ctx)
     now = datetime.now(UTC)
     for i in range(2):
         await db.schedule_listing(owned_card_id=f"o{i}", card_id="c", title=f"T{i}", rarity="C", base_amount=20,
@@ -347,10 +350,9 @@ async def test_null_selling_count_falls_back_to_posted_listings(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, dry_run=False)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    inv = InventoryManager(ctx)
     now = datetime.now(UTC)
     await db.schedule_listing(owned_card_id="o1", card_id="c", title="T", rarity="C", base_amount=20,
                               duration_minutes=120, post_at=now, target_end=now + timedelta(hours=2), reason="test")
@@ -390,10 +392,8 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, listing_min_duration_minutes=60)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    ctx = Context(client.settings, client, api, db, notifier, PriceService(api, db, 30))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await seed_observed(db, "c1", [400, 420, 390])
     sniper, inv = AuctionSniper(ctx), InventoryManager(ctx)
     await sniper.setup()
@@ -467,11 +467,10 @@ async def test_bids_unlimited_by_default(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await seed_observed(db, "c1", [400, 410, 390])
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     await sniper.step()
     assert (await db.last_bid("33333333-3333-3333-3333-333333333333"))["status"] == "simulated"
@@ -507,12 +506,11 @@ async def test_sniper_never_takes_cards_you_bid_on(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     for card in ("collection", "meme"):
         await seed_observed(db, card, [400, 410, 390])
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     await sniper.step()
     rows = await db._all("SELECT auction_id FROM bids")
@@ -538,10 +536,9 @@ async def test_protected_tags_are_never_sold_or_discarded(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, protected_tags=["date"])
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    inv = InventoryManager(ctx)
     _, excluded, _, _ = await inv.snapshot()
     assert excluded == {"o2"}  # étiquette « date » : jamais vendue ni défaussée (casse ignorée)
     await db.close()
@@ -582,12 +579,11 @@ async def test_daily_budget_applies_in_dry_run(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, sniper_daily_budget=250)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     for i in range(3):
         await seed_observed(db, f"c{i}", [400, 410, 390])
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     assert ("WARNING", "Sniper : budget du jour trop petit") in notifier.sent
     await sniper.step()
@@ -610,10 +606,9 @@ async def test_pack_sessions_every_15_to_90_minutes(tmp_path):
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, pack_between_opens_min_seconds=0,
                                    pack_between_opens_max_seconds=0)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    opener = PackOpener(ctx)
     await opener.setup()
     assert 60 <= await opener.step() <= 600 and not opened  # pas d'ouverture dès le démarrage
     opener._next_open = datetime.now(UTC)
@@ -645,11 +640,10 @@ async def test_trend_alerts_cards_under_position_budget(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await seed_observed(db, "card-Squid Game", [400, 380, 420])
-    api = WikiMastersAPI(client)
-    trends = WikiTrends(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    trends = WikiTrends(ctx)
     budget = await trends.max_price()
     assert budget == 594  # 3300 × 0,9 / 5, et non plus 30 WB fixes
     trend = Trend("Squid_Game", 50000, 2000, 25.0, 90000)
@@ -691,10 +685,9 @@ async def test_google_trends_feed_to_market_signals(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, trends_notify=True)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    gt = GoogleTrends(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    gt = GoogleTrends(ctx)
     await gt.setup()
     gt.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     assert await gt.step() > 600
@@ -722,10 +715,8 @@ async def test_trend_alert_one_line_per_card(tmp_path):
                                          "hasMore": False})
 
     client, notifier = make_client(tmp_path, handler)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    ctx = Context(client.settings, client, api, db, notifier, PriceService(api, db, 30))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     lines = await scan_market(ctx, source="wikipedia", term="Greta Thunberg", detail="vues x123", max_price=590)
     assert len(lines) == 1 and "3 ventes, mise min 165 à 441 WB" in lines[0] and "première fin" in lines[0]
     assert len(await db._all("SELECT * FROM trend_signals")) == 3  # chaque vente reste un signal mesuré
@@ -745,10 +736,9 @@ async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path, capl
                                          "packs_remaining": 0})
 
     client, notifier = make_client(tmp_path, handler, dry_run=False)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    opener = PackOpener(ctx)
     await opener.setup()
     caplog.set_level(logging.INFO)
     for _ in range(3):  # trois échecs de suite : une seule alerte
@@ -784,10 +774,9 @@ async def test_human_checks_are_recorded_with_their_context(tmp_path):
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, pack_between_opens_min_seconds=0,
                                    pack_between_opens_max_seconds=0)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    opener = PackOpener(ctx)
     await opener.setup()
 
     async def attempt():
@@ -830,10 +819,9 @@ async def test_empty_stock_refusal_keeps_pending_verification(tmp_path):
                                          "packs_remaining": 0})
 
     client, notifier = make_client(tmp_path, handler, dry_run=False)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    opener = PackOpener(ctx)
     await opener.setup()
 
     async def attempt(answer):

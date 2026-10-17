@@ -8,14 +8,11 @@ import httpx
 import pytest
 
 from src.config import Settings
-from src.core.api import WikiMastersAPI
-from src.core.database import Database
 from src.core.models import Auction
-from src.core.pricing import PriceService, Quote
+from src.core.pricing import Quote
 from src.workers.auction_sniper import AuctionSniper, Target, decide, snipe_params
-from src.workers.base import Context
 from src.workers.collection import collection_key
-from tests.test_integration import make_client, seed_observed
+from tests.test_integration import make_client, make_context, seed_observed
 
 SELLER = "22222222-2222-2222-2222-222222222222"
 
@@ -58,12 +55,11 @@ async def test_sniper_spots_sales_early_then_rereads_them_to_bid(tmp_path):
 
     client, notifier = make_client(tmp_path, handler, sniper_resale_rarities=["UR", "L"],
                                    collection_sets=["jours"], collection_max_price=50)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await db.kv_set("collection", {"owned": [], "missing": ["14 octobre"], "total": 366})
     await seed_observed(db, "card-u1", [400, 420, 390], rarity="UR")
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     for _ in range(8):
         await sniper.step()
@@ -109,10 +105,9 @@ def test_resale_only_for_watched_rarities():
 @pytest.mark.asyncio
 async def test_missed_new_sales_are_reported(tmp_path, caplog):
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"bidding": [], "balance": 0}))
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     now = datetime.now(UTC)
     page = [Auction.model_validate(sale(f"a{i}", "T", "UR", 3600)) for i in range(50)]
@@ -157,11 +152,10 @@ async def test_bid_follows_the_reread_without_other_requests(tmp_path):
     client, notifier = make_client(tmp_path, handler, sniper_resale_rarities=["UR", "L"],
                                    collection_sets=["jours"], collection_max_price=50,
                                    dry_run=False)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await db.kv_set("collection", {"owned": [], "missing": [collection_key("11 décembre")], "total": 366})
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     params = snipe_params(client.settings, night=False)
     for aid, data in market.items():
@@ -182,11 +176,10 @@ async def test_unread_collection_target_is_logged(tmp_path, caplog):
     caplog.set_level("INFO")
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"bidding": [], "balance": 0}),
                                    collection_sets=["jours"])
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await db.kv_set("collection", {"owned": [], "missing": ["11 septembre"], "total": 366})
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     now = datetime.now(UTC)
     sniper._targets["s1"] = Target(Auction.model_validate(sale("s1", "11 septembre", "UR", 5)), now)
@@ -224,11 +217,10 @@ async def test_collection_guard_holds_slow_work(tmp_path):
     calls = []
     client, notifier = make_client(tmp_path, _bare_handler(calls, market), sniper_resale_rarities=["UR", "L"],
                                    collection_sets=["jours"], collection_max_price=50)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await db.kv_set("collection", {"owned": [], "missing": ["7 octobre"], "total": 366})
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     for aid, data in market.items():
         sniper._targets[aid] = Target(Auction.model_validate(data), now - timedelta(seconds=30))
@@ -246,10 +238,9 @@ async def test_late_discovery_goes_before_resale_rereads(tmp_path):
     market = {"u1": sale("u1", "Jean Racine", "UR", 15)}
     calls = []
     client, notifier = make_client(tmp_path, _bare_handler(calls, market), sniper_resale_rarities=["UR"])
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     sniper._targets["u1"] = Target(Auction.model_validate(market["u1"]), now - timedelta(seconds=30))
     sniper._last_read = {("recent", "UR"): now - timedelta(seconds=5), ("ended", "UR"): now}

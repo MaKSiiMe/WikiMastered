@@ -7,13 +7,10 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from src.core.api import WikiMastersAPI
 from src.core.database import Database
-from src.core.pricing import PriceService
 from src.workers.auction_sniper import AuctionSniper
-from src.workers.base import Context
 from src.workers.inventory_manager import POSITION_MAX_LIST_FAILURES, InventoryManager
-from tests.test_integration import ME, make_client
+from tests.test_integration import ME, make_client, make_context
 
 SELLER = "22222222-2222-2222-2222-222222222222"
 
@@ -27,10 +24,8 @@ def auction(aid: str, card: str, **kw) -> dict:
 
 async def setup_ctx(tmp_path, handler, **overrides):
     client, notifier = make_client(tmp_path, handler, **overrides)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    return Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)), db, notifier
+    ctx = await make_context(tmp_path, client, notifier)
+    return ctx, ctx.db, notifier
 
 
 async def uncertain_bid(db: Database, aid: str, card: str, amount: int) -> None:

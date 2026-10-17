@@ -8,14 +8,10 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from src.core.api import WikiMastersAPI
-from src.core.database import Database
 from src.core.models import Auction
-from src.core.pricing import PriceService
 from src.workers.auction_sniper import AuctionSniper, Decision, Target, position_cap
-from src.workers.base import Context
 from src.workers.collection import progress_lines
-from tests.test_integration import ME, make_client, seed_observed
+from tests.test_integration import ME, make_client, make_context, seed_observed
 
 RIVAL = "33333333-3333-3333-3333-333333333333"
 
@@ -54,11 +50,10 @@ async def start(tmp_path, market: dict, replies: list, state: dict | None = None
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"],
                                    collection_sets=["jours"], collection_max_price=20)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await db.kv_set("collection", state or {"owned": [], "missing": ["14 octobre", "15 octobre"], "total": 366})
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     return sniper, db, notifier
 
@@ -229,8 +224,8 @@ async def test_live_sniper_ignores_simulated_positions_in_its_cap(tmp_path, simu
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=simulate, portfolio_max_positions=5,
                                    sniper_max_bid=500)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     now = datetime.now(UTC)
     for i in range(6):
         await db.record_bid(auction_id=f"sim{i}", card_id=f"c{i}", title=f"Carte {i}", rarity="L", is_shiny=False,
@@ -239,8 +234,7 @@ async def test_live_sniper_ignores_simulated_positions_in_its_cap(tmp_path, simu
     await db.record_bid(auction_id="real", card_id="cr", title="Réelle", rarity="L", is_shiny=False, amount=400,
                         reference_price=900, reason="revente ~900 WB", night=False, dry_run=False, status="won",
                         end_at=now)
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     portfolio = await sniper.portfolio(now)
     assert portfolio.open_positions == open_positions and portfolio.can_open == (open_positions < 5)
@@ -260,10 +254,9 @@ async def test_no_rebuy_once_max_buys_reached(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, portfolio_max_positions=5, sniper_max_buys=5)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     now = datetime.now(UTC)
     for i in range(5):
@@ -311,12 +304,11 @@ async def test_shadow_sniper_simulates_what_the_live_one_skips(tmp_path):
     client, notifier = make_client(tmp_path, handler, dry_run=False, sniper_resale_rarities=["L"], sniper_max_bid=500,
                                    portfolio_max_positions=5, sniper_max_buys=5, sniper_shadow=True,
                                    notify_simulated=False, notify_each_bid=True)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     for card in ("card-a", "card-b"):
         await seed_observed(db, card, [1500, 1450, 1550], rarity="L")
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
 
     def l_sale(aid, card, base):
@@ -358,12 +350,11 @@ async def test_position_bid_pushed_then_straight_to_ceiling(tmp_path):
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, sniper_resale_rarities=["L"],
                                    sniper_max_bid=500, sniper_bid_push=0.5)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     for card in ("card-a", "card-b"):
         await seed_observed(db, card, [1500, 1450, 1550], rarity="L")
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
 
     def l_sale(aid, card, base, bid=None):

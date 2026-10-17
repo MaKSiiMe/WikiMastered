@@ -7,14 +7,10 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from src.core.api import WikiMastersAPI
 from src.core.client import Halted, WikiMastersClient
-from src.core.database import Database
 from src.core.endpoints import Endpoints
-from src.core.pricing import PriceService
-from src.workers.base import Context
 from src.workers.profile_guard import ProfileGuard, sanctions
-from tests.test_integration import ROOT, make_client
+from tests.test_integration import ROOT, make_client, make_context
 from tests.test_session import cookie_for
 
 NOW = datetime(2026, 10, 16, 15, 0, tzinfo=UTC)
@@ -48,10 +44,9 @@ async def test_a_strike_halts_every_request_even_after_a_restart(tmp_path):
 
     client, notifier = make_client(tmp_path, handler, supabase_anon_key="anon-key",
                                    wm_cookie=cookie_for("a1", "r1", 3600))
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    guard = ProfileGuard(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db, api = ctx.db, ctx.api
+    guard = ProfileGuard(ctx)
     await guard.setup()
 
     assert await guard.step() > 60 and client.halted is None

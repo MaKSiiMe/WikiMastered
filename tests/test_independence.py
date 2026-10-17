@@ -10,10 +10,8 @@ import pytest
 from src import main
 from src.core.api import WikiMastersAPI
 from src.core.client import RateLimited, UncertainMutation
-from src.core.database import Database
-from src.core.pricing import PriceService
-from src.workers.base import Context, Worker
-from tests.test_integration import make_client
+from src.workers.base import Worker
+from tests.test_integration import make_client, make_context
 
 
 @pytest.mark.asyncio
@@ -78,10 +76,9 @@ class Flaky(Worker):
 @pytest.mark.asyncio
 async def test_worker_setup_failure_is_retried(tmp_path, monkeypatch):
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    worker = Flaky(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    worker = Flaky(ctx)
     monkeypatch.setattr(worker, "_on_error", lambda exc: 0.01)
     task = asyncio.create_task(worker.run())
     await asyncio.sleep(0.2)
