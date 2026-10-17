@@ -7,10 +7,11 @@ du JSON (`{"SR": 15}`). Les heures s'écrivent `HH:MM` (heure de Paris).
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, time
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, Literal, get_origin
+from typing import Annotated, Any, Literal, get_args, get_origin
 
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -292,6 +293,17 @@ class Settings(BaseSettings):
         field = cls.model_fields.get(info.field_name or "")
         if field is not None and get_origin(field.annotation) is list:
             return _split_list(value)
+        return value
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _pad_hours(cls, value: Any, info: ValidationInfo) -> Any:
+        """Une heure s'écrit aussi sans zéro initial : 3:00 vaut 03:00 (17/10 : SNIPER_LIVE_START=3:00 refusé)."""
+        field = cls.model_fields.get(info.field_name or "")
+        if field is not None and time in (field.annotation, *get_args(field.annotation)) and isinstance(value, str):
+            value = value.strip()
+            if re.fullmatch(r"\d:\d\d(:\d\d)?", value):
+                return f"0{value}"
         return value
 
     @field_validator("pack_notify_rarities", "discard_rarities", "sniper_resale_rarities", "sniper_shadow_rarities")
