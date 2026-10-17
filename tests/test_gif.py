@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -29,16 +29,16 @@ def test_gif_read_from_the_file_name_not_the_query():
 async def test_gif_sales_are_tracked_and_compared(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    end = datetime.now(timezone.utc) - timedelta(minutes=5)
+    end = datetime.now(UTC) - timedelta(minutes=5)
 
     def seen(aid, card, gif, price, base):
-        return {"auction_id": aid, "card_id": card, "title": card, "norm_title": card, "rarity": "UR", "is_shiny": 0,
+        return {"auction_id": aid, "card_id": card, "title": card, "rarity": "UR", "is_shiny": 0,
                 "current_bid": price, "base_amount": base, "min_bid": price + 1, "end_at": end.isoformat(),
                 "seen_at": (end - timedelta(seconds=5)).isoformat(), "is_gif": gif}
 
     await db.upsert_auctions([seen("g1", "franks", 1, 120, 40), seen("g2", "franks", 1, 90, 30),
                               seen("i1", "avatar", 0, 20, 20), seen("i2", "autre", 0, 30, 25)])
-    assert await db.harvest_ended_auctions(datetime.now(timezone.utc)) == 4
+    assert await db.harvest_ended_auctions(datetime.now(UTC)) == 4
     text = gif_text(await db.gif_stats())
     assert "UR GIF : 2 ventes (1 cartes), prix médian 105, final/départ ×3.00, 0 % sans surenchère" in text
     assert "UR img : 2 ventes (2 cartes), prix médian 25" in text
@@ -62,17 +62,17 @@ def test_gif_duplicates_are_never_discarded():
 async def test_hours_groups_sales_by_paris_end_hour(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    day = datetime(2026, 10, 15, tzinfo=timezone.utc)  # Paris = UTC+2 : 10:00 UTC -> 12h, 21:00 UTC -> 23h
+    day = datetime(2026, 10, 15, tzinfo=UTC)  # Paris = UTC+2 : 10:00 UTC -> 12h, 21:00 UTC -> 23h
 
     def seen(aid, hour, price, base, rarity="L", shiny=0):
         end = day + timedelta(hours=hour)
-        return {"auction_id": aid, "card_id": aid, "title": aid, "norm_title": aid, "rarity": rarity, "is_shiny": shiny,
+        return {"auction_id": aid, "card_id": aid, "title": aid, "rarity": rarity, "is_shiny": shiny,
                 "current_bid": price, "base_amount": base, "min_bid": price + 1, "end_at": end.isoformat(),
                 "seen_at": (end - timedelta(seconds=5)).isoformat(), "is_gif": 0}
 
     await db.upsert_auctions([seen("a", 10, 150, 100), seen("b", 10, 100, 100), seen("c", 21, 300, 100),
                               seen("d", 10, 5, 5, rarity="C"), seen("e", 10, 9, 5, shiny=1)])
-    await db.harvest_ended_auctions(datetime.now(timezone.utc))
+    await db.harvest_ended_auctions(datetime.now(UTC))
     text = hours_text(await db.hour_stats(["L"]), ["L"])
     assert "L : 3 ventes" in text
     rows = {line.split()[0]: line.split() for line in text.splitlines() if line.strip()[:2].isdigit()}

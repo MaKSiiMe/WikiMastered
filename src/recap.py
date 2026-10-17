@@ -9,10 +9,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from src.core.database import utcnow
-from src.core.notifier import Level, Topic
 from src.core import timeutils
-from src.core.timeutils import now_local, sleep_until
+from src.core.notifier import Level, Topic
+from src.core.timeutils import now_local, sleep_until, utcnow
 from src.workers.base import Context, Worker
 from src.workers.collection import progress_lines, targets
 

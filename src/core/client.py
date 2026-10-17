@@ -20,7 +20,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -30,6 +30,7 @@ import httpx
 from src.config import Settings
 from src.core.endpoints import BuiltRequest, Endpoints
 from src.core.notifier import DiscordNotifier
+from src.core.timeutils import utcnow
 
 log = logging.getLogger(__name__)
 
@@ -192,7 +193,7 @@ def _retry_after_seconds(resp: httpx.Response) -> float:
     except ValueError:
         pass
     try:
-        return max(0.0, (parsedate_to_datetime(header) - datetime.now(timezone.utc)).total_seconds())
+        return max(0.0, (parsedate_to_datetime(header) - utcnow()).total_seconds())
     except (TypeError, ValueError):
         return 0.0
 
@@ -316,7 +317,7 @@ class WikiMastersClient:
             tmp.write_text(json.dumps({
                 "env_hash": _sha(self.settings.wm_cookie.strip()),
                 "cookie": current,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": utcnow().isoformat(),
             }), encoding="utf-8")
             tmp.replace(path)
             log.debug("Cookies de session mis à jour")
@@ -358,7 +359,7 @@ class WikiMastersClient:
     def session_status(self) -> str:
         session = self.auth_session()
         expires = session.expires_at if session else None
-        when = (datetime.fromtimestamp(expires, timezone.utc).astimezone().strftime("%d/%m %H:%M")
+        when = (datetime.fromtimestamp(expires, UTC).astimezone().strftime("%d/%m %H:%M")
                 if expires else "inconnue")
         if not self.settings.supabase_anon_key:
             auto = "inactif (SUPABASE_ANON_KEY vide)"
@@ -781,7 +782,7 @@ class WikiMastersClient:
             if n >= 3:
                 return
             (folder / f"{name}-{n + 1}.json").write_text(
-                json.dumps({"status": status, "payload": payload, "at": datetime.now(timezone.utc).isoformat()},
+                json.dumps({"status": status, "payload": payload, "at": utcnow().isoformat()},
                            ensure_ascii=False, indent=2, default=str), encoding="utf-8")
         except OSError:
             log.exception("Impossible d'enregistrer la réponse de %s", name)

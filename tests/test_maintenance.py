@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -13,7 +13,7 @@ from src.core.database import Database
 async def test_purge_keeps_accounting_and_recent_market(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old, recent = (now - timedelta(days=200)).isoformat(), (now - timedelta(days=2)).isoformat()
     await db.db.executemany("INSERT INTO observed_sales (auction_id, card_id, price, ended_at) VALUES (?, 'c', 10, ?)",
                             [("old", old), ("new", recent)])
@@ -40,7 +40,7 @@ async def test_estimates_compare_same_rarity_and_shiny(tmp_path):
 
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rows = [("a1", "UR", 0, 500), ("a2", "UR", 0, 520), ("a3", "C", 0, 12), ("a4", "C", 0, 10), ("a5", "C", 1, 90)]
     await db.db.executemany(
         "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
@@ -67,7 +67,7 @@ async def test_unsettled_bids_count_until_settled(tmp_path):
     """Une mise dont l'enchère vient de finir, pas encore relue, compte toujours dans les plafonds."""
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async def bid(aid, status, amount, reason="revente ~300 WB", end=now - timedelta(minutes=5), dry_run=True):
         await db.record_bid(auction_id=aid, card_id=aid, title=aid, rarity="C", is_shiny=False, amount=amount,
@@ -88,7 +88,7 @@ async def test_unsettled_bids_count_until_settled(tmp_path):
 async def test_reset_simulation_keeps_real_data(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for aid, dry_run in (("sim", True), ("reel", False)):
         bid_id = await db.record_bid(auction_id=aid, card_id=aid, title=aid, rarity="C", is_shiny=False, amount=10,
                                      reference_price=None, reason="revente", night=False, dry_run=dry_run,
@@ -108,7 +108,7 @@ async def test_reset_simulation_keeps_real_data(tmp_path):
 async def test_suspect_sales_do_not_count_in_quotes(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     rows = [("a1", "s1", "b1", 400), ("a2", "s2", "b2", 420),        # ventes ordinaires
             ("a3", "s9", "b9", 5000), ("a4", "s9", "b9", 5200),      # même paire deux fois : factices
             ("a5", "s7", "s7", 9000)]                                # vendeur = acheteur

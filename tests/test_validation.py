@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -17,7 +17,7 @@ from tests.test_integration import make_client, seed_observed
 
 
 async def simulated_position(db: Database, base_amount: int) -> int:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bid = await db.record_bid(auction_id="a1", card_id="c1", title="Mème", rarity="C", is_shiny=False, amount=100,
                               reference_price=400, reason="revente ~400 WB", night=False, dry_run=True,
                               status="sim_won", end_at=now)
@@ -43,13 +43,13 @@ async def test_simulated_resale_follows_the_observed_market(tmp_path):
     assert rows[1]["base_amount"] == 360 and rows[1]["relist_count"] == 1  # remise à -10 %
     assert (await db.get_bid(bid))["closed"] == 0
     await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = 2",
-                   ((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),))
+                   ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
     await inv.settle_listings()
     await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = 3",
-                   ((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),))
+                   ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
     await inv.settle_listings()  # 2 remises déjà faites : carte gardée
     assert (await db.get_bid(bid))["closed"] == 1 and (await db.get_bid(bid))["sale_price"] is None
-    stats = await db.validation_stats(datetime.now(timezone.utc) - timedelta(days=1), 2)
+    stats = await db.validation_stats(datetime.now(UTC) - timedelta(days=1), 2)
     assert stats["sim_kept"] == 1 and stats["sim_kept_cost"] == 100 and stats["sim_sold"] == 0
     assert ("WARNING", "Position invendue") in notifier.sent
     await db.close()
@@ -67,7 +67,7 @@ async def test_simulated_resale_sells_when_the_market_pays(tmp_path):
     await inv.settle_listings()
     # Une enchère : les joueurs la font monter au prix du marché (médiane observée), pas seulement au départ.
     assert (await db.get_bid(bid))["sale_price"] == 420
-    assert (await db.validation_stats(datetime.now(timezone.utc), 2))["sim_profit"] == 320
+    assert (await db.validation_stats(datetime.now(UTC), 2))["sim_profit"] == 320
     await db.close()
 
 
@@ -192,16 +192,16 @@ async def test_inventory_report_values_every_card(tmp_path, capsys):
 @pytest.mark.asyncio
 async def test_position_posted_now_and_old_schedules_advanced(tmp_path):
     """16/10 : 2 L sur 3 attendaient le lendemain 11 h. Une revente part dès que la carte est là."""
-    from src.workers.inventory_manager import InventoryManager
-    from tests.test_integration import make_client
     from src.core.api import WikiMastersAPI
     from src.core.pricing import PriceService
     from src.workers.base import Context
+    from src.workers.inventory_manager import InventoryManager
+    from tests.test_integration import make_client
 
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tomorrow = now + timedelta(hours=17)
     await db.schedule_listing(owned_card_id="o1", card_id="c", title="Fabrice Arfi", rarity="L", base_amount=488,
                               duration_minutes=720, post_at=tomorrow, target_end=tomorrow + timedelta(hours=12),
@@ -212,7 +212,7 @@ async def test_position_posted_now_and_old_schedules_advanced(tmp_path):
     inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     await inv.setup()
     rows = {r["title"]: r for r in await db._all("SELECT title, post_at, target_end FROM listings")}
-    assert datetime.fromisoformat(rows["Fabrice Arfi"]["post_at"]) <= datetime.now(timezone.utc)
+    assert datetime.fromisoformat(rows["Fabrice Arfi"]["post_at"]) <= datetime.now(UTC)
     assert datetime.fromisoformat(rows["doublon"]["post_at"]) > now + timedelta(hours=16)  # doublon : inchangé
     post_at, minutes, end = inv._plan(now, position=True, at_peak=True)
     assert post_at == now and minutes == 360 and end == now + timedelta(hours=6)
@@ -231,7 +231,7 @@ async def test_favorite_copy_is_never_listed_and_abandoned_resale_resumes(tmp_pa
     client, notifier = make_client(tmp_path, handler, dry_run=False)
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bid = await db.record_bid(auction_id="a", card_id="pp", title="Place publique", rarity="L", is_shiny=False,
                               amount=270, reference_price=442, reason="revente ~442 WB", night=False, dry_run=False,
                               status="won", end_at=now)
@@ -274,7 +274,7 @@ async def test_missing_copy_is_retried_slowly_then_closed(tmp_path):
     await db.connect()
     bid = await db.record_bid(auction_id="a", card_id="pp", title="Place publique", rarity="L", is_shiny=False,
                               amount=270, reference_price=442, reason="revente ~442 WB", night=False, dry_run=False,
-                              status="won", end_at=datetime.now(timezone.utc))
+                              status="won", end_at=datetime.now(UTC))
     api = WikiMastersAPI(client)
     inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     await inv.setup()
@@ -282,7 +282,7 @@ async def test_missing_copy_is_retried_slowly_then_closed(tmp_path):
     await inv.manage_positions()  # pas de nouvelle lecture avant POSITION_COPY_RETRY
     assert len(reads) == 1
     for _ in range(im.POSITION_MAX_COPY_MISSES - 1):
-        inv._copy_retry[bid] = (inv._copy_retry[bid][0], datetime.now(timezone.utc))  # délai écoulé
+        inv._copy_retry[bid] = (inv._copy_retry[bid][0], datetime.now(UTC))  # délai écoulé
         await inv.manage_positions()
     assert await db.positions_to_list() == []  # close après ~2 h d'absence
     assert notifier.sent.count(("WARNING", "Revente abandonnée")) == 1
@@ -301,7 +301,7 @@ async def test_relist_waits_for_the_unsold_card_to_come_back(tmp_path):
     client, notifier = make_client(tmp_path, handler, dry_run=False)
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     lid = await db.schedule_listing(owned_card_id="cf", card_id="c", title="Cyril Féraud", rarity="L", base_amount=375,
                                     duration_minutes=720, post_at=now - timedelta(seconds=1), target_end=now,
                                     reason="position", bid_id=3, relist_count=1)
@@ -323,7 +323,7 @@ async def test_relist_waits_for_the_unsold_card_to_come_back(tmp_path):
 async def test_report_separates_rejected_bids_collection_and_simulated_positions(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async def bid(aid, status, amount, reason="revente ~500 WB", dry_run=False):
         await db.record_bid(auction_id=aid, card_id=aid, title=aid, rarity="L", is_shiny=False, amount=amount,

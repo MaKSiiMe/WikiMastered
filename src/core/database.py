@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import aiosqlite
+
+from src.core.timeutils import utcnow
 
 log = logging.getLogger(__name__)
 
@@ -66,21 +69,16 @@ CREATE TABLE IF NOT EXISTS discards (
 );
 
 CREATE TABLE IF NOT EXISTS auctions_seen (
-    auction_id TEXT PRIMARY KEY, card_id TEXT, title TEXT, norm_title TEXT, rarity TEXT,
+    auction_id TEXT PRIMARY KEY, card_id TEXT, title TEXT, rarity TEXT,
     is_shiny INTEGER NOT NULL DEFAULT 0, current_bid INTEGER, base_amount INTEGER,
     min_bid INTEGER, end_at TEXT, seen_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_auctions_title ON auctions_seen (norm_title);
 
 CREATE TABLE IF NOT EXISTS observed_sales (
     auction_id TEXT PRIMARY KEY, card_id TEXT NOT NULL, title TEXT, rarity TEXT,
     is_shiny INTEGER NOT NULL DEFAULT 0, price INTEGER NOT NULL, ended_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_observed_card ON observed_sales (card_id, ended_at);
-
-CREATE TABLE IF NOT EXISTS trend_alerts (
-    auction_id TEXT PRIMARY KEY, article TEXT, alerted_at TEXT NOT NULL
-);
 
 -- Signaux de tendance (Wikipédia, Google Trends) : carte en vente au moment du signal,
 -- pour mesurer ensuite si son prix a vraiment monté.
@@ -122,6 +120,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("auctions_seen", "is_gif", "INTEGER NOT NULL DEFAULT 0"),
     ("observed_sales", "is_gif", "INTEGER NOT NULL DEFAULT 0"),
 ]
+# Vestiges d'anciennes versions, supprimés au démarrage d'une base existante.
+OBSOLETE = ["DROP TABLE IF EXISTS trend_alerts", "DROP INDEX IF EXISTS idx_auctions_title"]
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
 WASH_PAIR_MIN = 2
 
@@ -145,16 +145,12 @@ def _observed_filter(card_id: str, rarity: str | None, shiny: bool | None) -> tu
     return where + f" AND NOT {SUSPECT_SALE}", tuple(params)
 
 
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 def iso(dt: datetime | None) -> str | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat()
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat()
 
 
 def parse_iso(value: str | None) -> datetime | None:
@@ -179,6 +175,8 @@ class Database:
             if column not in existing:
                 await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_observed_pair ON observed_sales (seller_id, buyer_id)")
+        for statement in OBSOLETE:
+            await self._db.execute(statement)
         await self._db.commit()
 
     async def close(self) -> None:
@@ -512,20 +510,15 @@ class Database:
             return
         rows = [{"seller_id": None, "bidder_id": None, "is_gif": 0, **r} for r in rows]
         await self.db.executemany(
-            "INSERT INTO auctions_seen (auction_id, card_id, title, norm_title, rarity, is_shiny, current_bid, "
+            "INSERT INTO auctions_seen (auction_id, card_id, title, rarity, is_shiny, current_bid, "
             "base_amount, min_bid, end_at, seen_at, seller_id, bidder_id, is_gif) VALUES (:auction_id, :card_id, "
-            ":title, :norm_title, :rarity, :is_shiny, :current_bid, :base_amount, :min_bid, :end_at, :seen_at, "
+            ":title, :rarity, :is_shiny, :current_bid, :base_amount, :min_bid, :end_at, :seen_at, "
             ":seller_id, :bidder_id, :is_gif) ON CONFLICT(auction_id) DO UPDATE SET current_bid = excluded.current_bid, "
             "min_bid = excluded.min_bid, end_at = excluded.end_at, seen_at = excluded.seen_at, "
             "bidder_id = excluded.bidder_id",
             rows,
         )
         await self.db.commit()
-
-    async def auctions_by_title(self, norm_title: str, now: datetime) -> list[aiosqlite.Row]:
-        return await self._all(
-            "SELECT * FROM auctions_seen WHERE norm_title = ? AND end_at > ?", (norm_title, iso(now))
-        )
 
     async def harvest_ended_auctions(self, before: datetime, max_gap_seconds: float = 120) -> int:
         """Transforme les enchères vues juste avant leur fin en ventes observées.
@@ -677,15 +670,6 @@ class Database:
     async def prune_auctions(self, before: datetime) -> None:
         await self._exec("DELETE FROM auctions_seen WHERE end_at < ?", (iso(before),))
 
-    async def trend_alerted(self, auction_id: str) -> bool:
-        return await self._one("SELECT 1 FROM trend_alerts WHERE auction_id = ?", (auction_id,)) is not None
-
-    async def mark_trend_alert(self, auction_id: str, article: str) -> None:
-        await self._exec(
-            "INSERT OR IGNORE INTO trend_alerts (auction_id, article, alerted_at) VALUES (?, ?, ?)",
-            (auction_id, article, iso(utcnow())),
-        )
-
     async def record_signal(self, *, source: str, term: str, card_id: str, title: str, auction_id: str,
                             min_bid: int, end_at: datetime) -> bool:
         """Enregistre un signal ; False s'il était déjà connu pour cette enchère."""
@@ -761,7 +745,6 @@ class Database:
             "price_history": ("observed_at < ?", before(60)),
             "price_cache": ("fetched_at < ?", before(30)),
             "observed_sales": ("ended_at < ?", before(120)),
-            "trend_alerts": ("alerted_at < ?", before(30)),
             "trend_terms": ("first_seen < ?", before(30)),
             "trend_signals": ("signal_at < ?", before(90)),
             "pageviews": ("day < ?", f"{now - timedelta(days=60):%Y%m%d}"),

@@ -28,17 +28,15 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, replace
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 
 from src.config import Settings
 from src.core import timeutils
 from src.core.client import ApiError, RateLimited, UncertainMutation
-from src.core.database import utcnow
 from src.core.models import Auction, BidResult, Card
 from src.core.notifier import Topic
 from src.core.pricing import Quote, combine, trusted
-from src.core.text import normalize_title
-from src.core.timeutils import in_window, local_dt, now_local
+from src.core.timeutils import in_window, local_dt, now_local, utcnow
 from src.workers.base import Worker
 from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers.collection import collection_key, record_win, targets as collection_targets
@@ -69,7 +67,7 @@ QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
 # Mises surenchéries relues à la fin de leur enchère (gagnées malgré tout ?) : celles des 2 derniers jours,
 # pas tout l'historique (enchères anciennes souvent disparues du site).
 OUTBID_SETTLE_WINDOW = timedelta(days=2)
-_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+_EPOCH = datetime.min.replace(tzinfo=UTC)
 
 
 @dataclass
@@ -862,7 +860,7 @@ class AuctionSniper(Worker):
 
     async def _remember(self, auctions: list[Auction], now: datetime) -> None:
         await self.db.upsert_auctions([{
-            "auction_id": a.id, "card_id": a.catalog_id, "title": a.title, "norm_title": normalize_title(a.title),
+            "auction_id": a.id, "card_id": a.catalog_id, "title": a.title,
             "rarity": a.rarity, "is_shiny": int(a.shiny), "current_bid": a.current_bid,
             "base_amount": a.base_amount, "min_bid": a.min_bid, "end_at": a.end_at.isoformat(),
             "seen_at": now.isoformat(), "seller_id": a.seller_id, "bidder_id": a.current_bidder_id,
@@ -1145,7 +1143,7 @@ class AuctionSniper(Worker):
                 self.log.info("%s : %s", title, row["title"])
                 return
             notify(title, f"{name}, gardée dans la collection", topic=Topic.COLLECTION, **look,
-                   **{"rareté": row["rarity"] or "?", "prix": f"{row['amount']} WB"})
+                   rareté=row["rarity"] or "?", prix=f"{row['amount']} WB")
             return
         ref = row["reference_price"]
         fields = {"rareté": row["rarity"] or "?", "mise": f"{row['amount']} WB"}

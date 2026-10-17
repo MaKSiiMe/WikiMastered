@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 import httpx
 import pytest
 
@@ -149,14 +151,14 @@ async def test_collection_refresh_finds_owned_days(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sniper_completes_collection_one_auction_at_a_time(tmp_path):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from src.core.database import Database
     from src.core.pricing import PriceService
     from src.workers.auction_sniper import AuctionSniper
     from src.workers.base import Context
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def sale(aid, title, base, seconds):
         return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "R"},
@@ -241,11 +243,11 @@ async def test_owned_days_get_the_date_tag(tmp_path):
 
 
 def test_completion_tracks_when_each_card_was_obtained():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from src.workers.collection import first_owned, progress_lines
 
-    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
     first = first_owned({}, {"1 janvier", "2 janvier"}, now - timedelta(days=10))
     assert first == {"1 janvier": None, "2 janvier": None}  # déjà là au 1er relevé : date inconnue
     later = first_owned({"first_owned": first}, {"1 janvier", "2 janvier", "14 octobre"}, now - timedelta(days=1))

@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 from urllib.parse import quote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from src.config import RARITY_RANK
+from src.core.timeutils import utcnow
 
 log = logging.getLogger(__name__)
 
@@ -160,8 +161,8 @@ class Auction(_Model):
         return min_next_bid(self.current_bid, self.base_amount)
 
     def seconds_left(self, now: datetime | None = None) -> float:
-        now = now or datetime.now(timezone.utc)
-        end = self.end_at if self.end_at.tzinfo else self.end_at.replace(tzinfo=timezone.utc)
+        now = now or utcnow()
+        end = self.end_at if self.end_at.tzinfo else self.end_at.replace(tzinfo=UTC)
         return (end - now).total_seconds()
 
 

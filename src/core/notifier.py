@@ -13,11 +13,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 import httpx
+
+from src.core.timeutils import utcnow
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ class DiscordNotifier:
         if self._task:
             try:
                 await asyncio.wait_for(self._queue.join(), timeout=10)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 log.warning("Discord : %d message(s) non envoyés à l'arrêt", self._queue.qsize())
             self._task.cancel()
         await self._http.aclose()
@@ -170,7 +171,7 @@ class DiscordNotifier:
             "author": {"name": msg.topic.value},
             "title": title[:256],
             "color": msg.level.value,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": utcnow().isoformat(),
             "fields": fields,
         }
         if self._footer:

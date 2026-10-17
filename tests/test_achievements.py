@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -49,9 +49,9 @@ async def test_unlocked_achievements_are_claimed(tmp_path, monkeypatch, dry_run)
     monkeypatch.setattr("src.workers.achievements.asyncio.sleep", lambda _s: _noop())
     await worker.setup()
     assert await worker.step() > 0 and posts == []  # pas avant ACHIEVEMENTS_TIME
-    worker._next_run = datetime.now(timezone.utc)
+    worker._next_run = datetime.now(UTC)
     await worker.step()
-    assert timedelta(0) < worker._next_run - datetime.now(timezone.utc) <= timedelta(days=1, minutes=5)
+    assert timedelta(0) < worker._next_run - datetime.now(UTC) <= timedelta(days=1, minutes=5)
     if dry_run:
         assert posts == [] and worker.recap() == ["Aucun succès à réclamer"]
     else:

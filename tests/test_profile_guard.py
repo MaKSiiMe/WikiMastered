@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
-from src.config import Settings
+from src.core.api import WikiMastersAPI
 from src.core.client import Halted, WikiMastersClient
 from src.core.database import Database
 from src.core.endpoints import Endpoints
 from src.core.pricing import PriceService
-from src.core.api import WikiMastersAPI
 from src.workers.base import Context
 from src.workers.profile_guard import ProfileGuard, sanctions
 from tests.test_integration import ROOT, make_client
 from tests.test_session import cookie_for
 
-NOW = datetime(2026, 10, 16, 15, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 16, 15, 0, tzinfo=UTC)
 # Relevé du 16/10 : profil sans sanction.
 CLEAN = {"cheat_strikes": 0, "activity_blocked_until": None, "last_sanction_at": None, "last_sanction_type": None,
          "leaderboard_excluded": False, "deleted_at": None, "pity_counter": 0, "packs_remaining": 2,

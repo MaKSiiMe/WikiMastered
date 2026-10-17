@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
 from src.core.api import WikiMastersAPI
 from src.core.database import Database
-from src.core.pricing import PriceService
 from src.core.models import Auction
+from src.core.pricing import PriceService
 from src.workers.auction_sniper import AuctionSniper, Decision, Target, position_cap
 from src.workers.base import Context
 from src.workers.collection import progress_lines
@@ -24,7 +24,7 @@ def sale(aid: str, title: str, seconds: float, base: int = 10, bid: int | None =
          bidder: str | None = None) -> dict:
     return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "R"},
             "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
-            "end_at": (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat(),
             "base_amount": base, "current_bid": bid, "current_bidder_id": bidder}
 
 
@@ -99,13 +99,13 @@ async def test_antibot_refusal_alerts_once_until_a_bid_passes(tmp_path):
     await sniper.step()
     assert len(replies) == 2 and "pas tentée : vérification anti-bot en attente 1" in sniper.recap()[1]
 
-    sniper._antibot_retry_at = datetime.now(timezone.utc)
+    sniper._antibot_retry_at = datetime.now(UTC)
     market["c"] = sale("c", "15 octobre", 15)
     await sniper.step()  # encore refusée : pas de deuxième alerte
     assert len(replies) == 1
     assert notifier.sent.count(("CRITICAL", "Sniper : vérification anti-bot demandée")) == 1
 
-    sniper._antibot_retry_at = datetime.now(timezone.utc)
+    sniper._antibot_retry_at = datetime.now(UTC)
     market["d"] = sale("d", "15 octobre", 15)
     await sniper.step()
     assert ("SUCCESS", "Sniper : vérification levée") in notifier.sent and sniper.blocked is None
@@ -127,8 +127,8 @@ async def test_antibot_alert_is_renewed_every_hour_while_pending(tmp_path):
     assert reminder not in notifier.sent and sniper._antibot_missed == 2
 
     sniper._antibot_since -= timedelta(hours=1, minutes=5)
-    sniper._antibot_remind_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-    sniper._antibot_retry_at = datetime.now(timezone.utc)
+    sniper._antibot_remind_at = datetime.now(UTC) - timedelta(seconds=1)
+    sniper._antibot_retry_at = datetime.now(UTC)
     market["c"] = sale("c", "15 octobre", 15)
     await sniper.step()
     assert notifier.sent.count(reminder) == 1 and sniper._antibot_missed == 3
@@ -171,7 +171,7 @@ async def test_won_collection_card_counts_at_once(tmp_path):
     sniper, db, _ = await start(tmp_path, {}, [], state)
     await db.record_bid(auction_id="col", card_id="card-14 octobre", title="14 octobre", rarity="R", is_shiny=False,
                         amount=13, reference_price=None, reason="collection : carte manquante ≤ 20", night=False,
-                        dry_run=False, status="placed", end_at=datetime.now(timezone.utc))
+                        dry_run=False, status="placed", end_at=datetime.now(UTC))
     row = await db.last_bid("col")
     await sniper._close_bid(row, won=True, simulated=False)
 
@@ -179,7 +179,7 @@ async def test_won_collection_card_counts_at_once(tmp_path):
     assert "14 octobre" not in sniper._collection_missing
     saved = await db.kv_get("collection")
     assert saved["missing"] == ["15 octobre"] and "14 octobre" in saved["owned"]
-    lines = progress_lines(saved, {}, datetime.now(timezone.utc))
+    lines = progress_lines(saved, {}, datetime.now(UTC))
     assert lines[0] == "Jours de l'année : 2/366 (0,5 %)" and lines[1].startswith("+1 en 7 jours : 14 octobre")
     await db.close()
 
@@ -188,7 +188,7 @@ async def test_won_collection_card_counts_at_once(tmp_path):
 async def test_vanished_auction_closes_the_bid_without_failing(tmp_path):
     """Récap du 16/10 à 00:00 : « auction_detail: Enchère introuvable » faisait échouer le passage du sniper."""
     sniper, db, notifier = await start(tmp_path, {}, [])
-    ended = datetime.now(timezone.utc) - timedelta(minutes=5)
+    ended = datetime.now(UTC) - timedelta(minutes=5)
     for aid, dry_run, status in (("gone-sim", True, "simulated"), ("gone-real", False, "placed")):
         await db.record_bid(auction_id=aid, card_id="card-x", title="Le Parrain", rarity="L", is_shiny=False,
                             amount=150, reference_price=550, reason="revente ~550 WB", night=False,
@@ -204,7 +204,7 @@ async def test_vanished_auction_closes_the_bid_without_failing(tmp_path):
 async def test_missed_collection_card_counted_apart(tmp_path):
     """Récap du 16/10 : 1933 « pas relue à temps » sur 2091, sans savoir combien de cartes de collection."""
     sniper, db, _ = await start(tmp_path, {}, [])
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for aid, title in (("col", "14 octobre"), ("ur", "Miley Cyrus")):
         sniper._targets[aid] = Target(Auction.model_validate(sale(aid, title, 5)), now)
     sniper._prune(now)
@@ -231,7 +231,7 @@ async def test_live_sniper_ignores_simulated_positions_in_its_cap(tmp_path, simu
                                    sniper_max_bid=500)
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for i in range(6):
         await db.record_bid(auction_id=f"sim{i}", card_id=f"c{i}", title=f"Carte {i}", rarity="L", is_shiny=False,
                             amount=200, reference_price=600, reason="revente ~600 WB", night=False, dry_run=True,
@@ -265,7 +265,7 @@ async def test_no_rebuy_once_max_buys_reached(tmp_path):
     api = WikiMastersAPI(client)
     sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     await sniper.setup()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for i in range(5):
         await db.record_bid(auction_id=f"r{i}", card_id=f"c{i}", title=f"Carte {i}", rarity="L", is_shiny=False,
                             amount=400, reference_price=900, reason="revente ~900 WB", night=False, dry_run=False,
@@ -323,7 +323,7 @@ async def test_shadow_sniper_simulates_what_the_live_one_skips(tmp_path):
         return Auction.model_validate({**sale(aid, "x", 15, base=base),
                                        "card": {"id": card, "wikipedia_title": card, "rarity": "L"}})
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cheap, dear = l_sale("cheap", "card-a", 300), l_sale("dear", "card-b", 550)  # budget d'une position : ~594
     await sniper._play([cheap, dear], sniper_params(client), now)
     assert posted == ["/api/marketplace/cheap/bid"]
@@ -370,7 +370,7 @@ async def test_position_bid_pushed_then_straight_to_ceiling(tmp_path):
         return Auction.model_validate({**sale(aid, "x", 15, base=base, bid=bid, bidder=RIVAL if bid else None),
                                        "card": {"id": card, "wikipedia_title": card, "rarity": "L"}})
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await sniper._play([l_sale("a", "card-a", 300)], sniper_params(client), now)
     assert posted == [400]  # plafond 500 (SNIPER_MAX_BID) : 300 + ⌈200 × 0,5⌉
 
@@ -397,7 +397,7 @@ async def outbid_bid(db, aid: str, title: str, amount: int, minutes_ago: float =
     return await db.record_bid(auction_id=aid, card_id=f"card-{title}", title=title, rarity="L", is_shiny=False,
                                amount=amount, reference_price=1900, reason="revente ~1900 WB, bénéfice ~1400",
                                night=False, dry_run=False, status="outbid", ceiling=500,
-                               end_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago))
+                               end_at=datetime.now(UTC) - timedelta(minutes=minutes_ago))
 
 
 @pytest.mark.asyncio
@@ -435,7 +435,7 @@ async def test_outbid_needs_a_known_rival_above_our_bid(tmp_path):
     sniper, db, _ = await start(tmp_path, {}, [])
     bid_id = await db.record_bid(auction_id="a", card_id="card-x", title="x", rarity="L", is_shiny=False, amount=479,
                                  reference_price=1900, reason="revente", night=False, dry_run=False, status="placed",
-                                 end_at=datetime.now(timezone.utc) + timedelta(seconds=30))
+                                 end_at=datetime.now(UTC) + timedelta(seconds=30))
     sniper._leading["a"] = (bid_id, 479)
     # Meneur absent, puis lecture du marché plus ancienne que notre mise (rival affiché sous notre prix) : rien.
     for view in (sale("a", "x", 30, bid=479), sale("a", "x", 30, bid=436, bidder=RIVAL)):
@@ -450,8 +450,8 @@ async def test_outbid_needs_a_known_rival_above_our_bid(tmp_path):
 async def test_null_selling_count_does_not_crash_the_sniper(tmp_path):
     """Le 16/10 (site surchargé) : sellingCount absent, `None - int` faisait planter chaque passage pendant 5 min."""
     sniper, db, _ = await start(tmp_path, {}, [])
-    sniper._sale_slots = (datetime.now(timezone.utc), 5, None)
-    cap, room = await sniper._sale_capacity(datetime.now(timezone.utc))
+    sniper._sale_slots = (datetime.now(UTC), 5, None)
+    cap, room = await sniper._sale_capacity(datetime.now(UTC))
     assert (cap, room) == position_cap(sniper.settings, 5, 0)
     await db.close()
 

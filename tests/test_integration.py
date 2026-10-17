@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -26,7 +26,7 @@ ME = "11111111-1111-1111-1111-111111111111"
 
 async def seed_observed(db: Database, card_id: str, prices: list[int], rarity: str = "C") -> None:
     """Ventes déjà observées par le sniper pour cette carte, dans cette rareté."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.db.executemany(
         "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at) VALUES (?, ?, 't', ?, ?, ?)",
         [(f"seed-{card_id}-{i}", card_id, rarity, p, (now - timedelta(hours=i + 1)).isoformat())
@@ -119,7 +119,7 @@ async def test_dry_run_never_sends_writes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sniper_step_simulates_deal_bid(tmp_path):
-    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
+    end = (datetime.now(UTC) + timedelta(seconds=15)).isoformat()
     auction = {
         "id": "33333333-3333-3333-3333-333333333333",
         "card": {"id": "44444444-4444-4444-4444-444444444444", "wikipedia_title": "Ada Lovelace", "rarity": "C"},
@@ -157,15 +157,15 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
     assert "revente" in bid["reason"]
     await sniper.step()  # pas de seconde simulation sur la même enchère
     assert not any("simulée" in title for _, title in notifier.sent)  # pas de message par enchère
-    sniper._next_digest = datetime.now(timezone.utc)
-    sniper._flush_digest(datetime.now(timezone.utc))
+    sniper._next_digest = datetime.now(UTC)
+    sniper._flush_digest(datetime.now(UTC))
     assert ("INFO", "Sniper : enchères simulées (1)") in notifier.sent
     await db.close()
 
 
 @pytest.mark.asyncio
 async def test_sniper_respects_concurrent_bid_limit(tmp_path):
-    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
+    end = (datetime.now(UTC) + timedelta(seconds=15)).isoformat()
 
     def auction(i: int, base: int) -> dict:
         return {
@@ -176,7 +176,7 @@ async def test_sniper_respects_concurrent_bid_limit(tmp_path):
         }
 
     market = [auction(i, base) for i, base in enumerate([14, 3, 9, 5, 12, 2, 7])]
-    manual = {**auction(99, 1), "end_at": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()}
+    manual = {**auction(99, 1), "end_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat()}
 
     def handler(request):
         if request.url.path == "/api/wikibidous":
@@ -204,7 +204,7 @@ async def test_sniper_respects_concurrent_bid_limit(tmp_path):
     rows = await db._all("SELECT amount FROM bids WHERE status = 'simulated' ORDER BY amount")
     # 1 enchère manuelle déjà en cours -> 4 places ; les plus grosses marges (15 - mise) d'abord.
     assert [r["amount"] for r in rows] == [2, 3, 5, 7]
-    assert sniper.free_slots(datetime.now(timezone.utc)) == 0
+    assert sniper.free_slots(datetime.now(UTC)) == 0
     await db.close()
 
 
@@ -237,10 +237,10 @@ async def test_pack_opener_learns_stock_and_backs_off_when_empty(tmp_path):
     # Un seul message pour la session : 2 boosters, avec les 2 tirages remarquables (L shiny).
     titles = [t for _, t in notifier.sent if t != "Première réponse réelle : open_pack"]
     assert titles == ["Boosters ouverts : tirage remarquable !"]
-    assert (await db.report(datetime.now(timezone.utc) - timedelta(hours=1)))["boosters_ouverts"] == 2
+    assert (await db.report(datetime.now(UTC) - timedelta(hours=1)))["boosters_ouverts"] == 2
     # Stock vide sans date fraîche : la prochaine tentative attend une période complète.
     await opener._open_batch()
-    wait = seconds_until_stock(opener.state, 1, opener.period, datetime.now(timezone.utc))
+    wait = seconds_until_stock(opener.state, 1, opener.period, datetime.now(UTC))
     assert wait > 500
     await db.close()
 
@@ -315,7 +315,7 @@ async def test_listings_respect_concurrent_limit(tmp_path):
     await db.connect()
     api = WikiMastersAPI(client)
     inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for i in range(2):
         await db.schedule_listing(owned_card_id=f"o{i}", card_id="c", title=f"T{i}", rarity="C", base_amount=20,
                                   duration_minutes=120, post_at=now - timedelta(minutes=1),
@@ -351,7 +351,7 @@ async def test_null_selling_count_falls_back_to_posted_listings(tmp_path):
     await db.connect()
     api = WikiMastersAPI(client)
     inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.schedule_listing(owned_card_id="o1", card_id="c", title="T", rarity="C", base_amount=20,
                               duration_minutes=120, post_at=now, target_end=now + timedelta(hours=2), reason="test")
     await db._exec("UPDATE listings SET status = 'posted'")
@@ -368,7 +368,7 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
     state = {"ended": False}
 
     def auction(**kw) -> dict:
-        end = datetime.now(timezone.utc) + (timedelta(seconds=-120) if state["ended"] else timedelta(seconds=15))
+        end = datetime.now(UTC) + (timedelta(seconds=-120) if state["ended"] else timedelta(seconds=15))
         return {"id": auction_id, "card": {"id": "c1", "wikipedia_title": "Mème", "rarity": "C"},
                 "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
                 "end_at": end.isoformat(), "base_amount": 100, "current_bid": None, "current_bidder_id": None, **kw}
@@ -402,19 +402,19 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
     await sniper.step()                       # budget ~540, estimation 400 : mise 100 acceptée
     assert (await db.last_bid(auction_id))["status"] == "simulated"
     state["ended"] = True
-    await db._exec("UPDATE bids SET end_at = ?", ((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),))
+    await db._exec("UPDATE bids SET end_at = ?", ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
     await sniper._settle()                    # personne n'a misé : achat simulé remporté
     assert (await db.last_bid(auction_id))["status"] == "sim_won"
     assert (await db.positions_summary())["count"] == 1
 
     await inv.manage_positions()              # départ : achat 100 + moitié du bénéfice attendu (400) = 250
-    await db._exec("UPDATE listings SET post_at = ?", ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),))
+    await db._exec("UPDATE listings SET post_at = ?", ((datetime.now(UTC) - timedelta(minutes=1)).isoformat(),))
     await inv.post_due_listings()
     listing = (await db._all("SELECT * FROM listings"))[0]
     assert listing["status"] == "simulated" and listing["base_amount"] == 250 and listing["bid_id"]
-    await db._exec("UPDATE listings SET target_end = ?", ((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),))
+    await db._exec("UPDATE listings SET target_end = ?", ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
     await inv.settle_listings()               # enchère montée au prix du marché (400) : bénéfice +300
-    report = await db.report(datetime.now(timezone.utc) - timedelta(days=1))
+    report = await db.report(datetime.now(UTC) - timedelta(days=1))
     assert report["profit_simulated"] == 300 and report["positions_held"] == 0
     assert ("INFO", "Revente simulée") in notifier.sent
     await db.close()
@@ -424,11 +424,11 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
 async def test_ended_auctions_become_observed_sales(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     end = now - timedelta(minutes=1)
 
     def row(aid, bid, seen_before_end):
-        return {"auction_id": aid, "card_id": "gmmtv", "title": "GMMTV", "norm_title": "gmmtv", "rarity": "R",
+        return {"auction_id": aid, "card_id": "gmmtv", "title": "GMMTV", "rarity": "R",
                 "is_shiny": 0, "current_bid": bid, "base_amount": 34, "min_bid": 1, "end_at": end.isoformat(),
                 "seen_at": (end - timedelta(seconds=seen_before_end)).isoformat()}
 
@@ -442,7 +442,7 @@ async def test_ended_auctions_become_observed_sales(tmp_path):
 @pytest.mark.asyncio
 async def test_bids_unlimited_by_default(tmp_path):
     """Le site n'impose pas de limite aux mises : 94 enchères manuelles en cours ne bloquent rien."""
-    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
+    end = (datetime.now(UTC) + timedelta(seconds=15)).isoformat()
     calls = []
 
     def handler(request):
@@ -482,7 +482,7 @@ async def test_bids_unlimited_by_default(tmp_path):
 @pytest.mark.asyncio
 async def test_sniper_never_takes_cards_you_bid_on(tmp_path):
     """Tes mises manuelles (collections) : le bot ignore ces enchères et les autres ventes de la même carte."""
-    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
+    end = (datetime.now(UTC) + timedelta(seconds=15)).isoformat()
 
     def auction(aid: str, card: str) -> dict:
         return {"id": aid, "card": {"id": card, "wikipedia_title": card, "rarity": "C"},
@@ -563,7 +563,7 @@ async def test_first_rate_limit_alert_even_right_after_boot(tmp_path, monkeypatc
 @pytest.mark.asyncio
 async def test_daily_budget_applies_in_dry_run(tmp_path):
     """La simulation respecte SNIPER_DAILY_BUDGET et prévient s'il est sous le budget d'une position."""
-    end = (datetime.now(timezone.utc) + timedelta(seconds=15)).isoformat()
+    end = (datetime.now(UTC) + timedelta(seconds=15)).isoformat()
     market = [{"id": f"33333333-3333-3333-3333-{i:012d}", "card": {"id": f"c{i}", "wikipedia_title": f"C{i}",
                "rarity": "C"}, "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
                "end_at": end, "base_amount": 100, "current_bid": None, "current_bidder_id": None} for i in range(3)]
@@ -616,10 +616,10 @@ async def test_pack_sessions_every_15_to_90_minutes(tmp_path):
     opener = PackOpener(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     await opener.setup()
     assert 60 <= await opener.step() <= 600 and not opened  # pas d'ouverture dès le démarrage
-    opener._next_open = datetime.now(timezone.utc)
+    opener._next_open = datetime.now(UTC)
     await opener.step()
     assert len(opened) == 1
-    gap = (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60
+    gap = (opener._next_open - datetime.now(UTC)).total_seconds() / 60
     assert 14.9 <= gap <= 90
     assert await opener.step() > 0 and len(opened) == 1  # on attend la prochaine session
     await db.close()
@@ -629,7 +629,7 @@ async def test_pack_sessions_every_15_to_90_minutes(tmp_path):
 async def test_trend_alerts_cards_under_position_budget(tmp_path):
     from src.workers.wiki_trends import Trend, WikiTrends
 
-    end = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    end = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
 
     def sale(aid: str, title: str, current: int) -> dict:
         return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "C"},
@@ -673,7 +673,7 @@ async def test_google_trends_feed_to_market_signals(tmp_path):
     from src.workers.google_trends import GoogleTrends, parse_feed
 
     assert [(t.term, t.traffic) for t in parse_feed(GOOGLE_FEED)] == [("squid game saison 3", 1000), ("décharge", 200)]
-    end = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    end = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
     searches = []
 
     def handler(request):
@@ -701,7 +701,7 @@ async def test_google_trends_feed_to_market_signals(tmp_path):
     assert ("INFO", "Tendances Google : 1 carte(s) en vente") in notifier.sent  # pas « Décharge publique »
     await gt.step()
     assert searches == ["squid game saison 3", "décharge"]  # termes déjà vus : pas recherchés deux fois
-    assert await db.terms_stats("google", datetime.now(timezone.utc) - timedelta(hours=1)) == (2, 1)
+    assert await db.terms_stats("google", datetime.now(UTC) - timedelta(hours=1)) == (2, 1)
     await db.close()
 
 
@@ -709,7 +709,7 @@ async def test_google_trends_feed_to_market_signals(tmp_path):
 async def test_trend_alert_one_line_per_card(tmp_path):
     from src.workers.trend_common import scan_market
 
-    end = datetime.now(timezone.utc) + timedelta(hours=2)
+    end = datetime.now(UTC) + timedelta(hours=2)
 
     def sale(aid, current, hours):
         return {"id": aid, "card": {"id": "greta", "wikipedia_title": "Greta Thunberg", "rarity": "UR"},
@@ -752,9 +752,9 @@ async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path, capl
     await opener.setup()
     caplog.set_level(logging.INFO)
     for _ in range(3):  # trois échecs de suite : une seule alerte
-        opener._next_open = datetime.now(timezone.utc)
+        opener._next_open = datetime.now(UTC)
         await opener.step()
-        gap = (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60
+        gap = (opener._next_open - datetime.now(UTC)).total_seconds() / 60
         assert 4.9 <= gap <= 10
     assert [t for _, t in notifier.sent if "vérification" in t] == ["Paquets : vérification humaine demandée"]
     # Chaque nouvel essai dit pourquoi (le 15/10 au soir : une heure de « ouverture échouée » sans raison).
@@ -762,11 +762,11 @@ async def test_pack_retries_in_5_to_10_minutes_after_verification(tmp_path, capl
     assert len(retries) == 3 and all("(vérification humaine en attente)" in m for m in retries)
     assert opener.blocked and opener.blocked.startswith("vérification humaine en attente depuis ")
     state["verify"] = False
-    opener._next_open = datetime.now(timezone.utc)
+    opener._next_open = datetime.now(UTC)
     await opener.step()
     assert ("SUCCESS", "Paquets : vérification levée") in notifier.sent
     assert opener.blocked is None
-    assert (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60 >= 14.9  # retour au rythme normal
+    assert (opener._next_open - datetime.now(UTC)).total_seconds() / 60 >= 14.9  # retour au rythme normal
     await db.close()
 
 
@@ -791,7 +791,7 @@ async def test_human_checks_are_recorded_with_their_context(tmp_path):
     await opener.setup()
 
     async def attempt():
-        opener._next_open = datetime.now(timezone.utc)
+        opener._next_open = datetime.now(UTC)
         await opener.step()
 
     state["verify"] = True
@@ -838,10 +838,10 @@ async def test_empty_stock_refusal_keeps_pending_verification(tmp_path):
 
     async def attempt(answer):
         state["answer"] = answer
-        opener._next_open = datetime.now(timezone.utc)
+        opener._next_open = datetime.now(UTC)
         opener.state.last_regen_at = None  # stock supposé plein : la tentative part tout de suite
         await opener.step()
-        return (opener._next_open - datetime.now(timezone.utc)).total_seconds() / 60
+        return (opener._next_open - datetime.now(UTC)).total_seconds() / 60
 
     await attempt("verify")
     assert await attempt("empty") >= 14.9  # stock vide : rythme normal, pas un nouvel essai dans 5 à 10 min

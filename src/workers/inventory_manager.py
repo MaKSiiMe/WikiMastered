@@ -22,15 +22,14 @@ import random
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 
 from src.config import RARITY_RANK, Settings
 from src.core.client import ApiError, RateLimited, UncertainMutation
-from src.core.database import utcnow
-from src.core.models import DiscardResult, MyBids, OwnedCard
+from src.core.models import Auction, DiscardResult, MyBids, OwnedCard, parse_items
 from src.core.notifier import Topic
 from src.core.pricing import ANY, Quote
-from src.core.timeutils import local_dt, now_local, random_in_window
+from src.core.timeutils import local_dt, now_local, random_in_window, utcnow
 from src.workers.base import Context, Worker
 
 INVENTORY_PRICE_MAX_AGE = timedelta(days=3)  # la cote d'un doublon bouge peu
@@ -46,7 +45,7 @@ POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la ca
 POSITION_COPY_RETRY = timedelta(minutes=10)
 # Introuvable N fois de suite (~2 h) : la carte a quitté la collection (vendue ou échangée à la main ?).
 POSITION_MAX_COPY_MISSES = 12
-_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+_EPOCH = datetime.min.replace(tzinfo=UTC)
 SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une revente simulée
 
 
@@ -167,7 +166,6 @@ def achievement_guard(count: int, n_discard: int, milestones: list[int], margin:
 
 
 def parse_selling(mine: MyBids) -> list:
-    from src.core.models import Auction, parse_items
     return parse_items(Auction, mine.selling, label="vente")
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -28,7 +28,7 @@ def test_simulate_and_live_writes_groups():
 def test_positions_live_only_during_sniper_live_hours():
     # 17/10 : le jour, le chasseur de l'extension achète les L depuis le navigateur ; le bot les simule.
     s = Settings(_env_file=None, dry_run=False, sniper_live_start="23:00", sniper_live_end="09:00")
-    day, night = datetime(2026, 10, 17, 12, tzinfo=timezone.utc), datetime(2026, 10, 17, 23, tzinfo=timezone.utc)
+    day, night = datetime(2026, 10, 17, 12, tzinfo=UTC), datetime(2026, 10, 17, 23, tzinfo=UTC)
     assert not s.sniper_live_now(day) and s.sniper_live_now(night)  # 14:00 et 01:00 à Paris
     assert s.mode_label == "RÉEL, positions réelles de 23:00 à 09:00"
     assert s.is_live("place_bid") == s.sniper_live_now() and s.is_live("collection_bid")
@@ -37,7 +37,7 @@ def test_positions_live_only_during_sniper_live_hours():
 
 @pytest.mark.asyncio
 async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def sale(aid, title, base):
         return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "R"},
@@ -137,7 +137,7 @@ async def test_duplicates_fill_free_slots_during_the_day(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_simulated_positions_never_block_real_collection_bids(tmp_path, caplog):
     """Des positions simulées qui dépassent le solde bloquent les mises simulées, pas les vraies."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def sale(aid, title, base):
         return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "R"},

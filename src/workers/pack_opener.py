@@ -18,15 +18,14 @@ from __future__ import annotations
 import asyncio
 import random
 from dataclasses import asdict, dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
 from src.config import RARITY_RANK
-from src.core.database import utcnow
-from src.core.models import Card, PackOpenResult
 from src.core import timeutils
+from src.core.models import Card, PackOpenResult
 from src.core.notifier import Topic
-from src.core.timeutils import next_local
+from src.core.timeutils import next_local, utcnow
 from src.workers.base import Worker
 
 STATE_KEY = "packs"
@@ -155,7 +154,7 @@ class PackOpener(Worker):
 
             if pack.rate_limit_daily:
                 resume = next_local(time(0, 0)) + timedelta(minutes=random.uniform(5, 30))
-                self.state.paused_until = resume.astimezone(timezone.utc)
+                self.state.paused_until = resume.astimezone(UTC)
                 self.notifier.warning("Paquets : limite quotidienne atteinte", f"Reprise vers {resume:%d/%m %H:%M}.",
                                       live=self.live, important=False)  # se règle seul
                 await self._save()

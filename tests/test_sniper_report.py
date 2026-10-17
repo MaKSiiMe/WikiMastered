@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -14,7 +14,7 @@ from src.sniper_report import build, render
 async def test_night_report_counts_every_bid_and_its_money(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async def bid(aid, title, amount, status, *, ref=None, ceiling=None, dry_run=False, reason="revente",
                   **fields):
@@ -69,7 +69,7 @@ async def test_real_bid_lost_at_our_own_price_is_flagged_not_counted(tmp_path):
     """17/10 : Shakira « perdue » 479 → 479. Incohérent pour une mise réelle : signalé, hors gain non acquis."""
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.record_bid(auction_id="a1", card_id="c1", title="Shakira", rarity="L", is_shiny=False, amount=479,
                         reference_price=1947, reason="revente", night=False, dry_run=False, status="lost",
                         end_at=now, ceiling=500)

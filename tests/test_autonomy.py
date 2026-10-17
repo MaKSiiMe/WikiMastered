@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -19,7 +19,7 @@ SELLER = "22222222-2222-2222-2222-222222222222"
 
 
 def auction(aid: str, card: str, **kw) -> dict:
-    end = datetime.now(timezone.utc) + timedelta(hours=1)
+    end = datetime.now(UTC) + timedelta(hours=1)
     return {"id": aid, "card": {"id": card, "wikipedia_title": card, "rarity": "C"}, "seller_id": SELLER,
             "status": "active", "end_at": end.isoformat(), "base_amount": 100, "current_bid": None,
             "current_bidder_id": None, **kw}
@@ -36,8 +36,8 @@ async def setup_ctx(tmp_path, handler, **overrides):
 async def uncertain_bid(db: Database, aid: str, card: str, amount: int) -> None:
     await db.record_bid(auction_id=aid, card_id=card, title=card, rarity="C", is_shiny=False, amount=amount,
                         reference_price=400, reason="revente ~400 WB", night=False, dry_run=False,
-                        status="uncertain", end_at=datetime.now(timezone.utc) + timedelta(hours=1))
-    await db._exec("UPDATE bids SET placed_at = ?", ((datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),))
+                        status="uncertain", end_at=datetime.now(UTC) + timedelta(hours=1))
+    await db._exec("UPDATE bids SET placed_at = ?", ((datetime.now(UTC) - timedelta(minutes=2)).isoformat(),))
 
 
 @pytest.mark.asyncio
@@ -83,7 +83,7 @@ async def test_uncertain_listing_found_or_reprogrammed(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     ctx, db, notifier = await setup_ctx(tmp_path, handler, dry_run=False)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for owned, card in (("o1", "c1"), ("o2", "c2")):
         lid = await db.schedule_listing(owned_card_id=owned, card_id=card, title=card, rarity="C", base_amount=400,
                                         duration_minutes=360, post_at=now, target_end=now + timedelta(hours=6),
@@ -105,8 +105,8 @@ async def test_position_kept_after_repeated_listing_failures(tmp_path):
     ctx, db, notifier = await setup_ctx(tmp_path, handler)
     bid = await db.record_bid(auction_id="a1", card_id="c1", title="Mème", rarity="C", is_shiny=False, amount=100,
                               reference_price=400, reason="revente", night=False, dry_run=True, status="sim_won",
-                              end_at=datetime.now(timezone.utc))
-    now = datetime.now(timezone.utc)
+                              end_at=datetime.now(UTC))
+    now = datetime.now(UTC)
     for _ in range(POSITION_MAX_LIST_FAILURES):
         lid = await db.schedule_listing(owned_card_id=f"sim-{bid}", card_id="c1", title="Mème", rarity="C",
                                         base_amount=400, duration_minutes=360, post_at=now, target_end=now,

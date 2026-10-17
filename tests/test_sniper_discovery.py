@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -23,7 +23,7 @@ SELLER = "22222222-2222-2222-2222-222222222222"
 def sale(aid: str, title: str, rarity: str, seconds: float, base: int = 20, bid: int | None = None) -> dict:
     return {"id": aid, "card": {"id": f"card-{aid}", "wikipedia_title": title, "rarity": rarity},
             "seller_id": SELLER, "status": "active",
-            "end_at": (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(),
+            "end_at": (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat(),
             "base_amount": base, "current_bid": bid, "current_bidder_id": None}
 
 
@@ -74,7 +74,7 @@ async def test_sniper_spots_sales_early_then_rereads_them_to_bid(tmp_path):
     assert not await db._all("SELECT * FROM bids")
 
     # Les deux ventes entrent dans la fenêtre de mise : chacune est relue sur sa page, puis misée.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for aid in ("u1", "d1"):
         market[aid]["end_at"] = (now + timedelta(seconds=16)).isoformat()
         target = sniper._targets[aid]
@@ -114,7 +114,7 @@ async def test_missed_new_sales_are_reported(tmp_path, caplog):
     api = WikiMastersAPI(client)
     sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     await sniper.setup()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     page = [Auction.model_validate(sale(f"a{i}", "T", "UR", 3600)) for i in range(50)]
     sniper._check_gap("UR", page, True, now)
     sniper._check_gap("UR", page[10:] + page[:10], True, now)  # recoupement : rien de manqué
@@ -133,7 +133,7 @@ async def test_missed_new_sales_are_reported(tmp_path, caplog):
 async def test_bid_follows_the_reread_without_other_requests(tmp_path):
     """Solde, places de vente et cote sont lus avant de relire l'enchère : la mise part juste après la relecture.
     Une carte de collection manquante passe avant une revente dans la fenêtre de mise."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     market = {"u1": sale("u1", "Jean Racine", "UR", 14), "d1": sale("d1", "11 décembre", "SR", 16, base=10)}
     calls = []
 
@@ -188,7 +188,7 @@ async def test_unread_collection_target_is_logged(tmp_path, caplog):
     api = WikiMastersAPI(client)
     sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
     await sniper.setup()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     sniper._targets["s1"] = Target(Auction.model_validate(sale("s1", "11 septembre", "UR", 5)), now)
     sniper._prune(now)
     assert any("11 septembre" in r.message and "pas relue à temps" in r.message for r in caplog.records)
@@ -219,7 +219,7 @@ def _bare_handler(calls, market):
 async def test_collection_guard_holds_slow_work(tmp_path):
     """Une carte de collection entre dans sa fenêtre de mise dans 5 s : la revente déjà dans la sienne attend,
     le sniper se réveille à l'entrée de la carte (15/10 : « 7 octobre à 10 WB … pas relue à temps »)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     market = {"u1": sale("u1", "Jean Racine", "UR", 15), "d1": sale("d1", "7 octobre", "UR", 25, base=10)}
     calls = []
     client, notifier = make_client(tmp_path, _bare_handler(calls, market), sniper_resale_rarities=["UR", "L"],
@@ -242,7 +242,7 @@ async def test_collection_guard_holds_slow_work(tmp_path):
 
 @pytest.mark.asyncio
 async def test_late_discovery_goes_before_resale_rereads(tmp_path):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     market = {"u1": sale("u1", "Jean Racine", "UR", 15)}
     calls = []
     client, notifier = make_client(tmp_path, _bare_handler(calls, market), sniper_resale_rarities=["UR"])

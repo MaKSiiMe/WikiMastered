@@ -22,7 +22,7 @@ import logging
 import signal
 import sys
 from collections.abc import Awaitable, Callable
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta
 from logging.handlers import RotatingFileHandler
 
 from src.config import RARITY_RANK, Settings, get_settings
@@ -33,7 +33,7 @@ from src.core.endpoints import Endpoints
 from src.core.models import MarketPage
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
-from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until
+from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
 from src.recap import recap_loop
 from src.sniper_report import sniper_report
 from src.workers.auction_sniper import AuctionSniper
@@ -103,10 +103,10 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         extra.append(summary_line(await ctx.db.kv_get("collection"), targets(ctx)))
     if ctx.settings.enable_google_trends or ctx.settings.enable_wiki_trends:
-        extra.append(await day_line(ctx.db, datetime.now(timezone.utc)))
+        extra.append(await day_line(ctx.db, utcnow()))
     sections += [as_section(text) for text in extra]
     if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine (détail : commande trends)
-        text = await trends_text(ctx.db, 7, await min_profit(ctx), datetime.now(timezone.utc), detailed=False)
+        text = await trends_text(ctx.db, 7, await min_profit(ctx), utcnow(), detailed=False)
         sections.append(("Tendances de la semaine", text))
     if send:
         ctx.notifier.info(f"Bilan du {now_local():%d/%m}", description, topic=Topic.REPORT, sections=sections)
@@ -201,7 +201,7 @@ async def report_loop(ctx: Context) -> None:
         except Exception:  # noqa: BLE001 - le bot continue sans bilan
             log.exception("Bilan quotidien impossible")
         try:
-            removed = await ctx.db.purge(datetime.now(timezone.utc))
+            removed = await ctx.db.purge(utcnow())
             log.info("Entretien de la base : %s", ", ".join(f"{t} -{n}" for t, n in removed.items() if n) or "rien")
         except Exception:  # noqa: BLE001
             log.exception("Entretien de la base impossible")
@@ -218,7 +218,7 @@ async def sniper_report_loop(ctx: Context) -> None:
 
 
 async def send_sniper_report(ctx: Context, hours: float, *, send: bool = True) -> str:
-    until = datetime.now(timezone.utc)
+    until = utcnow()
     since = until - timedelta(hours=hours)
     if send:
         title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.sale_fee_pct)
@@ -368,7 +368,7 @@ async def run_bot(settings: Settings) -> None:
                           important=True)
 
         # Chaque tâche est supervisée à part : si l'une plante, elle est relancée et les autres continuent.
-        started_at = datetime.now(timezone.utc)
+        started_at = utcnow()
         jobs: list[tuple[str, Callable[[], Awaitable[None]]]] = [(w.name, w.run) for w in workers]
         jobs += [("report", lambda: report_loop(ctx)), ("heartbeat", lambda: heartbeat(ctx))]
         if settings.recap_interval_hours > 0:
@@ -408,7 +408,7 @@ async def reset_simulation(settings: Settings, apply: bool) -> None:
 async def packs_status(settings: Settings, hours: int) -> None:
     """Paquets ouverts ces dernières heures (lecture de la base, aucune requête)."""
     async with build_context(settings) as ctx:
-        rows = await ctx.db.recent_pulls(datetime.now(timezone.utc) - timedelta(hours=hours))
+        rows = await ctx.db.recent_pulls(utcnow() - timedelta(hours=hours))
         if not settings.is_live("open_pack"):
             print("DRY_RUN : les paquets ne sont PAS ouverts. Ajoute LIVE_WRITES=open_pack pour les ouvrir quand même.")
         from src.workers.pack_opener import checks_report
@@ -440,7 +440,7 @@ async def collection_status(settings: Settings) -> None:
             print(f"Ensemble(s) inconnu(s) : {state['unknown_sets']} — valeur attendue : jours")
         by_key = targets(ctx)
         from src.workers.collection import progress_lines
-        print("\n".join(progress_lines(state, by_key, datetime.now(timezone.utc), days=30)))
+        print("\n".join(progress_lines(state, by_key, utcnow(), days=30)))
         print("Manquantes : " + (", ".join(by_key.get(k, k) for k in state["missing"]) or "aucune"))
         if state["unmatched"]:
             print("Titres trouvés mais non reconnus (format différent ?) : " + ", ".join(state["unmatched"]))
@@ -462,7 +462,7 @@ async def market_status(settings: Settings, pages: int, sort: str, rarity: str) 
                 await asyncio.sleep(3)
             resp = await ctx.client._send(ctx.client.endpoints.build("market_page", page=page, sort=sort,
                                                                      rarity=rarity))
-            now = datetime.now(timezone.utc)
+            now = utcnow()
             cache = {k: v for k, v in resp.headers.items()
                      if k.lower() in ("age", "cache-control", "date", "etag", "last-modified", "expires")
                      or "cache" in k.lower()}
@@ -554,7 +554,7 @@ def main(argv: list[str] | None = None) -> None:
     elif command == "trends":
         async def _trends() -> None:
             async with build_context(settings) as ctx:
-                print(await trends_text(ctx.db, args.days, await min_profit(ctx), datetime.now(timezone.utc)))
+                print(await trends_text(ctx.db, args.days, await min_profit(ctx), utcnow()))
         asyncio.run(_trends())
     elif command == "reset-simulation":
         asyncio.run(reset_simulation(settings, args.apply))

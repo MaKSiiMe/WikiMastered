@@ -22,17 +22,16 @@ cartes du site ; seuls les titres exacts comptent (pas « 14 août en sport » n
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timedelta
 
-import logging
-
 from src.core import timeutils
 from src.core.client import ApiError
-from src.core.database import utcnow
 from src.core.models import OwnedCard
 from src.core.notifier import Topic
 from src.core.text import normalize_title
+from src.core.timeutils import utcnow
 from src.workers.base import Context, Worker
 
 log = logging.getLogger(__name__)

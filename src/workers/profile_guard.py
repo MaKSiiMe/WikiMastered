@@ -15,8 +15,8 @@ from datetime import datetime
 from typing import Any
 
 from src.core import timeutils
-from src.core.database import utcnow
 from src.core.notifier import Topic
+from src.core.timeutils import utcnow
 from src.workers.base import Worker
 
 KV_KEY = "profile_guard"  # dernières valeurs vues : une sanction déjà connue n'arrête pas le bot deux fois

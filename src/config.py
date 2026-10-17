@@ -7,7 +7,7 @@ du JSON (`{"SR": 15}`). Les heures s'écrivent `HH:MM` (heure de Paris).
 from __future__ import annotations
 
 import json
-from datetime import datetime, time, timezone
+from datetime import datetime, time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_origin
@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal, get_origin
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from src.core.timeutils import in_window
+from src.core.timeutils import in_window, utcnow
 
 RARITIES: tuple[str, ...] = ("C", "PC", "R", "SR", "UR", "L")
 RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
@@ -325,7 +325,7 @@ class Settings(BaseSettings):
         """Heures des mises réelles des positions (SNIPER_LIVE_START / END) ; sans réglage, toujours."""
         if self.sniper_live_start is None or self.sniper_live_end is None:
             return True
-        return in_window(now or datetime.now(timezone.utc), self.sniper_live_start, self.sniper_live_end)
+        return in_window(now or utcnow(), self.sniper_live_start, self.sniper_live_end)
 
     @property
     def mode_label(self) -> str:
