@@ -25,6 +25,16 @@ def test_simulate_and_live_writes_groups():
     assert Settings(_env_file=None, collection_sets='"jours"').collection_sets == ["jours"]  # guillemets retirés
 
 
+def test_positions_live_only_during_sniper_live_hours():
+    # 17/10 : le jour, le chasseur de l'extension achète les L depuis le navigateur ; le bot les simule.
+    s = Settings(_env_file=None, dry_run=False, sniper_live_start="23:00", sniper_live_end="09:00")
+    day, night = datetime(2026, 10, 17, 12, tzinfo=timezone.utc), datetime(2026, 10, 17, 23, tzinfo=timezone.utc)
+    assert not s.sniper_live_now(day) and s.sniper_live_now(night)  # 14:00 et 01:00 à Paris
+    assert s.mode_label == "RÉEL, positions réelles de 23:00 à 09:00"
+    assert s.is_live("place_bid") == s.sniper_live_now() and s.is_live("collection_bid")
+    assert Settings(_env_file=None, dry_run=False).sniper_live_now(day)  # sans réglage : toujours réelles
+
+
 @pytest.mark.asyncio
 async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
     now = datetime.now(timezone.utc)

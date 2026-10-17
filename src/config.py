@@ -7,13 +7,15 @@ du JSON (`{"SR": 15}`). Les heures s'écrivent `HH:MM` (heure de Paris).
 from __future__ import annotations
 
 import json
-from datetime import time
+from datetime import datetime, time, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_origin
 
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from src.core.timeutils import in_window
 
 RARITIES: tuple[str, ...] = ("C", "PC", "R", "SR", "UR", "L")
 RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
@@ -165,6 +167,11 @@ class Settings(BaseSettings):
     sniper_min_balance_reserve: int = 50
     sniper_prefetch_seconds: float = 8.0
     sniper_allow_rebid: bool = True
+    # Mises réelles des positions seulement entre ces heures (Paris) ; en dehors, simulées (comparaison), la
+    # collection reste réelle. Ex. 23:00-09:00 : le jour, le chasseur de l'extension achète les L depuis le
+    # navigateur, où la vérification anti-bot passe seule. Vide = toujours réelles.
+    sniper_live_start: time | None = None
+    sniper_live_end: time | None = None
     # Mise d'une position : la mise minimale + cette part de l'écart jusqu'à notre plafond ; surenchérie, la
     # mise suivante va droit au plafond. Le 17/10 : 2 L réelles gagnées sur 29, les rivaux surenchérissent d'un
     # pas (+10 %) en 20-30 s, et chaque mise use le quota de la vérification anti-bot (~9-10 mises). 0 = minimum.
@@ -309,14 +316,25 @@ class Settings(BaseSettings):
     def is_live(self, endpoint: str) -> bool:
         """Cette écriture part-elle vraiment au site ? DRY_RUN, sauf LIVE_WRITES ; réel, sauf SIMULATE."""
         if self.dry_run:
-            return endpoint in expand_writes(self.live_writes)
-        return endpoint not in expand_writes(self.simulate)
+            live = endpoint in expand_writes(self.live_writes)
+        else:
+            live = endpoint not in expand_writes(self.simulate)
+        return live and (endpoint != "place_bid" or self.sniper_live_now())
+
+    def sniper_live_now(self, now: datetime | None = None) -> bool:
+        """Heures des mises réelles des positions (SNIPER_LIVE_START / END) ; sans réglage, toujours."""
+        if self.sniper_live_start is None or self.sniper_live_end is None:
+            return True
+        return in_window(now or datetime.now(timezone.utc), self.sniper_live_start, self.sniper_live_end)
 
     @property
     def mode_label(self) -> str:
         if self.dry_run:
             return f"DRY RUN (réel : {', '.join(self.live_writes)})" if self.live_writes else "DRY RUN (aucune écriture)"
-        return f"RÉEL (simulé : {', '.join(self.simulate)})" if self.simulate else "RÉEL"
+        label = f"RÉEL (simulé : {', '.join(self.simulate)})" if self.simulate else "RÉEL"
+        if self.sniper_live_start is not None and self.sniper_live_end is not None:
+            label += f", positions réelles de {self.sniper_live_start:%H:%M} à {self.sniper_live_end:%H:%M}"
+        return label
 
     @property
     def session_file(self) -> Path:
