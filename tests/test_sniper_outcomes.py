@@ -11,7 +11,7 @@ from src.core.api import WikiMastersAPI
 from src.core.database import Database
 from src.core.pricing import PriceService
 from src.core.models import Auction
-from src.workers.auction_sniper import AuctionSniper, Target, position_cap
+from src.workers.auction_sniper import AuctionSniper, Decision, Target, position_cap
 from src.workers.base import Context
 from src.workers.collection import progress_lines
 from tests.test_integration import make_client, seed_observed
@@ -135,6 +135,31 @@ async def test_antibot_alert_is_renewed_every_hour_while_pending(tmp_path):
     market["d"] = sale("d", "15 octobre", 15)
     await sniper.step()  # pas de nouveau rappel avant une heure
     assert notifier.sent.count(reminder) == 1
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_collection_bids_capped_per_verification(tmp_path):
+    # Le 17/10 : chaque vérification laisse passer 9-10 mises ; la collection n'en prend que 2, le reste va aux L.
+    state = {"owned": [], "missing": ["14 octobre", "15 octobre", "16 octobre"], "total": 366}
+    ok = (200, {"current_bid": 10, "bidder_balance": 2990})
+    market = {"a": sale("a", "14 octobre", 15)}
+    replies = [ok, ok]
+    sniper, db, _ = await start(tmp_path, market, replies, state)
+    await sniper.step()
+    market["b"] = sale("b", "15 octobre", 15)
+    await sniper.step()
+    assert not replies and sniper._collection_since_check == 2
+
+    market["c"] = sale("c", "16 octobre", 15)
+    await sniper.step()  # pas de requête : la mise aurait levé une erreur (plus de réponse prévue)
+    assert "collection : quota de la vérification gardé pour les L 1" in sniper.recap()[1]
+
+    # Nouvelle vérification demandée : le quota de la collection repart à zéro.
+    replies.append((400, {"error": "Vérification anti-bot requise."}))
+    await sniper._bid(Auction.model_validate(sale("d", "16 octobre", 15)),
+                      Decision(10, 20, "collection : carte manquante ≤ 20", None), sniper_params(sniper.api.client))
+    assert sniper._collection_since_check == 0 and sniper.blocked
     await db.close()
 
 

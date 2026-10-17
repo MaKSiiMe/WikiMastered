@@ -65,6 +65,7 @@ ANTIBOT_HINT = "anti-bot"
 ANTIBOT_RETRY = timedelta(minutes=5)
 ANTIBOT_REMIND = timedelta(hours=1)  # alerte renouvelée tant que la vérification n'est pas faite
 PENDING_ANTIBOT = "pas tentée : vérification anti-bot en attente"
+QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -278,6 +279,7 @@ class AuctionSniper(Worker):
         self._antibot_retry_at = _EPOCH  # prochaine mise réelle permise tant que la vérification attend
         self._antibot_remind_at = _EPOCH  # prochain rappel d'alerte tant que la vérification attend
         self._antibot_missed = 0  # mises non placées depuis le début du blocage
+        self._collection_since_check = 0  # mises réelles de collection depuis la dernière vérification
         self._buys_left: int | None = None  # achats réels encore permis (SNIPER_MAX_BUYS), None = illimité
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
@@ -642,6 +644,9 @@ class AuctionSniper(Worker):
             if not await self._affordable(decision, params, portfolio):
                 self._outcome(auction, "solde ou budget du jour insuffisant")
                 continue
+            if self._check_quota_spent(decision):
+                self._outcome(auction, QUOTA_FOR_L)
+                continue
             if self._antibot_pending(decision):
                 self.log.debug("%s : vérification anti-bot en attente, mise pas tentée", auction.title)
                 self._outcome(auction, PENDING_ANTIBOT)
@@ -891,6 +896,13 @@ class AuctionSniper(Worker):
         if self._outcomes.get(auction.id) not in PLACED:
             self._outcomes[auction.id] = outcome
 
+    def _check_quota_spent(self, decision: Decision) -> bool:
+        """Mise de collection à ne pas faire : sa part des mises permises par la vérification est prise.
+        Le 17/10, chaque vérification a laissé passer 9 ou 10 mises, puis le site l'a redemandée."""
+        cap = self.settings.collection_bids_per_check
+        return (decision.collection and cap > 0 and self.settings.is_live("collection_bid")
+                and self._collection_since_check >= cap)
+
     def _antibot_pending(self, decision: Decision) -> bool:
         """Mise réelle à ne pas tenter : la vérification anti-bot attend et la dernière tentative est trop récente."""
         live = self.settings.is_live("collection_bid" if decision.collection else "place_bid")
@@ -998,6 +1010,8 @@ class AuctionSniper(Worker):
             if self._antibot_since:
                 self._antibot_since, self._antibot_missed = None, 0
                 self.notifier.success("Sniper : vérification levée", "Les mises passent de nouveau.")
+            if decision.collection and live:
+                self._collection_since_check += 1
             self._engaged[auction.id] = auction.end_at
             self._bot_engaged.add(auction.id)
             self._report_bid("Enchère placée", f"{summary}, solde {confirmed.bidder_balance}")
@@ -1015,6 +1029,7 @@ class AuctionSniper(Worker):
             else:
                 self._antibot_since = utcnow()
                 self._antibot_remind_at = self._antibot_since + ANTIBOT_REMIND
+                self._collection_since_check = 0  # la prochaine vérification ouvre un nouveau quota
                 # Le 16/10, les paquets s'ouvraient encore pendant que les mises étaient refusées : la page
                 # Paquets ne la propose pas forcément.
                 self.notifier.critical(
