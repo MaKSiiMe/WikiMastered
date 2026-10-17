@@ -527,13 +527,12 @@ class WikiMastersClient:
 
     async def _send(self, req: BuiltRequest, urgent: bool = False) -> httpx.Response:
         await self._acquire_slot(urgent)
-        resp = await self._http.request(
+        return await self._http.request(
             req.method, req.url,
             params=req.params or None,
             json=req.json,
             headers=req.headers or None,
         )
-        return resp
 
     def _backoff(self, reason: str, *, limited: bool, retry_after: float = 0.0) -> float:
         self._failures = min(self._failures + 1, 10)

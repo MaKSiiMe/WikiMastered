@@ -53,12 +53,11 @@ def health(worker: Worker, now: datetime, session_ok: bool) -> tuple[str, str | 
 def activity(name: str, stats: dict[str, int]) -> list[str]:
     """Ce que montre la base pour ce worker depuis le dernier récap."""
     if name == "sniper":
-        lines = [f"Mises : {stats['bids_real']} réelle(s), {stats['bids_sim']} simulée(s) · "
+        return [f"Mises : {stats['bids_real']} réelle(s), {stats['bids_sim']} simulée(s) · "
                  f"collection {stats['bids_collection']}",
                  f"Gagnées : {stats['won']} position(s), {stats['won_collection']} carte(s) de collection · "
                  f"{stats['held']} position(s) détenue(s)" +
                  (f" (dont {stats['held_real']} réelle(s))" if stats["held_real"] != stats["held"] else "")]
-        return lines
     if name == "inventory":
         lines = [f"Mises en vente : {stats['posted']} · vendues {stats['sold']} ({stats['sold_wb']} WB) · "
                  f"sans acheteur {stats['unsold']}"]

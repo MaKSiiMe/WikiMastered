@@ -26,6 +26,7 @@ import logging
 import signal
 import statistics as st
 import sys
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta
 from logging.handlers import RotatingFileHandler
@@ -286,7 +287,7 @@ def hours_text(rows, rarities: list[str]) -> str:
              f"exclues), par heure de fin (Paris). Seules les enchères vendues sont vues : le volume dépend aussi de "
              f"l'offre, pas seulement de l'affluence. « ? » : moins de {HOURS_MIN_SALES} ventes."]
     for rarity in sorted(rarities, key=lambda r: -RARITY_RANK.get(r, -1)):
-        sales = [(r, e) for r, e in zip(rows, ends) if r["rarity"] == rarity]
+        sales = [(r, e) for r, e in zip(rows, ends, strict=True) if r["rarity"] == rarity]
         if not sales:
             continue
         lines.append(f"\n{rarity} : {len(sales)} ventes")
@@ -418,9 +419,7 @@ async def packs_status(ctx: Context, hours: int) -> None:
     if not rows:
         print(f"Aucune carte tirée ces {hours} dernières heures.")
         return
-    by_rarity: dict[str, int] = {}
-    for r in rows:
-        by_rarity[r["rarity"] or "?"] = by_rarity.get(r["rarity"] or "?", 0) + 1
+    by_rarity = Counter(r["rarity"] or "?" for r in rows)
     last = datetime.fromisoformat(rows[0]["opened_at"]).astimezone()
     print(f"{len(rows)} carte(s) tirée(s) en {hours} h, dernière ouverture le {last:%d/%m à %H:%M}")
     print("Par rareté : " + " ".join(f"{k}:{v}" for k, v in sorted(by_rarity.items())))
@@ -471,9 +470,7 @@ async def market_status(ctx: Context, pages: int, sort: str, rarity: str) -> Non
         auctions, more = result.items(), result.hasMore
         print(f"page {page} : en-têtes {cache}")
         left = sorted(a.seconds_left(now) for a in auctions)
-        statuses: dict[str, int] = {}
-        for a in auctions:
-            statuses[a.status] = statuses.get(a.status, 0) + 1
+        statuses = dict(Counter(a.status for a in auctions))
         span = f"fins de {left[0]:+.0f} s à {left[-1]:+.0f} s" if left else "vide"
         print(f"page {page} : {len(auctions)} enchères, {sum(x <= 0 for x in left)} terminées, "
               f"{sum(0 < x <= 60 for x in left)} finissent dans la minute, {span}, statuts {statuses}, "

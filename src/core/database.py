@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -773,9 +774,7 @@ class Database:
         _collection = lambda b: (b["reason"] or "").startswith("collection")  # noqa: E731
         dup = await self._one("SELECT COUNT(*) AS n, COALESCE(SUM(sale_price), 0) AS wb FROM listings "
                               "WHERE bid_id IS NULL AND status = 'sold' AND settled_at >= ?", (s,))
-        by_rarity: dict[str, int] = {}
-        for p in pulls:
-            by_rarity[p["rarity"] or "?"] = by_rarity.get(p["rarity"] or "?", 0) + 1
+        by_rarity = dict(Counter(p["rarity"] or "?" for p in pulls))
         packs = await self._one("SELECT COUNT(*) AS n FROM pack_opens WHERE opened_at >= ?", (s,))
         return {
             "boosters_ouverts": packs["n"] if packs else 0,

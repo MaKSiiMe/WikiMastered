@@ -10,6 +10,7 @@ Un signal est « gagnant » si le bénéfice atteint le bénéfice exigé d'une 
 from __future__ import annotations
 
 import statistics
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
@@ -170,10 +171,9 @@ async def _by_day(db: Database, since: datetime, now: datetime, min_profit: int)
     results = await evaluate_signals(db, since, now)
     if not results:
         return []
-    terms: dict[date, int] = {}
-    for row in await db.terms_since("google", since):
-        day = parse_iso(row["first_seen"]).astimezone(timeutils.PARIS).date()  # type: ignore[union-attr]
-        terms[day] = terms.get(day, 0) + 1
+    rows = await db.terms_since("google", since)
+    terms = Counter(parse_iso(r["first_seen"]).astimezone(timeutils.PARIS).date()  # type: ignore[union-attr]
+                    for r in rows)
     lines = ["", "**Jour par jour** (cartes · signaux · mesurés · bénéfice médian · gagnants)"]
     for day in sorted({r.day for r in results}):
         cells = []

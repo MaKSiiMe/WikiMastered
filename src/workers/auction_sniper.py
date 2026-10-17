@@ -25,8 +25,10 @@ Une vente intéressante devient une cible ; dans sa fenêtre de mise, l'enchère
 
 from __future__ import annotations
 
+import contextlib
 import math
 import random
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 
@@ -538,10 +540,8 @@ class AuctionSniper(Worker):
         Pas de cote pour une carte de collection : sa mise n'en dépend pas, et la route des cotes est lente."""
         await self.portfolio(now)
         if auction.rarity in self._resale_rarities and not self._wanted(auction):
-            try:
+            with contextlib.suppress(RateLimited, ApiError):
                 await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
-            except (RateLimited, ApiError):
-                pass
 
     async def _refresh_target(self, target: Target) -> None:
         aid = target.auction.id
@@ -587,10 +587,8 @@ class AuctionSniper(Worker):
         for a in soon:
             if await self.ctx.prices.is_cached(a.catalog_id):
                 continue
-            try:
+            with contextlib.suppress(RateLimited, ApiError):
                 await self.ctx.prices.quote(a.catalog_id, a.rarity, wait=False, shiny=a.shiny)
-            except (RateLimited, ApiError):
-                pass
             return True
         return False
 
@@ -680,7 +678,7 @@ class AuctionSniper(Worker):
         """Sniper de test : simule les achats que le sniper réel n'a pas faits (plafonds du test), avec ses propres
         limites, pour continuer à mesurer la stratégie. Jamais une carte de collection ni une vente déjà misée."""
         s = self.settings
-        portfolio = await self.shadow_portfolio(now)
+        portfolio = await self.shadow_portfolio()
         shadow = replace(params, max_bid=s.sniper_shadow_max_bid)
         candidates: list[tuple[float, Auction, Decision]] = []
         for auction in auctions:
@@ -730,7 +728,7 @@ class AuctionSniper(Worker):
             max_positions=cap, sale_room=room,
         )
 
-    async def shadow_portfolio(self, now: datetime) -> Portfolio:
+    async def shadow_portfolio(self) -> Portfolio:
         """Positions du sniper de test : simulées seulement, avec leur propre plafond."""
         held = await self.db.positions_summary()
         pending = await self.db.pending_bids()
@@ -959,10 +957,7 @@ class AuctionSniper(Worker):
         self._gaps = self._days_found = 0
         if not outcomes:
             return [found, "Aucune enchère dans la fenêtre de mise."]
-        counts: dict[str, int] = {}
-        for outcome in outcomes.values():
-            counts[outcome] = counts.get(outcome, 0) + 1
-        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+        ranked = Counter(outcomes.values()).most_common()
         return [found, f"{len(outcomes)} enchère(s) examinée(s) : " + " · ".join(f"{o} {n}" for o, n in ranked)]
 
     async def _affordable(self, decision: Decision, params: SnipeParams, portfolio: Portfolio) -> bool:

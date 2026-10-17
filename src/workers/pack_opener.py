@@ -125,7 +125,7 @@ class PackOpener(Worker):
         if isinstance(data.get("packs_remaining"), int):
             self.state.remaining = data["packs_remaining"]
         if data.get("packs_last_regen_at"):
-            self.state.last_regen_at = datetime.fromisoformat(str(data["packs_last_regen_at"]).replace("Z", "+00:00"))
+            self.state.last_regen_at = datetime.fromisoformat(str(data["packs_last_regen_at"]))
 
     async def _open_batch(self) -> None:
         opened = 0
