@@ -3,8 +3,9 @@
 - Vente : doublons dont la cote moyenne (même rareté) dépasse SELL_MIN_VALUE, même C/PC.
   Fin d'enchère programmée dans LISTING_END_WINDOW (20:00-22:30, Paris).
 - Positions : chaque carte achetée par le sniper est remise en vente en priorité (avant
-  les doublons). C'est une enchère : le prix de départ est le prix d'achat + la moitié du bénéfice attendu
-  (POSITION_LIST_PROFIT_SHARE), au moins + POSITION_LIST_MARGIN ; les joueurs le font monter. Invendue, elle repart à −10 % sans passer sous le prix d'achat, puis est gardée.
+  les doublons). C'est une enchère : le prix de départ est le prix d'achat + la moitié du bénéfice
+  attendu (POSITION_LIST_PROFIT_SHARE), au moins + POSITION_LIST_MARGIN ; les joueurs le font monter.
+  Invendue, elle repart à −10 % sans passer sous le prix d'achat, puis est gardée.
   Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
 - Défausse : doublons sans valeur, seulement si aucun palier de succès de taille de
   collection n'est proche (ACHIEVEMENT_MILESTONES), par lots de 50 [WR discard.js].

@@ -215,13 +215,12 @@ class Settings(BaseSettings):
     # (relevé du 16/10 : prix final / prix de départ, médiane ×1,11 en UR, ×1,23 en L ; 41 % et 29 % sans
     # surenchère) et les 5 places de vente sont rares : un départ bas vendrait presque au prix d'achat.
     position_list_profit_share: float = 0.5
-    # Revente d'une position : publiée entre ces heures (Paris), pour cette durée (6 h : plus de rotation des
-    # 5 places de vente depuis la fin de la limite d'achats).
     # Revente publiée dès que la carte est arrivée (16/10 : 2 L sur 3 attendaient le lendemain 11 h, capital
     # immobilisé ; l'heure de fin change peu le prix, voir `python -m src.main hours`). False : fenêtre ci-dessous.
     position_post_now: bool = True
-    position_post_start: time = time(11, 0)
+    position_post_start: time = time(11, 0)  # fenêtre de publication (Paris) si POSITION_POST_NOW=false
     position_post_end: time = time(12, 0)
+    # Durée de la revente : 6 h, pour faire tourner plus vite les 5 places de vente.
     position_list_duration_minutes: int = 360
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2
