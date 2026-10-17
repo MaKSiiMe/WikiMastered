@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -330,6 +331,59 @@ async def test_shadow_sniper_simulates_what_the_live_one_skips(tmp_path):
     assert (await db.last_bid("dear"))["status"] == "simulated"
     assert sniper._outcomes == {"cheap": "misée", "dear": "simulée (sniper de test)"}
     assert ("INFO", "Enchère placée") in notifier.sent and ("INFO", "Enchère simulée") not in notifier.sent
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_position_bid_pushed_then_straight_to_ceiling(tmp_path):
+    """17/10 : une L misée au minimum était surenchérie d'un pas en 20-30 s, et chaque remise usait le quota
+    de la vérification anti-bot. Première mise : minimum + la moitié de l'écart ; surenchérie : le plafond."""
+    posted: list[int] = []
+    refusals: list[dict] = []
+
+    def handler(request):
+        if request.method == "POST":
+            amount = json.loads(request.content)["amount"]
+            posted.append(amount)
+            if refusals:
+                return httpx.Response(400, json=refusals.pop(0))
+            return httpx.Response(200, json={"current_bid": amount, "bidder_balance": 3000})
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3300})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, sniper_resale_rarities=["L"],
+                                   sniper_max_bid=500, sniper_bid_push=0.5)
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    for card in ("card-a", "card-b"):
+        await seed_observed(db, card, [1500, 1450, 1550], rarity="L")
+    api = WikiMastersAPI(client)
+    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    await sniper.setup()
+
+    def l_sale(aid, card, base, bid=None):
+        return Auction.model_validate({**sale(aid, "x", 15, base=base, bid=bid, bidder=RIVAL if bid else None),
+                                       "card": {"id": card, "wikipedia_title": card, "rarity": "L"}})
+
+    now = datetime.now(timezone.utc)
+    await sniper._play([l_sale("a", "card-a", 300)], sniper_params(client), now)
+    assert posted == [400]  # plafond 500 (SNIPER_MAX_BID) : 300 + ⌈200 × 0,5⌉
+
+    await db.update_bid((await db.last_bid("a"))["id"], status="outbid")  # un rival est passé devant
+    sniper._engaged.pop("a", None)
+    await sniper._play([l_sale("a", "card-a", 300, bid=420)], sniper_params(client), now)
+    assert posted == [400, 500]  # droit au plafond
+
+    # Un rival mise entre la lecture et la mise : la mise repart au-dessus du nouveau minimum, pas au minimum.
+    refusals.append({"error": "Mise trop basse (minimum 450 wikibidous)", "min": 450})
+    await sniper._play([l_sale("b", "card-b", 300)], sniper_params(client), now)
+    assert posted[2:] == [400, 475]  # 450 + ⌈50 × 0,5⌉
+    assert "bénéfice ~" in (await db.last_bid("b"))["reason"]
     await db.close()
 
 

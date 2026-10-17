@@ -519,6 +519,7 @@ def main(argv: list[str] | None = None) -> None:
     hr.add_argument("--rarity", default="UR,L", help="raretés séparées par des virgules (défaut UR,L)")
     snr = sub.add_parser("sniper-report", help="toutes les enchères misées sur les N dernières heures (lecture seule)")
     snr.add_argument("--hours", type=float, default=24)
+    snr.add_argument("--summary", action="store_true", help="les chiffres seulement, sans la liste des enchères")
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
     inv.add_argument("action", choices=["scan", "report", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
@@ -577,7 +578,8 @@ def main(argv: list[str] | None = None) -> None:
     elif command == "sniper-report":
         async def _sniper_report() -> None:
             async with build_context(settings) as ctx:
-                print(await send_sniper_report(ctx, args.hours, send=False))
+                text = await send_sniper_report(ctx, args.hours, send=False)
+                print(text.split("\n\n== ", 1)[0] if args.summary else text)
         asyncio.run(_sniper_report())
     elif command == "inventory":
         async def _inventory() -> None:

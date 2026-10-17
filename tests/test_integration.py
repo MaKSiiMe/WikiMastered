@@ -50,7 +50,9 @@ def make_client(tmp_path: Path, handler, **overrides) -> tuple[WikiMastersClient
         # Les tests du sniper revendent toutes les raretés (par défaut : UR et L seulement).
         "sniper_resale_rarities": list(RARITIES),
         # Fenêtre de mise des tests écrits avant le 16/10 (enchères à ~15 s de la fin) : 20 s → 11 s.
-        "sniper_window_seconds": 20, "sniper_min_seconds_left": 11, "night_window_seconds": 20, **overrides})
+        "sniper_window_seconds": 20, "sniper_min_seconds_left": 11, "night_window_seconds": 20,
+        # Tests écrits avant le 17/10 : mise au minimum (SNIPER_BID_PUSH a ses propres tests).
+        "sniper_bid_push": 0.0, **overrides})
     notifier = Recorder()
     client = WikiMastersClient(s, Endpoints.load(ROOT / "config" / "endpoints.yaml"), notifier)
     client._http = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=client._http.cookies)
