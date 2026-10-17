@@ -62,3 +62,22 @@ async def test_night_report_counts_every_bid_and_its_money(tmp_path):
             ) in summary
     assert title.startswith("Sniper : récap du ")
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_real_bid_lost_at_our_own_price_is_flagged_not_counted(tmp_path):
+    """17/10 : Shakira « perdue » 479 → 479. Incohérent pour une mise réelle : signalé, hors gain non acquis."""
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(timezone.utc)
+    await db.record_bid(auction_id="a1", card_id="c1", title="Shakira", rarity="L", is_shiny=False, amount=479,
+                        reference_price=1947, reason="revente", night=False, dry_run=False, status="lost",
+                        end_at=now, ceiling=500)
+    await db.update_bid((await db.last_bid("a1"))["id"], final_price=479)
+    blocks = build(await db.bids_since(now - timedelta(hours=1)))
+    real = blocks["real"]
+    assert real.lost == 1 and real.missed == 0 and real.lost_within == 0 and not real.lost_steps
+    _, _, sections = render(blocks, now - timedelta(hours=1), now, limit=None)
+    assert "❌ **Shakira** (L) : misé 479, partie à 479 · ⚠ prix final ≤ notre mise : à vérifier" \
+        in dict(sections)["Positions réelles"]
+    await db.close()
