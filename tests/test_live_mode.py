@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import httpx
 import pytest
@@ -175,3 +175,10 @@ async def test_simulated_positions_never_block_real_collection_bids(tmp_path, ca
     assert status == {"col": "placed"}  # la vraie mise de collection passe, la position simulée non
     assert "solde ou budget du jour insuffisant 1" in sniper.recap()[1]
     await db.close()
+
+
+def test_hours_without_leading_zero():
+    """17/10 : SNIPER_LIVE_START=3:00 dans Portainer arrêtait le bot au démarrage."""
+    s = Settings(_env_file=None, sniper_live_start="3:00", sniper_live_end=" 9:30", night_start="2:00")
+    assert (s.sniper_live_start, s.sniper_live_end, s.night_start) == (time(3, 0), time(9, 30), time(2, 0))
+    assert Settings(_env_file=None, sniper_live_start="23:00").sniper_live_start == time(23, 0)
