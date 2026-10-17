@@ -66,6 +66,9 @@ ANTIBOT_RETRY = timedelta(minutes=5)
 ANTIBOT_REMIND = timedelta(hours=1)  # alerte renouvelée tant que la vérification n'est pas faite
 PENDING_ANTIBOT = "pas tentée : vérification anti-bot en attente"
 QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
+# Mises surenchéries relues à la fin de leur enchère (gagnées malgré tout ?) : celles des 2 derniers jours,
+# pas tout l'historique (enchères anciennes souvent disparues du site).
+OUTBID_SETTLE_WINDOW = timedelta(days=2)
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -867,9 +870,12 @@ class AuctionSniper(Worker):
         } for a in auctions])
 
     async def _track_outbids(self, auctions: list[Auction], me: str | None) -> None:
+        """Mise réelle dépassée : un autre meneur, connu, au-dessus de notre mise. Meneur absent, ou lecture plus
+        ancienne que notre mise (prix affiché sous le nôtre) : rien, le règlement à la fin tranchera."""
         for a in auctions:
             mine = self._leading.get(a.id)
-            if mine and me and (a.current_bidder_id or "").lower() != me:
+            bidder = (a.current_bidder_id or "").lower()
+            if mine and me and bidder and bidder != me and (a.current_bid is None or a.current_bid > mine[1]):
                 await self.db.update_bid(mine[0], status="outbid")
                 del self._leading[a.id]
                 self.log.info("surenchéri sur %s (%s), mise %d remboursée", a.title, a.rarity, mine[1])
@@ -1079,7 +1085,7 @@ class AuctionSniper(Worker):
         """Résultat des enchères échues. En DRY_RUN : gagnée si personne n'a payé plus que notre mise."""
         cutoff = utcnow() - timedelta(seconds=self.settings.sniper_settle_grace_seconds)
         me = self.api.user_id
-        for row in await self.db.bids_to_settle(cutoff, limit=3):
+        for row in await self.db.bids_to_settle(cutoff, limit=3, outbid_since=utcnow() - OUTBID_SETTLE_WINDOW):
             auction = await self._settled_auction(row)
             if auction is None:
                 continue
@@ -1108,7 +1114,7 @@ class AuctionSniper(Worker):
         self.log.info("%s : enchère introuvable sur le site, mise close comme perdue", label)
         await self._close_bid(row, False, simulated)
         await self.db.update_bid(row["id"], note="enchère introuvable sur le site")
-        if not simulated:
+        if not simulated and row["status"] != "outbid":  # déjà comptée perdue : pas d'alerte
             self.notifier.warning("Mise à vérifier", f"{label} : enchère introuvable sur le site, comptée perdue. "
                                   "Vérifie dans ta collection si la carte est arrivée.")
         return None
