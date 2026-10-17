@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -29,6 +30,26 @@ async def test_purge_keeps_accounting_and_recent_market(tmp_path):
     assert removed["observed_sales"] == 1 and removed["price_history"] == 1 and removed["pageviews"] == 1
     assert await db.observed_prices("c", 5) == ([10], 1)
     assert len(await db._all("SELECT * FROM bids")) == 1  # comptabilité gardée
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_obsolete_tables_dropped_on_existing_database(tmp_path):
+    """Une base d'une ancienne version perd ses vestiges au démarrage ; le reste est gardé."""
+    path = tmp_path / "t.db"
+    old = sqlite3.connect(path)
+    old.executescript("CREATE TABLE trend_alerts (auction_id TEXT PRIMARY KEY, article TEXT, alerted_at TEXT);"
+                      "CREATE TABLE auctions_seen (auction_id TEXT PRIMARY KEY, card_id TEXT, title TEXT, "
+                      "norm_title TEXT, rarity TEXT, is_shiny INTEGER NOT NULL DEFAULT 0, current_bid INTEGER, "
+                      "base_amount INTEGER, min_bid INTEGER, end_at TEXT, seen_at TEXT NOT NULL);"
+                      "CREATE INDEX idx_auctions_title ON auctions_seen (norm_title);"
+                      "INSERT INTO auctions_seen (auction_id, norm_title, seen_at) VALUES ('a', 'x', 'now');")
+    old.close()
+    db = Database(path)
+    await db.connect()
+    names = {r["name"] for r in await db._all("SELECT name FROM sqlite_master")}
+    assert "trend_alerts" not in names and "idx_auctions_title" not in names
+    assert len(await db._all("SELECT * FROM auctions_seen")) == 1
     await db.close()
 
 
