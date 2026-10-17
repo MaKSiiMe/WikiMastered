@@ -112,6 +112,33 @@ async def test_antibot_refusal_alerts_once_until_a_bid_passes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_antibot_alert_is_renewed_every_hour_while_pending(tmp_path):
+    market = {"a": sale("a", "14 octobre", 15)}
+    refusal = (400, {"error": "Vérification anti-bot requise."})
+    sniper, db, notifier = await start(tmp_path, market, [refusal, refusal, refusal])
+    reminder = ("CRITICAL", "Sniper : vérification anti-bot toujours en attente")
+    await sniper.step()
+    assert reminder not in notifier.sent  # la première alerte vient d'être envoyée
+
+    # Une mise pas tentée (vérification en attente) avant l'heure : pas de rappel, mais elle est comptée.
+    market["b"] = sale("b", "15 octobre", 15)
+    await sniper.step()
+    assert reminder not in notifier.sent and sniper._antibot_missed == 2
+
+    sniper._antibot_since -= timedelta(hours=1, minutes=5)
+    sniper._antibot_remind_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    sniper._antibot_retry_at = datetime.now(timezone.utc)
+    market["c"] = sale("c", "15 octobre", 15)
+    await sniper.step()
+    assert notifier.sent.count(reminder) == 1 and sniper._antibot_missed == 3
+
+    market["d"] = sale("d", "15 octobre", 15)
+    await sniper.step()  # pas de nouveau rappel avant une heure
+    assert notifier.sent.count(reminder) == 1
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_won_collection_card_counts_at_once(tmp_path):
     state = {"owned": ["1 janvier"], "missing": ["14 octobre", "15 octobre"], "total": 366,
              "sets": {"Jours de l'année": [1, 366]}, "first_owned": {"1 janvier": None}}
