@@ -63,6 +63,7 @@ ANTIBOT_HINT = "anti-bot"
 # Tant qu'elle attend, une seule mise réelle part par période : elle teste si la vérification est levée. Le 16/10,
 # ~45 mises refusées en 1 h 30 (toutes inutiles), puis vérification des paquets demandée à son tour.
 ANTIBOT_RETRY = timedelta(minutes=5)
+ANTIBOT_REMIND = timedelta(hours=1)  # alerte renouvelée tant que la vérification n'est pas faite
 PENDING_ANTIBOT = "pas tentée : vérification anti-bot en attente"
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
@@ -275,6 +276,8 @@ class AuctionSniper(Worker):
         self._sale_slots: tuple[datetime, int, int] | None = None  # (lu à, max, ventes en cours)
         self._antibot_since: datetime | None = None  # mises refusées : vérification anti-bot à faire
         self._antibot_retry_at = _EPOCH  # prochaine mise réelle permise tant que la vérification attend
+        self._antibot_remind_at = _EPOCH  # prochain rappel d'alerte tant que la vérification attend
+        self._antibot_missed = 0  # mises non placées depuis le début du blocage
         self._buys_left: int | None = None  # achats réels encore permis (SNIPER_MAX_BUYS), None = illimité
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
@@ -642,6 +645,8 @@ class AuctionSniper(Worker):
             if self._antibot_pending(decision):
                 self.log.debug("%s : vérification anti-bot en attente, mise pas tentée", auction.title)
                 self._outcome(auction, PENDING_ANTIBOT)
+                self._antibot_missed += 1
+                self._antibot_remind()
                 continue
             if await self._bid(auction, decision, params):
                 self._outcome(auction, "misée (collection)" if decision.collection else "misée")
@@ -891,6 +896,21 @@ class AuctionSniper(Worker):
         live = self.settings.is_live("collection_bid" if decision.collection else "place_bid")
         return live and self._antibot_since is not None and utcnow() < self._antibot_retry_at
 
+    def _antibot_remind(self) -> None:
+        """Renouvelle l'alerte toutes les ANTIBOT_REMIND tant que la vérification n'est pas faite (la première,
+        la nuit, passe facilement inaperçue : le 17/10 le blocage a duré plus de 11 h)."""
+        now = utcnow()
+        if not self._antibot_since or now < self._antibot_remind_at:
+            return
+        self._antibot_remind_at = now + ANTIBOT_REMIND
+        minutes = int((now - self._antibot_since).total_seconds() // 60)
+        since = self._antibot_since.astimezone(timeutils.PARIS)
+        self.notifier.critical(
+            "Sniper : vérification anti-bot toujours en attente",
+            f"Mises refusées depuis {since:%d/%m %H:%M} ({minutes // 60} h {minutes % 60:02d}) : "
+            f"{self._antibot_missed} mise(s) non placée(s) depuis. Fais la vérification dans ton navigateur "
+            "(mise à la main sur le marché, ou page Paquets) : les mises repartent dès qu'elle est faite.")
+
     @property
     def blocked(self) -> str | None:
         if not self._antibot_since:
@@ -976,7 +996,7 @@ class AuctionSniper(Worker):
             self._leading[auction.id] = (bid_id, decision.amount)
             self._balance, self._balance_at = confirmed.bidder_balance, utcnow()
             if self._antibot_since:
-                self._antibot_since = None
+                self._antibot_since, self._antibot_missed = None, 0
                 self.notifier.success("Sniper : vérification levée", "Les mises passent de nouveau.")
             self._engaged[auction.id] = auction.end_at
             self._bot_engaged.add(auction.id)
@@ -989,8 +1009,12 @@ class AuctionSniper(Worker):
         self.log.info("mise refusée sur %s : %s", label, error)
         if ANTIBOT_HINT in str(error).lower() or payload.get("human_verification_required"):
             self._antibot_retry_at = utcnow() + ANTIBOT_RETRY
-            if not self._antibot_since:
+            self._antibot_missed += 1
+            if self._antibot_since:
+                self._antibot_remind()
+            else:
                 self._antibot_since = utcnow()
+                self._antibot_remind_at = self._antibot_since + ANTIBOT_REMIND
                 # Le 16/10, les paquets s'ouvraient encore pendant que les mises étaient refusées : la page
                 # Paquets ne la propose pas forcément.
                 self.notifier.critical(
