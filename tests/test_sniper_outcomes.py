@@ -15,7 +15,7 @@ from src.core.models import Auction
 from src.workers.auction_sniper import AuctionSniper, Decision, Target, position_cap
 from src.workers.base import Context
 from src.workers.collection import progress_lines
-from tests.test_integration import make_client, seed_observed
+from tests.test_integration import ME, make_client, seed_observed
 
 RIVAL = "33333333-3333-3333-3333-333333333333"
 
@@ -384,6 +384,65 @@ async def test_position_bid_pushed_then_straight_to_ceiling(tmp_path):
     await sniper._play([l_sale("b", "card-b", 300)], sniper_params(client), now)
     assert posted[2:] == [400, 475]  # 450 + ⌈50 × 0,5⌉
     assert "bénéfice ~" in (await db.last_bid("b"))["reason"]
+    await db.close()
+
+
+def ended(aid: str, title: str, *, winner: str, final: int, minutes_ago: float = 5) -> dict:
+    return {**sale(aid, title, -60 * minutes_ago, bid=final, bidder=winner), "status": "settled_sold",
+            "winner_id": winner, "final_price": final, "card": {"id": f"card-{title}", "wikipedia_title": title,
+                                                                  "rarity": "L"}}
+
+
+async def outbid_bid(db, aid: str, title: str, amount: int, minutes_ago: float = 5) -> int:
+    return await db.record_bid(auction_id=aid, card_id=f"card-{title}", title=title, rarity="L", is_shiny=False,
+                               amount=amount, reference_price=1900, reason="revente ~1900 WB, bénéfice ~1400",
+                               night=False, dry_run=False, status="outbid", ceiling=500,
+                               end_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago))
+
+
+@pytest.mark.asyncio
+async def test_outbid_bid_settled_at_the_end_won_becomes_a_position(tmp_path):
+    """17/10 : Shakira « perdue » à 479, notre propre mise. Une mise surenchérie est relue à la fin de l'enchère :
+    gagnée, elle devient une position ; perdue, elle prend le prix final du serveur."""
+    market = {"w": ended("w", "Shakira", winner=ME, final=479), "l": ended("l", "Arte", winner=RIVAL, final=520)}
+    sniper, db, notifier = await start(tmp_path, market, [])
+    await outbid_bid(db, "w", "Shakira", 479)
+    await outbid_bid(db, "l", "Arte", 442)
+    await sniper._settle()
+    won, lost = await db.last_bid("w"), await db.last_bid("l")
+    assert won["status"] == "won" and won["final_price"] == 479
+    assert (await db.positions_summary())["real_count"] == 1
+    assert ("SUCCESS", "Position achetée !") in notifier.sent
+    assert lost["status"] == "lost" and lost["final_price"] == 520
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_old_or_vanished_outbid_bids_settle_quietly(tmp_path):
+    # Historique ancien : pas relu. Disparue du site : close comme perdue, sans alerte « Mise à vérifier ».
+    sniper, db, notifier = await start(tmp_path, {"old": ended("old", "Arte", winner=ME, final=400)}, [])
+    await outbid_bid(db, "old", "Arte", 400, minutes_ago=3 * 24 * 60)
+    await outbid_bid(db, "gone", "Tapie", 445)
+    await sniper._settle()
+    assert (await db.last_bid("old"))["status"] == "outbid"
+    assert (await db.last_bid("gone"))["status"] == "lost"
+    assert not any(title == "Mise à vérifier" for _, title in notifier.sent)
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_outbid_needs_a_known_rival_above_our_bid(tmp_path):
+    sniper, db, _ = await start(tmp_path, {}, [])
+    bid_id = await db.record_bid(auction_id="a", card_id="card-x", title="x", rarity="L", is_shiny=False, amount=479,
+                                 reference_price=1900, reason="revente", night=False, dry_run=False, status="placed",
+                                 end_at=datetime.now(timezone.utc) + timedelta(seconds=30))
+    sniper._leading["a"] = (bid_id, 479)
+    # Meneur absent, puis lecture du marché plus ancienne que notre mise (rival affiché sous notre prix) : rien.
+    for view in (sale("a", "x", 30, bid=479), sale("a", "x", 30, bid=436, bidder=RIVAL)):
+        await sniper._track_outbids([Auction.model_validate(view)], ME)
+        assert (await db.last_bid("a"))["status"] == "placed" and "a" in sniper._leading
+    await sniper._track_outbids([Auction.model_validate(sale("a", "x", 30, bid=527, bidder=RIVAL))], ME)
+    assert (await db.last_bid("a"))["status"] == "outbid" and "a" not in sniper._leading
     await db.close()
 
 

@@ -122,6 +122,11 @@ def build(rows, fee: float = 0.0) -> dict[str, Block]:
             if final is None:
                 block.lines_lost.append((0, f"{label} : misé {r['amount']}{tries}, prix final inconnu"))
                 continue
+            if not r["dry_run"] and not collection and final <= r["amount"]:
+                # Perdue à notre prix ou moins : incohérent (17/10, mises « surenchéries » à tort, jamais relues).
+                block.lines_lost.append((0, f"{label} : misé {r['amount']}{tries}, partie à {final} · "
+                                            "⚠ prix final ≤ notre mise : à vérifier"))
+                continue
             within = r["ceiling"] is not None and final <= r["ceiling"]
             block.lost_within += within
             if r["amount"]:

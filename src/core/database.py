@@ -327,12 +327,16 @@ class Database:
             "SELECT * FROM bids WHERE auction_id = ? ORDER BY id DESC LIMIT 1", (auction_id,)
         )
 
-    async def bids_to_settle(self, before: datetime, limit: int = 3) -> list[aiosqlite.Row]:
-        """Dernière mise confirmée de chaque enchère échue, à vérifier sur le serveur."""
+    async def bids_to_settle(self, before: datetime, limit: int = 3,
+                             outbid_since: datetime | None = None) -> list[aiosqlite.Row]:
+        """Dernière mise confirmée de chaque enchère échue, à vérifier sur le serveur. Une mise surenchérie
+        l'est aussi (fin après `outbid_since`) : le 17/10, des L « perdues » à notre propre prix avaient été
+        marquées surenchéries sur une lecture du marché antérieure à notre mise, sans être relues à la fin."""
         return await self._all(
-            "SELECT * FROM bids b WHERE status IN ('placed', 'simulated') AND end_at < ? AND id = "
-            "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id) ORDER BY end_at LIMIT ?",
-            (iso(before), limit),
+            "SELECT * FROM bids b WHERE (status IN ('placed', 'simulated') OR (status = 'outbid' AND end_at >= ?)) "
+            "AND end_at < ? AND id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id) "
+            "ORDER BY end_at LIMIT ?",
+            (iso(outbid_since or before), iso(before), limit),
         )
 
     async def collection_cards(self, statuses: tuple[str, ...]) -> list[str]:
