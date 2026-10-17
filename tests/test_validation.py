@@ -215,7 +215,7 @@ async def test_position_posted_now_and_old_schedules_advanced(tmp_path):
     assert datetime.fromisoformat(rows["Fabrice Arfi"]["post_at"]) <= datetime.now(timezone.utc)
     assert datetime.fromisoformat(rows["doublon"]["post_at"]) > now + timedelta(hours=16)  # doublon : inchangé
     post_at, minutes, end = inv._plan(now, position=True, at_peak=True)
-    assert post_at == now and minutes == 720 and end == now + timedelta(hours=12)
+    assert post_at == now and minutes == 360 and end == now + timedelta(hours=6)
     await db.close()
 
 

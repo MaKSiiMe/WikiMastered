@@ -172,10 +172,16 @@ def rarity_ceiling(auction: Auction, params: SnipeParams) -> int | None:
     return max(caps) if caps else None
 
 
+def pushed(minimum: int, ceiling: int, share: float) -> int:
+    """Mise minimale + `share` de l'écart jusqu'au plafond (0 : le minimum, 1 : le plafond)."""
+    return min(ceiling, minimum + math.ceil(max(0, ceiling - minimum) * max(0.0, share)))
+
+
 def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales: int,
            portfolio: Portfolio | None = None, fee: float = 0.0, collection_cap: int | None = None,
-           resale: bool = True) -> Decision | None:
-    """Position à revendre (estimation, budget, bénéfice) ou achat « collection » (carte manquante, rareté)."""
+           resale: bool = True, push: float = 0.0) -> Decision | None:
+    """Position à revendre (estimation, budget, bénéfice) ou achat « collection » (carte manquante, rareté).
+    Une position est misée au-dessus du minimum (`push`, voir SNIPER_BID_PUSH) ; la collection, au minimum."""
     amount = auction.min_bid
     options: list[Decision] = []
     if collection_cap is not None and amount <= collection_cap:
@@ -199,6 +205,11 @@ def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales
     ceiling = min(best.ceiling, params.max_bid) if params.max_bid else best.ceiling
     if amount > ceiling:
         return None
+    if best.profit is not None and push > 0:
+        bid = pushed(amount, ceiling, push)
+        profit = best.profit - (bid - amount)
+        return Decision(bid, ceiling, f"revente ~{best.reference:.0f} WB, bénéfice ~{profit:.0f}", best.reference,
+                        profit)
     return Decision(amount, ceiling, best.reason, best.reference, best.profit)
 
 
@@ -676,7 +687,8 @@ class AuctionSniper(Worker):
                     or self.is_manual_interest(auction) or await self.db.last_bid(auction.id) is not None:
                 continue
             quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False)
-            decision = decide(auction, shadow, quote, s.price_min_sales, portfolio, s.sale_fee_pct, resale=True)
+            decision = decide(auction, shadow, quote, s.price_min_sales, portfolio, s.sale_fee_pct, resale=True,
+                              push=s.sniper_bid_push)
             if decision is not None and not decision.collection:
                 candidates.append((decision.profit or 0.0, auction, decision))
         opened = spent = 0
@@ -883,8 +895,11 @@ class AuctionSniper(Worker):
             # Rareté jamais revendue : la cote ne sert que de repère, prise dans les ventes observées (sans requête).
             quote = (await self.ctx.prices.observed_quote(auction.catalog_id)).get(auction.rarity or "")
         collection_cap = await self._collection_cap(auction)
+        # Déjà surenchérie : un rival suit nos mises d'un pas, la suivante va droit au plafond (une seule de plus).
+        rebid = last is not None and last["status"] in ("placed", "outbid")
         decision = decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
-                          collection_cap=collection_cap, resale=resale)
+                          collection_cap=collection_cap, resale=resale,
+                          push=1.0 if rebid else self.settings.sniper_bid_push)
         if decision is None:
             self._outcome(auction, "collection : trop chère" if collection_cap is not None else
                           refusal(auction, params, quote, self.settings.price_min_sales, portfolio,
@@ -1040,8 +1055,15 @@ class AuctionSniper(Worker):
                     f"{ANTIBOT_RETRY.seconds // 60} min et te prévient dès qu'une mise repasse.")
             return False
         if not retried and isinstance(server_min, int) and decision.amount < server_min <= decision.ceiling:
-            return await self._bid(auction, Decision(server_min, decision.ceiling, decision.reason, decision.reference,
-                                                     decision.profit), params, retried=True)
+            # Un rival a misé entre la lecture et la mise : une position repart au-dessus du nouveau minimum.
+            if decision.profit is None:
+                retry = Decision(server_min, decision.ceiling, decision.reason, decision.reference)
+            else:
+                amount = pushed(server_min, decision.ceiling, self.settings.sniper_bid_push)
+                profit = decision.profit - (amount - decision.amount)
+                retry = Decision(amount, decision.ceiling, f"revente ~{decision.reference:.0f} WB, bénéfice "
+                                 f"~{profit:.0f}", decision.reference, profit)
+            return await self._bid(auction, retry, params, retried=True)
         return False
 
     def _report_bid(self, title: str, summary: str, *, simulated: bool = False) -> None:

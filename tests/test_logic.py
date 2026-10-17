@@ -121,6 +121,21 @@ def test_portfolio_decision_needs_real_profit():
     assert decide(auction(card=card, base_amount=200), params, Quote(400.0, 1), 3, pf) is None  # 1 vente
 
 
+def test_position_bid_pushed_toward_ceiling_collection_stays_at_minimum():
+    # Le 17/10 : les rivaux surenchérissent d'un pas en 20-30 s ; une mise plus haute d'emblée use moins le quota.
+    s = settings(sniper_rarity_caps={"SR": 15})
+    params = snipe_params(s, night=False)
+    pf = portfolio_state(s, balance=3000, held_count=0, held_real_cost=0, held_sim_cost=0,
+                         engaged_real=0, engaged_sim=0, bot_engaged_count=0)
+    card = {"id": "c", "wikipedia_title": "x", "rarity": "L"}
+    half = decide(auction(card=card, base_amount=200), params, Quote(400.0, None), 3, pf, push=0.5)
+    assert half.amount == 233 and half.ceiling == 265 and half.profit == 167   # 200 + ⌈65 × 0,5⌉
+    assert "bénéfice ~167" in half.reason
+    top = decide(auction(card=card, base_amount=200), params, Quote(400.0, None), 3, pf, push=1.0)
+    assert top.amount == top.ceiling == 265
+    assert decide(auction(base_amount=12), params, None, 3, push=0.5).amount == 12  # collection : minimum
+
+
 def test_positions_follow_free_sale_slots():
     s = settings()
     assert position_cap(s, 5, 4) == (11, 1)   # 1 place libre + 10 en file d'attente

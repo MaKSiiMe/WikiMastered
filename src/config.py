@@ -165,6 +165,10 @@ class Settings(BaseSettings):
     sniper_min_balance_reserve: int = 50
     sniper_prefetch_seconds: float = 8.0
     sniper_allow_rebid: bool = True
+    # Mise d'une position : la mise minimale + cette part de l'écart jusqu'à notre plafond ; surenchérie, la
+    # mise suivante va droit au plafond. Le 17/10 : 2 L réelles gagnées sur 29, les rivaux surenchérissent d'un
+    # pas (+10 %) en 20-30 s, et chaque mise use le quota de la vérification anti-bot (~9-10 mises). 0 = minimum.
+    sniper_bid_push: float = 0.5
     sniper_settle_grace_seconds: int = 30
     sniper_max_concurrent_bids: int = 0   # 0 = illimité (le site n'impose pas de limite aux mises)
     # Achats réels de positions au plus, depuis toujours (0 = illimité) : gagnées + mises en cours. Atteint, le
@@ -204,13 +208,14 @@ class Settings(BaseSettings):
     # (relevé du 16/10 : prix final / prix de départ, médiane ×1,11 en UR, ×1,23 en L ; 41 % et 29 % sans
     # surenchère) et les 5 places de vente sont rares : un départ bas vendrait presque au prix d'achat.
     position_list_profit_share: float = 0.5
-    # Revente d'une position : publiée entre ces heures (Paris), pour cette durée (12 h : fin vers 23 h-minuit).
+    # Revente d'une position : publiée entre ces heures (Paris), pour cette durée (6 h : plus de rotation des
+    # 5 places de vente depuis la fin de la limite d'achats).
     # Revente publiée dès que la carte est arrivée (16/10 : 2 L sur 3 attendaient le lendemain 11 h, capital
     # immobilisé ; l'heure de fin change peu le prix, voir `python -m src.main hours`). False : fenêtre ci-dessous.
     position_post_now: bool = True
     position_post_start: time = time(11, 0)
     position_post_end: time = time(12, 0)
-    position_list_duration_minutes: int = 720
+    position_list_duration_minutes: int = 360
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2
 
