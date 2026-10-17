@@ -16,9 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from src.core.client import ApiError
-from src.core.database import utcnow
 from src.core.notifier import Topic
-from src.core.timeutils import next_local
+from src.core.timeutils import next_local, utcnow
 from src.workers.base import Worker
 
 

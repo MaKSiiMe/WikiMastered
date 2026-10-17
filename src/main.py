@@ -10,7 +10,10 @@
     python -m src.main collection               # collection à compléter (jours de l'année…)
     python -m src.main market [--pages 4] [--rarity UR]  # où sont les fins imminentes dans le marché
     python -m src.main profile                  # profil du joueur : solde, paquets, pity…
-    python -m src.main hours [--rarity UR,L]     # à quelle heure de fin les enchères se vendent le mieux
+    python -m src.main hours [--rarity UR,L]    # à quelle heure de fin les enchères se vendent le mieux
+    python -m src.main gifs                     # les cartes GIF se vendent-elles mieux ?
+    python -m src.main sniper-report [--hours 24] [--summary]  # enchères misées par le sniper
+    python -m src.main reset-simulation [--apply]  # efface les mises et ventes simulées
 """
 
 from __future__ import annotations
@@ -18,14 +21,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import json
 import logging
 import signal
+import statistics as st
 import sys
+from collections import Counter
 from collections.abc import Awaitable, Callable
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta
 from logging.handlers import RotatingFileHandler
 
 from src.config import RARITY_RANK, Settings, get_settings
+from src.core import timeutils
 from src.core.api import WikiMastersAPI
 from src.core.client import WikiMastersClient
 from src.core.database import Database
@@ -33,18 +40,19 @@ from src.core.endpoints import Endpoints
 from src.core.models import MarketPage
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
-from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until
+from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
 from src.recap import recap_loop
 from src.sniper_report import sniper_report
+from src.tools.inspect_api import inspect
+from src.workers.achievements import AchievementsWorker
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
-from src.workers.achievements import AchievementsWorker
-from src.workers.collection import CollectionWorker, summary_line, targets
+from src.workers.collection import CollectionWorker, progress_lines, summary_line, targets
 from src.workers.collection import refresh as refresh_collection
 from src.workers.google_trends import GoogleTrends
 from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
-from src.workers.pack_opener import PackOpener
+from src.workers.pack_opener import PackOpener, checks_report
 from src.workers.profile_guard import ProfileGuard
 from src.workers.trend_report import day_line, trends_text
 from src.workers.wiki_trends import WikiTrends
@@ -103,10 +111,10 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         extra.append(summary_line(await ctx.db.kv_get("collection"), targets(ctx)))
     if ctx.settings.enable_google_trends or ctx.settings.enable_wiki_trends:
-        extra.append(await day_line(ctx.db, datetime.now(timezone.utc)))
+        extra.append(await day_line(ctx.db, utcnow()))
     sections += [as_section(text) for text in extra]
     if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine (détail : commande trends)
-        text = await trends_text(ctx.db, 7, await min_profit(ctx), datetime.now(timezone.utc), detailed=False)
+        text = await trends_text(ctx.db, 7, await min_profit(ctx), utcnow(), detailed=False)
         sections.append(("Tendances de la semaine", text))
     if send:
         ctx.notifier.info(f"Bilan du {now_local():%d/%m}", description, topic=Topic.REPORT, sections=sections)
@@ -201,7 +209,7 @@ async def report_loop(ctx: Context) -> None:
         except Exception:  # noqa: BLE001 - le bot continue sans bilan
             log.exception("Bilan quotidien impossible")
         try:
-            removed = await ctx.db.purge(datetime.now(timezone.utc))
+            removed = await ctx.db.purge(utcnow())
             log.info("Entretien de la base : %s", ", ".join(f"{t} -{n}" for t, n in removed.items() if n) or "rien")
         except Exception:  # noqa: BLE001
             log.exception("Entretien de la base impossible")
@@ -218,7 +226,7 @@ async def sniper_report_loop(ctx: Context) -> None:
 
 
 async def send_sniper_report(ctx: Context, hours: float, *, send: bool = True) -> str:
-    until = datetime.now(timezone.utc)
+    until = utcnow()
     since = until - timedelta(hours=hours)
     if send:
         title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.sale_fee_pct)
@@ -227,10 +235,16 @@ async def send_sniper_report(ctx: Context, hours: float, *, send: bool = True) -
     return "\n\n".join([f"{title}\n{summary}", *(f"== {name} ==\n{body}" for name, body in sections)])
 
 
+def bid_lift(sales) -> tuple[list[float], int]:
+    """(prix final / prix de départ de chaque vente, nombre de ventes au prix de départ, sans surenchère)."""
+    ratios = [s["price"] / s["base_amount"] for s in sales if s["base_amount"]]
+    single = sum(1 for s in sales if s["base_amount"] and s["price"] <= s["base_amount"])
+    return ratios, single
+
+
 def gif_text(rows) -> str:
     """Les cartes à image animée (GIF) se vendent-elles mieux ? Par rareté : ventes, prix médian, prix final /
     prix de départ, part des ventes sans surenchère ; GIF contre images fixes, depuis le début du suivi."""
-    import statistics as st
     groups: dict[tuple[str, bool], list] = {}
     for r in rows:
         groups.setdefault((r["rarity"], bool(r["is_gif"])), []).append(r)
@@ -242,8 +256,7 @@ def gif_text(rows) -> str:
             sales = groups.get((rarity, gif), [])
             if not sales:
                 continue
-            ratios = [s["price"] / s["base_amount"] for s in sales if s["base_amount"]]
-            single = sum(1 for s in sales if s["base_amount"] and s["price"] <= s["base_amount"])
+            ratios, single = bid_lift(sales)
             cards = len({s["card_id"] for s in sales})
             lift = f", final/départ ×{st.median(ratios):.2f}, {single * 100 // max(1, len(ratios))} % sans " \
                    "surenchère" if ratios else ""
@@ -258,7 +271,6 @@ PROFILE_HIDDEN = ("email", "token", "secret", "password", "phone", "ip_address")
 def profile_text(profile) -> str:
     """Réponse brute de `get_my_profile` (solde, paquets, régénération, pity…), une ligne par champ.
     Les champs personnels (e-mail, jetons…) sont masqués."""
-    import json
     if not isinstance(profile, dict):
         return f"Réponse inattendue : {json.dumps(profile, ensure_ascii=False)[:300]}"
     lines = ["Profil lu sur le site (get_my_profile) :"]
@@ -274,16 +286,14 @@ HOURS_MIN_SALES = 20  # en dessous, la médiane d'une heure ne dit rien : l'heur
 def hours_text(rows, rarities: list[str]) -> str:
     """À quelle heure de fin (Paris) les enchères se vendent-elles le mieux ? Par rareté et par heure : ventes,
     prix médian, prix final / prix de départ, part des ventes sans surenchère."""
-    import statistics as st
-    from src.core.timeutils import PARIS
     if not rows:
         return "Aucune vente observée pour ces raretés."
-    ends = [datetime.fromisoformat(r["ended_at"]).astimezone(PARIS) for r in rows]
+    ends = [datetime.fromisoformat(r["ended_at"]).astimezone(timeutils.PARIS) for r in rows]
     lines = [f"Ventes observées du {min(ends):%d/%m %H:%M} au {max(ends):%d/%m %H:%M} (shiny et ventes suspectes "
              f"exclues), par heure de fin (Paris). Seules les enchères vendues sont vues : le volume dépend aussi de "
              f"l'offre, pas seulement de l'affluence. « ? » : moins de {HOURS_MIN_SALES} ventes."]
     for rarity in sorted(rarities, key=lambda r: -RARITY_RANK.get(r, -1)):
-        sales = [(r, e) for r, e in zip(rows, ends) if r["rarity"] == rarity]
+        sales = [(r, e) for r, e in zip(rows, ends, strict=True) if r["rarity"] == rarity]
         if not sales:
             continue
         lines.append(f"\n{rarity} : {len(sales)} ventes")
@@ -292,8 +302,7 @@ def hours_text(rows, rarities: list[str]) -> str:
             here = [r for r, e in sales if e.hour == hour]
             if not here:
                 continue
-            ratios = [r["price"] / r["base_amount"] for r in here if r["base_amount"]]
-            single = sum(1 for r in here if r["base_amount"] and r["price"] <= r["base_amount"])
+            ratios, single = bid_lift(here)
             ratio = f"×{st.median(ratios):.2f}" if ratios else "-"
             part = f"{single * 100 // len(ratios)} %" if ratios else "-"
             flag = " ?" if len(here) < HOURS_MIN_SALES else ""
@@ -368,7 +377,7 @@ async def run_bot(settings: Settings) -> None:
                           important=True)
 
         # Chaque tâche est supervisée à part : si l'une plante, elle est relancée et les autres continuent.
-        started_at = datetime.now(timezone.utc)
+        started_at = utcnow()
         jobs: list[tuple[str, Callable[[], Awaitable[None]]]] = [(w.name, w.run) for w in workers]
         jobs += [("report", lambda: report_loop(ctx)), ("heartbeat", lambda: heartbeat(ctx))]
         if settings.recap_interval_hours > 0:
@@ -405,93 +414,116 @@ async def reset_simulation(settings: Settings, apply: bool) -> None:
         print(f"À effacer : {what}. Relance avec --apply pour les effacer (les données réelles sont gardées).")
 
 
-async def packs_status(settings: Settings, hours: int) -> None:
+async def packs_status(ctx: Context, hours: int) -> None:
     """Paquets ouverts ces dernières heures (lecture de la base, aucune requête)."""
-    async with build_context(settings) as ctx:
-        rows = await ctx.db.recent_pulls(datetime.now(timezone.utc) - timedelta(hours=hours))
-        if not settings.is_live("open_pack"):
-            print("DRY_RUN : les paquets ne sont PAS ouverts. Ajoute LIVE_WRITES=open_pack pour les ouvrir quand même.")
-        from src.workers.pack_opener import checks_report
-        print("Vérifications humaines :")
-        print("\n".join(await checks_report(ctx.db)))
-        if not rows:
-            print(f"Aucune carte tirée ces {hours} dernières heures.")
-            return
-        by_rarity: dict[str, int] = {}
-        for r in rows:
-            by_rarity[r["rarity"] or "?"] = by_rarity.get(r["rarity"] or "?", 0) + 1
-        last = datetime.fromisoformat(rows[0]["opened_at"]).astimezone()
-        print(f"{len(rows)} carte(s) tirée(s) en {hours} h, dernière ouverture le {last:%d/%m à %H:%M}")
-        print("Par rareté : " + " ".join(f"{k}:{v}" for k, v in sorted(by_rarity.items())))
-        for r in rows[:15]:
-            when = datetime.fromisoformat(r["opened_at"]).astimezone()
-            print(f"  {when:%d/%m %H:%M}  {r['rarity'] or '?':>2}{' ✨' if r['is_shiny'] else '  '} {r['title']}")
+    rows = await ctx.db.recent_pulls(utcnow() - timedelta(hours=hours))
+    if not ctx.settings.is_live("open_pack"):
+        print("DRY_RUN : les paquets ne sont PAS ouverts. Ajoute LIVE_WRITES=open_pack pour les ouvrir quand même.")
+    print("Vérifications humaines :")
+    print("\n".join(await checks_report(ctx.db)))
+    if not rows:
+        print(f"Aucune carte tirée ces {hours} dernières heures.")
+        return
+    by_rarity = Counter(r["rarity"] or "?" for r in rows)
+    last = datetime.fromisoformat(rows[0]["opened_at"]).astimezone()
+    print(f"{len(rows)} carte(s) tirée(s) en {hours} h, dernière ouverture le {last:%d/%m à %H:%M}")
+    print("Par rareté : " + " ".join(f"{k}:{v}" for k, v in sorted(by_rarity.items())))
+    for r in rows[:15]:
+        when = datetime.fromisoformat(r["opened_at"]).astimezone()
+        print(f"  {when:%d/%m %H:%M}  {r['rarity'] or '?':>2}{' ✨' if r['is_shiny'] else '  '} {r['title']}")
 
 
-async def collection_status(settings: Settings) -> None:
+async def collection_status(ctx: Context) -> None:
     """Relit la collection à compléter et affiche possédées / manquantes."""
-    async with build_context(settings) as ctx:
-        if not (settings.collection_sets or settings.collection_titles):
-            print("Aucune collection configurée : ajoute COLLECTION_SETS=jours (et COLLECTION_MAX_PRICE).")
-            return
-        print(f"COLLECTION_SETS = {settings.collection_sets}  COLLECTION_TITLES = {settings.collection_titles}")
-        state = await refresh_collection(ctx)
-        if state["unknown_sets"]:
-            print(f"Ensemble(s) inconnu(s) : {state['unknown_sets']} — valeur attendue : jours")
-        by_key = targets(ctx)
-        from src.workers.collection import progress_lines
-        print("\n".join(progress_lines(state, by_key, datetime.now(timezone.utc), days=30)))
-        print("Manquantes : " + (", ".join(by_key.get(k, k) for k in state["missing"]) or "aucune"))
-        if state["unmatched"]:
-            print("Titres trouvés mais non reconnus (format différent ?) : " + ", ".join(state["unmatched"]))
-        print(f"Mise maximale par carte manquante : {settings.collection_max_price} WB")
-        if state.get("tag"):
-            live = "" if settings.is_live("tag_card") else " (simulé : DRY_RUN)"
-            print(f"Étiquette « {state['tag']} » : {state['tagged']} ajoutée(s){live}, {state['to_tag']} restante(s)")
-        if state.get("tag_error"):
-            print(f"Étiquettes : {state['tag_error']}")
+    s = ctx.settings
+    if not (s.collection_sets or s.collection_titles):
+        print("Aucune collection configurée : ajoute COLLECTION_SETS=jours (et COLLECTION_MAX_PRICE).")
+        return
+    print(f"COLLECTION_SETS = {s.collection_sets}  COLLECTION_TITLES = {s.collection_titles}")
+    state = await refresh_collection(ctx)
+    if state["unknown_sets"]:
+        print(f"Ensemble(s) inconnu(s) : {state['unknown_sets']} — valeur attendue : jours")
+    by_key = targets(ctx)
+    print("\n".join(progress_lines(state, by_key, utcnow(), days=30)))
+    print("Manquantes : " + (", ".join(by_key.get(k, k) for k in state["missing"]) or "aucune"))
+    if state["unmatched"]:
+        print("Titres trouvés mais non reconnus (format différent ?) : " + ", ".join(state["unmatched"]))
+    print(f"Mise maximale par carte manquante : {s.collection_max_price} WB")
+    if state.get("tag"):
+        live = "" if s.is_live("tag_card") else " (simulé : DRY_RUN)"
+        print(f"Étiquette « {state['tag']} » : {state['tagged']} ajoutée(s){live}, {state['to_tag']} restante(s)")
+    if state.get("tag_error"):
+        print(f"Étiquettes : {state['tag_error']}")
 
 
-async def market_status(settings: Settings, pages: int, sort: str, rarity: str) -> None:
+async def market_status(ctx: Context, pages: int, sort: str, rarity: str) -> None:
     """Lit quelques pages du marché (50 enchères, 3 s d'écart) et montre où sont les fins imminentes,
     avec les en-têtes de cache de la réponse (une réponse en cache peut dater de plusieurs secondes)."""
-    async with build_context(settings) as ctx:
-        await ctx.client._maybe_refresh()
-        for page in range(1, pages + 1):
-            if page > 1:
-                await asyncio.sleep(3)
-            resp = await ctx.client._send(ctx.client.endpoints.build("market_page", page=page, sort=sort,
-                                                                     rarity=rarity))
-            now = datetime.now(timezone.utc)
-            cache = {k: v for k, v in resp.headers.items()
-                     if k.lower() in ("age", "cache-control", "date", "etag", "last-modified", "expires")
-                     or "cache" in k.lower()}
-            if resp.status_code != 200:
-                print(f"page {page} : HTTP {resp.status_code} {resp.text[:200]}")
-                break
-            result = MarketPage.model_validate(resp.json())
-            auctions, more = result.items(), result.hasMore
-            print(f"page {page} : en-têtes {cache}")
-            left = sorted(a.seconds_left(now) for a in auctions)
-            statuses: dict[str, int] = {}
-            for a in auctions:
-                statuses[a.status] = statuses.get(a.status, 0) + 1
-            span = f"fins de {left[0]:+.0f} s à {left[-1]:+.0f} s" if left else "vide"
-            print(f"page {page} : {len(auctions)} enchères, {sum(x <= 0 for x in left)} terminées, "
-                  f"{sum(0 < x <= 60 for x in left)} finissent dans la minute, {span}, statuts {statuses}, "
-                  f"hasMore={more}")
-            for a in auctions[:3] + auctions[-2:]:
-                print(f"    {a.seconds_left(now):+8.0f} s  {a.status:<8} {a.rarity or '?':<3} {a.title[:50]}")
-            if not more:
-                break
+    await ctx.client._maybe_refresh()
+    for page in range(1, pages + 1):
+        if page > 1:
+            await asyncio.sleep(3)
+        resp = await ctx.client._send(ctx.client.endpoints.build("market_page", page=page, sort=sort, rarity=rarity))
+        now = utcnow()
+        cache = {k: v for k, v in resp.headers.items()
+                 if k.lower() in ("age", "cache-control", "date", "etag", "last-modified", "expires")
+                 or "cache" in k.lower()}
+        if resp.status_code != 200:
+            print(f"page {page} : HTTP {resp.status_code} {resp.text[:200]}")
+            break
+        result = MarketPage.model_validate(resp.json())
+        auctions, more = result.items(), result.hasMore
+        print(f"page {page} : en-têtes {cache}")
+        left = sorted(a.seconds_left(now) for a in auctions)
+        statuses = dict(Counter(a.status for a in auctions))
+        span = f"fins de {left[0]:+.0f} s à {left[-1]:+.0f} s" if left else "vide"
+        print(f"page {page} : {len(auctions)} enchères, {sum(x <= 0 for x in left)} terminées, "
+              f"{sum(0 < x <= 60 for x in left)} finissent dans la minute, {span}, statuts {statuses}, "
+              f"hasMore={more}")
+        for a in auctions[:3] + auctions[-2:]:
+            print(f"    {a.seconds_left(now):+8.0f} s  {a.status:<8} {a.rarity or '?':<3} {a.title[:50]}")
+        if not more:
+            break
 
 
-async def check_session(settings: Settings) -> None:
-    async with build_context(settings) as ctx:
-        balance = await asyncio.wait_for(ctx.api.balance(), timeout=120)
-        stats = await ctx.api.collection_stats()
-        print(f"Session OK — joueur {ctx.client.user_id or '?'} — solde {balance} WB — {stats.total} exemplaires")
-        print(f"Session : {ctx.client.session_status()}")
+async def check_session(ctx: Context) -> str:
+    balance = await asyncio.wait_for(ctx.api.balance(), timeout=120)
+    stats = await ctx.api.collection_stats()
+    return (f"Session OK — joueur {ctx.client.user_id or '?'} — solde {balance} WB — {stats.total} exemplaires\n"
+            f"Session : {ctx.client.session_status()}")
+
+
+async def profile_status(ctx: Context) -> str:
+    status, data = await ctx.client.supabase("POST", "rpc/get_my_profile", json_body={})
+    return profile_text(data) if status == 200 else f"HTTP {status} : {profile_text(data)}"
+
+
+async def trends_status(ctx: Context, days: int) -> str:
+    return await trends_text(ctx.db, days, await min_profit(ctx), utcnow())
+
+
+async def gifs_status(ctx: Context) -> str:
+    return gif_text(await ctx.db.gif_stats())
+
+
+async def hours_status(ctx: Context, rarity: str) -> str:
+    rarities = [r.strip().upper() for r in rarity.split(",") if r.strip()]
+    return hours_text(await ctx.db.hour_stats(rarities), rarities)
+
+
+async def sniper_report_status(ctx: Context, hours: float, summary: bool) -> str:
+    text = await send_sniper_report(ctx, hours, send=False)
+    return text.split("\n\n== ", 1)[0] if summary else text
+
+
+def in_context(settings: Settings, command: Callable[[Context], Awaitable[object]]) -> None:
+    """Exécute une commande avec le client, la base et Discord ; affiche son résultat, s'il y en a un."""
+    async def _run() -> None:
+        async with build_context(settings) as ctx:
+            result = await command(ctx)
+            if result is not None:
+                print(result)
+    asyncio.run(_run())
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -532,60 +564,25 @@ def main(argv: list[str] | None = None) -> None:
     command = args.command or "run"
     if command == "run":
         asyncio.run(run_bot(settings))
-    elif command == "check":
-        asyncio.run(check_session(settings))
-    elif command == "report":
-        async def _report() -> None:
-            async with build_context(settings) as ctx:
-                print(await daily_report(ctx))
-        asyncio.run(_report())
-    elif command == "inspect":
-        from src.tools.inspect_api import inspect
-        async def _inspect() -> None:
-            async with build_context(settings) as ctx:
-                await inspect(ctx, args.out)
-        asyncio.run(_inspect())
-    elif command == "collection":
-        asyncio.run(collection_status(settings))
-    elif command == "market":
-        asyncio.run(market_status(settings, max(1, min(args.pages, 10)), args.sort, args.rarity.upper()))
-    elif command == "packs":
-        asyncio.run(packs_status(settings, args.hours))
-    elif command == "trends":
-        async def _trends() -> None:
-            async with build_context(settings) as ctx:
-                print(await trends_text(ctx.db, args.days, await min_profit(ctx), datetime.now(timezone.utc)))
-        asyncio.run(_trends())
-    elif command == "reset-simulation":
+        return
+    if command == "reset-simulation":  # base seule : aucune requête au site
         asyncio.run(reset_simulation(settings, args.apply))
-    elif command == "gifs":
-        async def _gifs() -> None:
-            async with build_context(settings) as ctx:
-                print(gif_text(await ctx.db.gif_stats()))
-        asyncio.run(_gifs())
-    elif command == "profile":
-        async def _profile() -> None:
-            async with build_context(settings) as ctx:
-                status, data = await ctx.client.supabase("POST", "rpc/get_my_profile", json_body={})
-                print(profile_text(data) if status == 200 else f"HTTP {status} : {profile_text(data)}")
-        asyncio.run(_profile())
-    elif command == "hours":
-        async def _hours() -> None:
-            rarities = [r.strip().upper() for r in args.rarity.split(",") if r.strip()]
-            async with build_context(settings) as ctx:
-                print(hours_text(await ctx.db.hour_stats(rarities), rarities))
-        asyncio.run(_hours())
-    elif command == "sniper-report":
-        async def _sniper_report() -> None:
-            async with build_context(settings) as ctx:
-                text = await send_sniper_report(ctx, args.hours, send=False)
-                print(text.split("\n\n== ", 1)[0] if args.summary else text)
-        asyncio.run(_sniper_report())
-    elif command == "inventory":
-        async def _inventory() -> None:
-            async with build_context(settings) as ctx:
-                await inventory_cli(ctx, args.action, args.apply, args.lookups)
-        asyncio.run(_inventory())
+        return
+    commands: dict[str, Callable[[Context], Awaitable[object]]] = {
+        "check": check_session,
+        "report": daily_report,
+        "inspect": lambda ctx: inspect(ctx, args.out),
+        "collection": collection_status,
+        "market": lambda ctx: market_status(ctx, max(1, min(args.pages, 10)), args.sort, args.rarity.upper()),
+        "packs": lambda ctx: packs_status(ctx, args.hours),
+        "trends": lambda ctx: trends_status(ctx, args.days),
+        "gifs": gifs_status,
+        "profile": profile_status,
+        "hours": lambda ctx: hours_status(ctx, args.rarity),
+        "sniper-report": lambda ctx: sniper_report_status(ctx, args.hours, args.summary),
+        "inventory": lambda ctx: inventory_cli(ctx, args.action, args.apply, args.lookups),
+    }
+    in_context(settings, commands[command])
 
 
 if __name__ == "__main__":

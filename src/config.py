@@ -7,7 +7,7 @@ du JSON (`{"SR": 15}`). Les heures s'écrivent `HH:MM` (heure de Paris).
 from __future__ import annotations
 
 import json
-from datetime import datetime, time, timezone
+from datetime import datetime, time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_origin
@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal, get_origin
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from src.core.timeutils import in_window
+from src.core.timeutils import in_window, utcnow
 
 RARITIES: tuple[str, ...] = ("C", "PC", "R", "SR", "UR", "L")
 RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
@@ -215,13 +215,12 @@ class Settings(BaseSettings):
     # (relevé du 16/10 : prix final / prix de départ, médiane ×1,11 en UR, ×1,23 en L ; 41 % et 29 % sans
     # surenchère) et les 5 places de vente sont rares : un départ bas vendrait presque au prix d'achat.
     position_list_profit_share: float = 0.5
-    # Revente d'une position : publiée entre ces heures (Paris), pour cette durée (6 h : plus de rotation des
-    # 5 places de vente depuis la fin de la limite d'achats).
     # Revente publiée dès que la carte est arrivée (16/10 : 2 L sur 3 attendaient le lendemain 11 h, capital
     # immobilisé ; l'heure de fin change peu le prix, voir `python -m src.main hours`). False : fenêtre ci-dessous.
     position_post_now: bool = True
-    position_post_start: time = time(11, 0)
+    position_post_start: time = time(11, 0)  # fenêtre de publication (Paris) si POSITION_POST_NOW=false
     position_post_end: time = time(12, 0)
+    # Durée de la revente : 6 h, pour faire tourner plus vite les 5 places de vente.
     position_list_duration_minutes: int = 360
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2
@@ -325,7 +324,7 @@ class Settings(BaseSettings):
         """Heures des mises réelles des positions (SNIPER_LIVE_START / END) ; sans réglage, toujours."""
         if self.sniper_live_start is None or self.sniper_live_end is None:
             return True
-        return in_window(now or datetime.now(timezone.utc), self.sniper_live_start, self.sniper_live_end)
+        return in_window(now or utcnow(), self.sniper_live_start, self.sniper_live_end)
 
     @property
     def mode_label(self) -> str:

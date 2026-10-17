@@ -25,9 +25,9 @@ from urllib.parse import quote
 import httpx
 
 from src.config import RARITY_RANK, Settings
-from src.core.database import utcnow
 from src.core.notifier import Topic
 from src.core.text import normalize_title
+from src.core.timeutils import utcnow
 from src.workers.base import Worker
 from src.workers.trend_common import flush, position_budget, scan_market
 

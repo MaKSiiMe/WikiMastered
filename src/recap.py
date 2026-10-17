@@ -9,10 +9,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from src.core.database import utcnow
-from src.core.notifier import Level, Topic
 from src.core import timeutils
-from src.core.timeutils import now_local, sleep_until
+from src.core.notifier import Level, Topic
+from src.core.timeutils import now_local, sleep_until, utcnow
 from src.workers.base import Context, Worker
 from src.workers.collection import progress_lines, targets
 
@@ -54,12 +53,11 @@ def health(worker: Worker, now: datetime, session_ok: bool) -> tuple[str, str | 
 def activity(name: str, stats: dict[str, int]) -> list[str]:
     """Ce que montre la base pour ce worker depuis le dernier récap."""
     if name == "sniper":
-        lines = [f"Mises : {stats['bids_real']} réelle(s), {stats['bids_sim']} simulée(s) · "
+        return [f"Mises : {stats['bids_real']} réelle(s), {stats['bids_sim']} simulée(s) · "
                  f"collection {stats['bids_collection']}",
                  f"Gagnées : {stats['won']} position(s), {stats['won_collection']} carte(s) de collection · "
                  f"{stats['held']} position(s) détenue(s)" +
                  (f" (dont {stats['held_real']} réelle(s))" if stats["held_real"] != stats["held"] else "")]
-        return lines
     if name == "inventory":
         lines = [f"Mises en vente : {stats['posted']} · vendues {stats['sold']} ({stats['sold_wb']} WB) · "
                  f"sans acheteur {stats['unsold']}"]

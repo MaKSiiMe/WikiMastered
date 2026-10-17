@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -14,7 +14,7 @@ from src.workers.trend_report import measure_signals, trends_text
 async def test_signals_measured_against_later_sales(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ended = now - timedelta(days=2)
 
     async def signal(source, aid, card, min_bid, end):
@@ -55,7 +55,7 @@ async def test_sources_compared_day_by_day(tmp_path):
 
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     later = now + timedelta(hours=3)
     for source, aid, card in (("google", "g1", "Greta Thunberg"), ("google", "g2", "Greta Thunberg"),
                               ("google", "g3", "Lucie Bernardoni"), ("wikipedia", "w1", "Greta Thunberg"),

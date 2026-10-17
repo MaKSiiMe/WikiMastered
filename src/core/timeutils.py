@@ -1,10 +1,10 @@
-"""Heure de Paris, fenêtres horaires et attentes avec jitter."""
+"""Heure UTC et de Paris, fenêtres horaires, attentes."""
 
 from __future__ import annotations
 
 import asyncio
 import random
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -13,6 +13,10 @@ PARIS = ZoneInfo("Europe/Paris")
 def set_timezone(name: str) -> None:
     global PARIS
     PARIS = ZoneInfo(name)
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 def now_local() -> datetime:
@@ -46,11 +50,7 @@ def random_in_window(day: date, start: time, end: time, rng: random.Random | Non
     return begin + timedelta(seconds=rng.uniform(0, (finish - begin).total_seconds()))
 
 
-async def sleep_jitter(low: float, high: float) -> None:
-    await asyncio.sleep(random.uniform(low, max(low, high)))
-
-
 async def sleep_until(moment: datetime) -> None:
-    delay = (moment - datetime.now(timezone.utc)).total_seconds()
+    delay = (moment - utcnow()).total_seconds()
     if delay > 0:
         await asyncio.sleep(delay)

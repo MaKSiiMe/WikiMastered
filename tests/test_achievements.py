@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
-from src.core.api import WikiMastersAPI
-from src.core.database import Database
-from src.core.pricing import PriceService
 from src.workers.achievements import AchievementsWorker
-from src.workers.base import Context
-from tests.test_integration import make_client
+from tests.test_integration import make_client, make_context
 from tests.test_session import cookie_for
 
 
@@ -42,16 +38,15 @@ async def test_unlocked_achievements_are_claimed(tmp_path, monkeypatch, dry_run)
 
     client, notifier = make_client(tmp_path, handler, dry_run=dry_run, supabase_anon_key="anon-key",
                                    wm_cookie=cookie_for("a1", "r1", 3600))
-    db = Database(tmp_path / "t.db")
-    await db.connect()
-    api = WikiMastersAPI(client)
-    worker = AchievementsWorker(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    worker = AchievementsWorker(ctx)
     monkeypatch.setattr("src.workers.achievements.asyncio.sleep", lambda _s: _noop())
     await worker.setup()
     assert await worker.step() > 0 and posts == []  # pas avant ACHIEVEMENTS_TIME
-    worker._next_run = datetime.now(timezone.utc)
+    worker._next_run = datetime.now(UTC)
     await worker.step()
-    assert timedelta(0) < worker._next_run - datetime.now(timezone.utc) <= timedelta(days=1, minutes=5)
+    assert timedelta(0) < worker._next_run - datetime.now(UTC) <= timedelta(days=1, minutes=5)
     if dry_run:
         assert posts == [] and worker.recap() == ["Aucun succès à réclamer"]
     else:

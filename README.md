@@ -120,21 +120,23 @@ Les tirages remarquables, positions achetées et cartes de collection obtenues m
 ## Commandes
 
 ```bash
-python -m src.main run                          # le bot (commande par défaut du conteneur)
-python -m src.main check                        # session, solde, renouvellement automatique
-python -m src.main inspect                      # compare les vraies réponses aux modèles (lecture seule)
-python -m src.main inventory scan               # ce qui serait vendu / défaussé, et pourquoi
+python -m src.main run                             # le bot (commande par défaut du conteneur)
+python -m src.main check                           # session, solde, renouvellement automatique
+python -m src.main inspect                         # compare les vraies réponses aux modèles (lecture seule)
+python -m src.main profile                         # profil du joueur lu sur le site : solde, paquets, pity…
+python -m src.main report                          # envoie le bilan du jour sur Discord
+python -m src.main sniper-report --hours 12        # toutes les enchères misées : gagnées, perdues, gain latent et manqué
+python -m src.main inventory scan                  # ce qui serait vendu / défaussé, et pourquoi
 python -m src.main inventory report --lookups 300  # toute la collection cotée : résumé + data/inventaire-<date>.csv
-python -m src.main sniper-report --hours 12       # toutes les enchères misées : gagnées, perdues, gain latent et manqué
-python -m src.main gifs                           # les cartes GIF se vendent-elles mieux ? (ventes observées)
-python -m src.main inventory list --apply       # programme les ventes
-python -m src.main inventory discard --apply    # défausse, après vérification des paliers
-python -m src.main report                       # envoie le bilan du jour sur Discord
-python -m src.main trends --days 7              # les tendances auraient-elles rapporté ? (détail)
-python -m src.main packs                        # vérifications humaines, paquets ouverts ces dernières 24 h
-python -m src.main collection                   # avancement des collections, cartes manquantes
-python -m src.main market [--rarity UR]         # où sont les fins imminentes sur le marché (diagnostic)
-python -m src.main reset-simulation [--apply]   # efface les mises et ventes simulées (données réelles gardées)
+python -m src.main inventory list --apply          # programme les ventes
+python -m src.main inventory discard --apply       # défausse, après vérification des paliers
+python -m src.main packs                           # vérifications humaines, paquets ouverts ces dernières 24 h
+python -m src.main collection                      # avancement des collections, cartes manquantes
+python -m src.main trends --days 7                 # les tendances auraient-elles rapporté ? (détail)
+python -m src.main hours [--rarity UR,L]           # à quelle heure de fin les enchères se vendent le mieux
+python -m src.main gifs                            # les cartes GIF se vendent-elles mieux ? (ventes observées)
+python -m src.main market [--rarity UR]            # où sont les fins imminentes sur le marché (diagnostic)
+python -m src.main reset-simulation [--apply]      # efface les mises et ventes simulées (données réelles gardées)
 ```
 
 Dans Portainer : *Containers* > `wikimastered` > *Console*. Avec Docker Compose : préfixe par `docker compose exec wikimastered`.

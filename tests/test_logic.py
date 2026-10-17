@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import random
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,8 +11,7 @@ import pytest
 from src.config import Settings
 from src.core.client import user_id_from_cookie
 from src.core.endpoints import Endpoints
-from src.core.models import Auction, CollectionPage, OwnedCard, PackOpenResult, min_next_bid
-from src.core.models import SaleRow
+from src.core.models import Auction, CollectionPage, OwnedCard, PackOpenResult, SaleRow, min_next_bid
 from src.core.pricing import Quote, combine, recent_estimates
 from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
@@ -27,7 +26,7 @@ from src.workers.wiki_trends import detect_spike, expected_rarity
 ROOT = Path(__file__).resolve().parents[1]
 ME = "11111111-1111-1111-1111-111111111111"
 OTHER = "22222222-2222-2222-2222-222222222222"
-NOW = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 
 
 def settings(**overrides) -> Settings:

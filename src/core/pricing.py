@@ -25,19 +25,20 @@ from __future__ import annotations
 import logging
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from src.config import RARITIES
 from src.core.api import WikiMastersAPI
 from src.core.client import ApiError, RateLimited
-from src.core.database import Database, utcnow
+from src.core.database import Database
 from src.core.models import SaleRow, SalesHistory
+from src.core.timeutils import utcnow
 
 log = logging.getLogger(__name__)
 
 ANY = "*"
 OUTLIER_FACTOR = 3.0
-_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+_EPOCH = datetime.min.replace(tzinfo=UTC)
 
 
 @dataclass(frozen=True)

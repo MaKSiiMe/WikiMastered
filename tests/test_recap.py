@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -30,7 +30,7 @@ def worker(name, *, last_ok=None, next_due=None, errors=0, last_error="", lines=
 async def test_recap_reports_activity_health_and_problems(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     since = now - timedelta(hours=4)
     await db.record_pack_open(5)
     for i in range(17):  # 17 positions simulées détenues, plafond 15
@@ -67,7 +67,7 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
 async def test_recap_flags_worker_waiting_for_you(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ctx = SimpleNamespace(settings=Settings(_env_file=None), db=db, client=SimpleNamespace(session_ok=True))
     packs = worker("packs", last_ok=now, next_due=now + timedelta(minutes=7), blocked="vérification humaine en attente")
     problem, _, sections = await build_recap(ctx, [packs], now - timedelta(hours=4), now - timedelta(days=1))
@@ -92,7 +92,7 @@ async def test_recap_live_counts_only_real_positions_against_the_cap(tmp_path):
     """Le 16/10 à 16 h : « 11 positions ouvertes, plafond 5 » alors que 6 étaient simulées (d'avant le réel)."""
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async def hold(i, dry_run):
         await db.record_bid(auction_id=f"a{i}", card_id="c", title="t", rarity="L", is_shiny=False, amount=100,

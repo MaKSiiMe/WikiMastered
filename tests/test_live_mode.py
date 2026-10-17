@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
 from src.config import Settings
-from src.core.api import WikiMastersAPI
-from src.core.database import Database
-from src.core.pricing import PriceService
 from src.workers.auction_sniper import AuctionSniper
-from src.workers.base import Context
-from tests.test_integration import ME, make_client, seed_observed
+from tests.test_integration import ME, make_client, make_context, seed_observed
 
 
 def test_simulate_and_live_writes_groups():
@@ -28,7 +24,7 @@ def test_simulate_and_live_writes_groups():
 def test_positions_live_only_during_sniper_live_hours():
     # 17/10 : le jour, le chasseur de l'extension achète les L depuis le navigateur ; le bot les simule.
     s = Settings(_env_file=None, dry_run=False, sniper_live_start="23:00", sniper_live_end="09:00")
-    day, night = datetime(2026, 10, 17, 12, tzinfo=timezone.utc), datetime(2026, 10, 17, 23, tzinfo=timezone.utc)
+    day, night = datetime(2026, 10, 17, 12, tzinfo=UTC), datetime(2026, 10, 17, 23, tzinfo=UTC)
     assert not s.sniper_live_now(day) and s.sniper_live_now(night)  # 14:00 et 01:00 à Paris
     assert s.mode_label == "RÉEL, positions réelles de 23:00 à 09:00"
     assert s.is_live("place_bid") == s.sniper_live_now() and s.is_live("collection_bid")
@@ -37,7 +33,7 @@ def test_positions_live_only_during_sniper_live_hours():
 
 @pytest.mark.asyncio
 async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def sale(aid, title, base):
         return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "R"},
@@ -66,12 +62,11 @@ async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"],
                                    collection_sets=["jours"], collection_max_price=20)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await seed_observed(db, "card-Mème", [400, 410, 390], rarity="R")
     await db.kv_set("collection", {"owned": [], "missing": ["14 octobre"], "total": 366})
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     await sniper.step()
     status = {r["auction_id"]: (r["status"], r["dry_run"]) for r in await db._all("SELECT * FROM bids")}
@@ -113,12 +108,11 @@ async def test_duplicates_fill_free_slots_during_the_day(tmp_path, monkeypatch):
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"], auto_list=True,
                                    sell_price_lookups_per_run=0)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     for card, prices in (("A", [300, 310]), ("B", [100, 90]), ("C", [50, 60])):
         await seed_observed(db, card, prices)
-    api = WikiMastersAPI(client)
-    inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    inv = InventoryManager(ctx)
     await inv.setup()
     assert await inv.fill_free_slots() == 2  # 2 places libres sur 5 : les 2 doublons les mieux cotés
     rows = await db._all("SELECT card_id, post_at FROM listings ORDER BY base_amount DESC")
@@ -137,7 +131,7 @@ async def test_duplicates_fill_free_slots_during_the_day(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_simulated_positions_never_block_real_collection_bids(tmp_path, caplog):
     """Des positions simulées qui dépassent le solde bloquent les mises simulées, pas les vraies."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def sale(aid, title, base):
         return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": "R"},
@@ -163,15 +157,14 @@ async def test_simulated_positions_never_block_real_collection_bids(tmp_path, ca
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"],
                                    collection_sets=["jours"], collection_max_price=20)
-    db = Database(tmp_path / "t.db")
-    await db.connect()
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
     await seed_observed(db, "card-Mème", [400, 410, 390], rarity="R")
     await db.kv_set("collection", {"owned": [], "missing": ["14 octobre"], "total": 366})
     await db.record_bid(auction_id="vieille", card_id="x", title="x", rarity="C", is_shiny=False, amount=6400,
                         reference_price=None, reason="revente", night=False, dry_run=True, status="sim_won",
                         end_at=now - timedelta(days=1))  # position simulée détenue : 6400 WB > solde
-    api = WikiMastersAPI(client)
-    sniper = AuctionSniper(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+    sniper = AuctionSniper(ctx)
     await sniper.setup()
     caplog.set_level("INFO", logger="worker.sniper")
     await sniper.step()

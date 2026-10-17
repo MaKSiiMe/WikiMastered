@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -13,7 +14,7 @@ from src.core.database import Database
 async def test_purge_keeps_accounting_and_recent_market(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old, recent = (now - timedelta(days=200)).isoformat(), (now - timedelta(days=2)).isoformat()
     await db.db.executemany("INSERT INTO observed_sales (auction_id, card_id, price, ended_at) VALUES (?, 'c', 10, ?)",
                             [("old", old), ("new", recent)])
@@ -33,6 +34,26 @@ async def test_purge_keeps_accounting_and_recent_market(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_obsolete_tables_dropped_on_existing_database(tmp_path):
+    """Une base d'une ancienne version perd ses vestiges au démarrage ; le reste est gardé."""
+    path = tmp_path / "t.db"
+    old = sqlite3.connect(path)
+    old.executescript("CREATE TABLE trend_alerts (auction_id TEXT PRIMARY KEY, article TEXT, alerted_at TEXT);"
+                      "CREATE TABLE auctions_seen (auction_id TEXT PRIMARY KEY, card_id TEXT, title TEXT, "
+                      "norm_title TEXT, rarity TEXT, is_shiny INTEGER NOT NULL DEFAULT 0, current_bid INTEGER, "
+                      "base_amount INTEGER, min_bid INTEGER, end_at TEXT, seen_at TEXT NOT NULL);"
+                      "CREATE INDEX idx_auctions_title ON auctions_seen (norm_title);"
+                      "INSERT INTO auctions_seen (auction_id, norm_title, seen_at) VALUES ('a', 'x', 'now');")
+    old.close()
+    db = Database(path)
+    await db.connect()
+    names = {r["name"] for r in await db._all("SELECT name FROM sqlite_master")}
+    assert "trend_alerts" not in names and "idx_auctions_title" not in names
+    assert len(await db._all("SELECT * FROM auctions_seen")) == 1
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_estimates_compare_same_rarity_and_shiny(tmp_path):
     """Un exemplaire Commun ne s'estime pas sur les ventes de la même carte en UR ou shiny."""
     from src.core.client import ApiError
@@ -40,7 +61,7 @@ async def test_estimates_compare_same_rarity_and_shiny(tmp_path):
 
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rows = [("a1", "UR", 0, 500), ("a2", "UR", 0, 520), ("a3", "C", 0, 12), ("a4", "C", 0, 10), ("a5", "C", 1, 90)]
     await db.db.executemany(
         "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
@@ -67,7 +88,7 @@ async def test_unsettled_bids_count_until_settled(tmp_path):
     """Une mise dont l'enchère vient de finir, pas encore relue, compte toujours dans les plafonds."""
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async def bid(aid, status, amount, reason="revente ~300 WB", end=now - timedelta(minutes=5), dry_run=True):
         await db.record_bid(auction_id=aid, card_id=aid, title=aid, rarity="C", is_shiny=False, amount=amount,
@@ -88,7 +109,7 @@ async def test_unsettled_bids_count_until_settled(tmp_path):
 async def test_reset_simulation_keeps_real_data(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for aid, dry_run in (("sim", True), ("reel", False)):
         bid_id = await db.record_bid(auction_id=aid, card_id=aid, title=aid, rarity="C", is_shiny=False, amount=10,
                                      reference_price=None, reason="revente", night=False, dry_run=dry_run,
@@ -108,7 +129,7 @@ async def test_reset_simulation_keeps_real_data(tmp_path):
 async def test_suspect_sales_do_not_count_in_quotes(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     rows = [("a1", "s1", "b1", 400), ("a2", "s2", "b2", 420),        # ventes ordinaires
             ("a3", "s9", "b9", 5000), ("a4", "s9", "b9", 5200),      # même paire deux fois : factices
             ("a5", "s7", "s7", 9000)]                                # vendeur = acheteur

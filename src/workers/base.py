@@ -12,9 +12,10 @@ import httpx
 from src.config import Settings
 from src.core.api import WikiMastersAPI
 from src.core.client import ApiError, RateLimited, SessionExpired, UncertainMutation, WikiMastersClient
-from src.core.database import Database, utcnow
+from src.core.database import Database
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
+from src.core.timeutils import utcnow
 
 
 @dataclass

@@ -25,20 +25,20 @@ Une vente intéressante devient une cible ; dans sa fenêtre de mise, l'enchère
 
 from __future__ import annotations
 
+import contextlib
 import math
 import random
+from collections import Counter
 from dataclasses import dataclass, replace
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 
 from src.config import Settings
 from src.core import timeutils
 from src.core.client import ApiError, RateLimited, UncertainMutation
-from src.core.database import utcnow
 from src.core.models import Auction, BidResult, Card
 from src.core.notifier import Topic
 from src.core.pricing import Quote, combine, trusted
-from src.core.text import normalize_title
-from src.core.timeutils import in_window, local_dt, now_local
+from src.core.timeutils import in_window, local_dt, now_local, utcnow
 from src.workers.base import Worker
 from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers.collection import collection_key, record_win, targets as collection_targets
@@ -69,7 +69,7 @@ QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
 # Mises surenchéries relues à la fin de leur enchère (gagnées malgré tout ?) : celles des 2 derniers jours,
 # pas tout l'historique (enchères anciennes souvent disparues du site).
 OUTBID_SETTLE_WINDOW = timedelta(days=2)
-_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+_EPOCH = datetime.min.replace(tzinfo=UTC)
 
 
 @dataclass
@@ -540,10 +540,8 @@ class AuctionSniper(Worker):
         Pas de cote pour une carte de collection : sa mise n'en dépend pas, et la route des cotes est lente."""
         await self.portfolio(now)
         if auction.rarity in self._resale_rarities and not self._wanted(auction):
-            try:
+            with contextlib.suppress(RateLimited, ApiError):
                 await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
-            except (RateLimited, ApiError):
-                pass
 
     async def _refresh_target(self, target: Target) -> None:
         aid = target.auction.id
@@ -589,10 +587,8 @@ class AuctionSniper(Worker):
         for a in soon:
             if await self.ctx.prices.is_cached(a.catalog_id):
                 continue
-            try:
+            with contextlib.suppress(RateLimited, ApiError):
                 await self.ctx.prices.quote(a.catalog_id, a.rarity, wait=False, shiny=a.shiny)
-            except (RateLimited, ApiError):
-                pass
             return True
         return False
 
@@ -682,7 +678,7 @@ class AuctionSniper(Worker):
         """Sniper de test : simule les achats que le sniper réel n'a pas faits (plafonds du test), avec ses propres
         limites, pour continuer à mesurer la stratégie. Jamais une carte de collection ni une vente déjà misée."""
         s = self.settings
-        portfolio = await self.shadow_portfolio(now)
+        portfolio = await self.shadow_portfolio()
         shadow = replace(params, max_bid=s.sniper_shadow_max_bid)
         candidates: list[tuple[float, Auction, Decision]] = []
         for auction in auctions:
@@ -732,7 +728,7 @@ class AuctionSniper(Worker):
             max_positions=cap, sale_room=room,
         )
 
-    async def shadow_portfolio(self, now: datetime) -> Portfolio:
+    async def shadow_portfolio(self) -> Portfolio:
         """Positions du sniper de test : simulées seulement, avec leur propre plafond."""
         held = await self.db.positions_summary()
         pending = await self.db.pending_bids()
@@ -862,7 +858,7 @@ class AuctionSniper(Worker):
 
     async def _remember(self, auctions: list[Auction], now: datetime) -> None:
         await self.db.upsert_auctions([{
-            "auction_id": a.id, "card_id": a.catalog_id, "title": a.title, "norm_title": normalize_title(a.title),
+            "auction_id": a.id, "card_id": a.catalog_id, "title": a.title,
             "rarity": a.rarity, "is_shiny": int(a.shiny), "current_bid": a.current_bid,
             "base_amount": a.base_amount, "min_bid": a.min_bid, "end_at": a.end_at.isoformat(),
             "seen_at": now.isoformat(), "seller_id": a.seller_id, "bidder_id": a.current_bidder_id,
@@ -961,10 +957,7 @@ class AuctionSniper(Worker):
         self._gaps = self._days_found = 0
         if not outcomes:
             return [found, "Aucune enchère dans la fenêtre de mise."]
-        counts: dict[str, int] = {}
-        for outcome in outcomes.values():
-            counts[outcome] = counts.get(outcome, 0) + 1
-        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+        ranked = Counter(outcomes.values()).most_common()
         return [found, f"{len(outcomes)} enchère(s) examinée(s) : " + " · ".join(f"{o} {n}" for o, n in ranked)]
 
     async def _affordable(self, decision: Decision, params: SnipeParams, portfolio: Portfolio) -> bool:
@@ -1145,7 +1138,7 @@ class AuctionSniper(Worker):
                 self.log.info("%s : %s", title, row["title"])
                 return
             notify(title, f"{name}, gardée dans la collection", topic=Topic.COLLECTION, **look,
-                   **{"rareté": row["rarity"] or "?", "prix": f"{row['amount']} WB"})
+                   rareté=row["rarity"] or "?", prix=f"{row['amount']} WB")
             return
         ref = row["reference_price"]
         fields = {"rareté": row["rarity"] or "?", "mise": f"{row['amount']} WB"}
