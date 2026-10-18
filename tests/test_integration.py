@@ -267,7 +267,22 @@ async def test_route_rate_limit_does_not_freeze_other_routes(tmp_path):
     assert client.route_paused_for("sales_summary") > 100
     assert await asyncio.wait_for(api.balance(), timeout=1) == 3  # les autres routes continuent
     assert client.session_ok
-    assert [lvl for lvl, title in notifier.sent if "Route limitée" in title] == ["WARNING"]
+    assert not [title for _, title in notifier.sent if "Route limitée" in title]  # refus isolé : logs seulement
+
+
+@pytest.mark.asyncio
+async def test_route_limit_alert_only_after_repeated_refusals(tmp_path):
+    """18/10 : sales_summary refusée une fois toutes les ~80 min, reprise 1 min plus tard. Message à partir du
+    3e refus de suite (sans succès entre les deux), une fois par heure au plus."""
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
+    client._route_backoff("sales_summary", 0)
+    client._on_route_success("sales_summary")  # repartie : le compte repart de zéro
+    client._route_backoff("sales_summary", 0)
+    client._route_backoff("sales_summary", 0)
+    assert not notifier.sent
+    client._route_backoff("sales_summary", 0)
+    client._route_backoff("sales_summary", 0)
+    assert notifier.sent == [("WARNING", "Route limitée : sales_summary")]
 
 
 @pytest.mark.asyncio
@@ -552,7 +567,8 @@ async def test_first_rate_limit_alert_even_right_after_boot(tmp_path, monkeypatc
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
     monkeypatch.setattr(client_module.time, "monotonic", lambda: 5.0)
     client._backoff("balance: HTTP 429", limited=True)
-    client._route_backoff("sales_summary", 0)
+    for _ in range(3):
+        client._route_backoff("sales_summary", 0)
     assert ("CRITICAL", "Limitation de requêtes (429)") in notifier.sent
     assert ("WARNING", "Route limitée : sales_summary") in notifier.sent
 
