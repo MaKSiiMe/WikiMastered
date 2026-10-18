@@ -103,9 +103,12 @@ class PriceService:
         self.db = db
         self.default_ttl = timedelta(minutes=default_ttl_minutes)
         self.recent_n = recent_n
+        self.pro = False  # compte PRO, d'après la dernière cote lue (isPro)
 
     async def _fetch(self, card_id: str, wait: bool) -> dict[str, tuple[float | None, int | None]]:
-        if self.api.client.endpoints.has("sales_history"):
+        # Historique des ventes : réservé aux comptes PRO (403 sinon, relevé du 14/10). Demandé seulement quand la
+        # cote du site dit le compte PRO ; avant, chaque 403 coûtait en plus une vérification de session.
+        if self.pro and self.api.client.endpoints.has("sales_history"):
             try:
                 history = SalesHistory.model_validate(
                     await self.api.client.get("sales_history", card_id=card_id, wait=wait))
@@ -117,6 +120,7 @@ class PriceService:
             except (ApiError, ValueError) as exc:
                 log.debug("historique indisponible pour %s (%s), repli sur la moyenne", card_id, exc)
         summary = await self.api.sales_summary(card_id, wait=wait)
+        self.pro = summary.is_pro
         return {
             r: (s.average, s.count)
             for r, s in summary.summary.items()

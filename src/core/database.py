@@ -588,6 +588,19 @@ class Database:
             groups.setdefault(r["rarity"], []).append((r["price"], single))
         return {rarity: (sales[:limit], len(sales)) for rarity, sales in groups.items()}
 
+    async def observed_for_title(self, title: str) -> list[aiosqlite.Row]:
+        """Ventes observées d'une carte, par son titre (commande prices) : plus récentes d'abord, suspectes marquées."""
+        return await self._all(
+            f"SELECT card_id, rarity, is_shiny, price, base_amount, ended_at, {SUSPECT_SALE} AS suspect "
+            "FROM observed_sales o WHERE title = ? COLLATE NOCASE ORDER BY ended_at DESC", (title,))
+
+    async def bids_for_title(self, title: str) -> list[aiosqlite.Row]:
+        """Achats de positions du bot sur cette carte (commande prices) : mise, estimation à l'achat, issue."""
+        return await self._all(
+            "SELECT card_id, rarity, amount, reference_price, status, dry_run, placed_at, sale_price FROM bids "
+            "WHERE title = ? COLLATE NOCASE AND reason NOT LIKE 'collection%' AND status IN ('won', 'sim_won') "
+            "ORDER BY placed_at DESC", (title,))
+
     async def observed_prices_since(self, card_id: str, since: datetime, limit: int, rarity: str | None = None,
                                     shiny: bool | None = None) -> list[int]:
         where, params = _observed_filter(card_id, rarity, shiny)

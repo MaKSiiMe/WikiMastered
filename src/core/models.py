@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 from urllib.parse import quote, urlsplit
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.config import RARITY_RANK
 from src.core.timeutils import utcnow
@@ -186,6 +186,7 @@ class RaritySales(_Model):
 class SalesSummary(_Model):
     summary: dict[str, RaritySales] = {}
     wikipedia_title: str | None = None
+    is_pro: bool = Field(False, alias="isPro")
 
 
 class SaleRow(_Model):

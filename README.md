@@ -135,6 +135,7 @@ python -m src.main collection                      # avancement des collections,
 python -m src.main trends --days 7                 # les tendances auraient-elles rapporté ? (détail)
 python -m src.main hours [--rarity UR,L]           # à quelle heure de fin les enchères se vendent le mieux
 python -m src.main gifs                            # les cartes GIF se vendent-elles mieux ? (ventes observées)
+python -m src.main prices "Titre exact"            # ventes observées d'une carte, estimation du bot, ventes en cours
 python -m src.main market [--rarity UR]            # où sont les fins imminentes sur le marché (diagnostic)
 python -m src.main reset-simulation [--apply]      # efface les mises et ventes simulées (données réelles gardées)
 ```

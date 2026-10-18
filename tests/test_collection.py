@@ -56,7 +56,7 @@ async def test_duplicates_priced_within_quota(tmp_path):
     await seed_observed(db, "B", [60, 70])
     inv = InventoryManager(ctx)
     groups, excluded, quotes, _ = await inv.snapshot()
-    assert len(lookups) == 2  # A (3 exemplaires, prioritaire) : historique refusé puis moyenne, 1 seule carte
+    assert len(lookups) == 1  # A (3 exemplaires, prioritaire) : la cote seule, 1 seule carte
     assert quotes["C"] == {}  # ni cote ni vente observée : ignorée ce passage
     sales = select_for_sale(groups, quotes, excluded, client.settings)
     assert sorted((c.owned.catalog_id, c.price) for c in sales) == [("A", 80), ("A", 80), ("B", 65)]
@@ -254,3 +254,25 @@ async def test_profile_command_reads_the_rpc_and_hides_personal_fields(tmp_path)
     assert status == 200 and "pity_counter = 7" in text and "packs_remaining = 3" in text
     assert "email = ***" in text and "exemple.fr" not in text
     assert "Réponse inattendue" in profile_text(None)
+
+
+@pytest.mark.asyncio
+async def test_sales_history_asked_only_for_a_pro_account(tmp_path):
+    """Historique des ventes réservé aux comptes PRO : le 18/10, le bot le demandait toutes les 6 h pour un 403."""
+    asked, pro = [], {"isPro": False}
+
+    def handler(request):
+        scope = request.url.params.get("scope")
+        asked.append(scope or "history")
+        if scope == "summary":
+            return httpx.Response(200, json={"summary": {"L": {"average": 900}}, **pro})
+        return httpx.Response(200, json={"recent": [{"final_price": 700, "snapshot_rarity": "L"}]})
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    prices = ctx.prices
+    assert (await prices.quote("a", "L")).average == 900 and asked == ["summary"]
+    pro["isPro"] = True
+    await prices.quote("b", "L")
+    assert (await prices.quote("c", "L")).average == 700 and asked == ["summary", "summary", "history"]
+    await ctx.db.close()

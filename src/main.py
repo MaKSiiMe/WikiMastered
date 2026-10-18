@@ -311,6 +311,74 @@ def hours_text(rows, rarities: list[str]) -> str:
     return "\n".join(lines)
 
 
+PRICES_SHOWN = 15  # ventes observées affichées par rareté
+
+
+def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime) -> str:
+    """Ventes observées d'une carte, estimation du bot, achats du bot et ventes en cours (commande prices)."""
+    def paris(value) -> str:
+        moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+        return f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
+
+    lines = [f"{title}", "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de 2 min "
+             "avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais comptée."]
+    rarities = sorted({r["rarity"] for r in observed} | set(quotes), key=lambda r: -RARITY_RANK.get(r, -1))
+    if not rarities:
+        lines.append("  aucune")
+    for rarity in rarities:
+        sales = [r for r in observed if r["rarity"] == rarity and not r["is_shiny"]]
+        quote = quotes.get(rarity)
+        estimate = f"~{quote.average:.0f} WB" if quote and quote.average is not None else "aucune"
+        average = site.get(rarity, (None, None))[0]
+        lines.append(f"\n{rarity} : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
+                     f"5 dernières, plafonnée par la moyenne du site : "
+                     f"{f'{average:.0f} WB' if average is not None else 'inconnue'})")
+        for r in sales[:PRICES_SHOWN]:
+            notes = []
+            if r["base_amount"] and r["price"] <= r["base_amount"]:
+                notes.append("au prix de départ, sans surenchère")
+            if r["suspect"]:
+                notes.append("suspecte, ignorée")
+            start = f"départ {r['base_amount']}" if r["base_amount"] else "départ ?"
+            notes_text = "  " + ", ".join(notes) if notes else ""
+            lines.append(f"  {paris(r['ended_at'])}  {r['price']:>6} WB  ({start}){notes_text}")
+        if len(sales) > PRICES_SHOWN:
+            lines.append(f"  … et {len(sales) - PRICES_SHOWN} plus ancienne(s)")
+    if bought:
+        lines.append("\nAchats du bot :")
+        for b in bought:
+            kind = "simulé" if b["dry_run"] else "réel"
+            sold = f", revendue {b['sale_price']}" if b["sale_price"] else ""
+            ref = f"{b['reference_price']:.0f}" if b["reference_price"] else "?"
+            lines.append(f"  {paris(b['placed_at'])}  {b['rarity']}  {kind} : {b['amount']} WB, estimée ~{ref}{sold}")
+    lines.append(f"\nEn vente maintenant ({len(selling)}) :" if selling else "\nEn vente maintenant : aucune")
+    for a in sorted(selling, key=lambda a: a.min_bid):
+        price = f"mise actuelle {a.current_bid}" if a.current_bid else f"départ {a.base_amount}, aucune mise"
+        mine = "  (toi)" if me and (a.seller_id or "").lower() == me.lower() else ""
+        left = int(a.seconds_left(now) // 60)
+        lines.append(f"  {a.rarity or '?':<3}{' ✨' if a.shiny else ''} {price}, fin dans {left // 60} h "
+                     f"{left % 60:02d}{mine}")
+    return "\n".join(lines)
+
+
+async def prices_status(ctx: Context, title: str) -> str:
+    observed = await ctx.db.observed_for_title(title)
+    auctions, _ = await ctx.api.market_page(sort="ending_soon", q=title, limit=50)
+    now = utcnow()
+    selling = [a for a in auctions if a.title.casefold() == title.casefold() and a.seconds_left(now) > 0]
+    card_ids = {r["card_id"] for r in observed} | {a.catalog_id for a in selling}
+    if not card_ids:
+        return f"« {title} » : ni vente observée ni vente en cours (titre exact de la carte, sans « (L) »)."
+    quotes, site = {}, {}
+    for card_id in card_ids:  # en principe une seule carte par titre
+        quotes.update({r: q for r, q in (await ctx.prices.quotes(card_id)).items() if r in RARITY_RANK})
+        cached = await ctx.db.price_get(card_id)
+        site.update(cached[1] if cached else {})
+    name = selling[0].title if selling else title
+    return prices_text(name, observed, await ctx.db.bids_for_title(title), selling, quotes, site,
+                       ctx.client.user_id, now)
+
+
 async def heartbeat(ctx: Context) -> None:
     path = ctx.settings.data_dir / "heartbeat"
     while True:
@@ -552,6 +620,9 @@ def main(argv: list[str] | None = None) -> None:
     snr = sub.add_parser("sniper-report", help="toutes les enchères misées sur les N dernières heures (lecture seule)")
     snr.add_argument("--hours", type=float, default=24)
     snr.add_argument("--summary", action="store_true", help="les chiffres seulement, sans la liste des enchères")
+    pr = sub.add_parser("prices", help="ventes observées d'une carte, estimation du bot et ventes en cours "
+                                       "(lecture seule)")
+    pr.add_argument("title", help="titre exact de la carte, entre guillemets")
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
     inv.add_argument("action", choices=["scan", "report", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
@@ -580,6 +651,7 @@ def main(argv: list[str] | None = None) -> None:
         "profile": profile_status,
         "hours": lambda ctx: hours_status(ctx, args.rarity),
         "sniper-report": lambda ctx: sniper_report_status(ctx, args.hours, args.summary),
+        "prices": lambda ctx: prices_status(ctx, args.title),
         "inventory": lambda ctx: inventory_cli(ctx, args.action, args.apply, args.lookups),
     }
     in_context(settings, commands[command])
