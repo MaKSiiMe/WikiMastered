@@ -258,7 +258,7 @@ async def test_profile_command_reads_the_rpc_and_hides_personal_fields(tmp_path)
 
 @pytest.mark.asyncio
 async def test_sales_history_asked_only_for_a_pro_account(tmp_path):
-    """L'historique des ventes est réservé aux comptes PRO : le 18/10, le bot le demandait toutes les 6 h pour un 403."""
+    """Historique des ventes réservé aux comptes PRO : le 18/10, le bot le demandait toutes les 6 h pour un 403."""
     asked, pro = [], {"isPro": False}
 
     def handler(request):
