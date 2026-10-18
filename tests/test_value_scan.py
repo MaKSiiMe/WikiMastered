@@ -117,7 +117,7 @@ async def test_scan_reports_valuable_cards_and_freezes_cheap_ones(tmp_path):
     await worker.step()  # lecture de la collection
     assert worker._queue == ["c2", "c1"]  # la plus vue sur Wikipédia d'abord
     delay = await worker.step()  # 1re cote : limitée, elle attend et le rythme ralentit
-    assert worker._queue == ["c2", "c1"] and worker._spacing == 6 and delay == 6
+    assert worker._queue == ["c2", "c1"] and worker._spacing == 6 and delay > 60
     client._route_pause.clear()
     while worker._queue:
         await worker.step()
@@ -207,3 +207,24 @@ async def test_pace_slows_on_refusal_and_speeds_up_gently(tmp_path):
         worker._accepted()
     assert worker._spacing == 3  # jamais sous VALUE_SCAN_LOOKUP_SECONDS
     await worker.db.close()
+
+
+@pytest.mark.asyncio
+async def test_server_errors_pause_the_scan_without_slowing_it(tmp_path):
+    """18/10 au soir : des 500 en série (site instable) faisaient tomber l'analyse à une cote toutes les 182 s."""
+    def handler(request):
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(500, json={"error": "boom"})
+        return httpx.Response(200, json={"collection": []})
+
+    client, notifier = make_client(tmp_path, handler, value_scan_lookup_seconds=3, backoff_base_seconds=30)
+    ctx = await make_context(tmp_path, client, notifier)
+    worker = ValueScan(ctx)
+    await worker.setup()
+    await worker.start_cycle(datetime.now(UTC))
+    worker._queue = ["c1"]
+    delay = await worker.lookup()
+    assert worker._queue == ["c1"] and worker._spacing == 3 and delay > 30  # attend la fin de la pause
+    assert await worker.lookup() > 25  # toujours en pause : aucune requête, pas de ralentissement
+    assert worker._spacing == 3
+    await ctx.db.close()

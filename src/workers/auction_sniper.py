@@ -35,7 +35,7 @@ from datetime import UTC, datetime, time, timedelta
 from src.config import Settings
 from src.core import timeutils
 from src.core.client import ApiError, RateLimited, UncertainMutation
-from src.core.models import Auction, BidResult, Card
+from src.core.models import Auction, BidResult, Card, OwnedCard
 from src.core.notifier import Topic
 from src.core.pricing import Quote, combine, trusted
 from src.core.timeutils import in_window, local_dt, now_local, utcnow
@@ -69,6 +69,12 @@ QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
 # Mises surenchéries relues à la fin de leur enchère (gagnées malgré tout ?) : celles des 2 derniers jours,
 # pas tout l'historique (enchères anciennes souvent disparues du site).
 OUTBID_SETTLE_WINDOW = timedelta(days=2)
+# Enchère introuvable (404) juste après sa fin : le 18/10 à 23:00, site instable, Quentin Dupieux (L) à 444 WB était
+# comptée perdue 2 min après la fin, solde toujours débité. Relue pendant N avant d'être comptée perdue ; une carte
+# arrivée dans la collection depuis la mise prouve qu'elle est gagnée.
+VANISHED_GRACE = timedelta(minutes=30)
+VANISHED_RETRY = timedelta(minutes=5)
+VANISHED_NOTE = "enchère introuvable sur le site"
 # Vente concurrente d'une revente : encore en cours au moins N après l'achat (une qui finit avant ne gêne guère).
 RIVAL_MIN_OVERLAP = timedelta(hours=1)
 _EPOCH = datetime.min.replace(tzinfo=UTC)
@@ -318,7 +324,9 @@ class AuctionSniper(Worker):
         # ventes de ces cartes déjà signalées dans les logs : id -> issue journalisée (None = repérée).
         self._collection_wanted: set[str] = set()
         self._collection_logged: dict[str, str | None] = {}
+        self._vanished_retry: dict[int, datetime] = {}  # mise -> prochaine relecture de son enchère introuvable
         await self._load_collection()
+        await self._recover_vanished()
         await self._refresh_engaged()
         await self._check_config()
         if not self.api.user_id:
@@ -1116,7 +1124,10 @@ class AuctionSniper(Worker):
         """Résultat des enchères échues. En DRY_RUN : gagnée si personne n'a payé plus que notre mise."""
         cutoff = utcnow() - timedelta(seconds=self.settings.sniper_settle_grace_seconds)
         me = self.api.user_id
-        for row in await self.db.bids_to_settle(cutoff, limit=3, outbid_since=utcnow() - OUTBID_SETTLE_WINDOW):
+        rows = await self.db.bids_to_settle(cutoff, limit=3 + len(self._vanished_retry),
+                                            outbid_since=utcnow() - OUTBID_SETTLE_WINDOW)
+        due = [r for r in rows if self._vanished_retry.get(r["id"], _EPOCH) <= utcnow()]
+        for row in due[:3]:
             auction = await self._settled_auction(row)
             if auction is None:
                 continue
@@ -1134,21 +1145,63 @@ class AuctionSniper(Worker):
 
     async def _settled_auction(self, row) -> Auction | None:
         """Relit l'enchère d'une mise. Disparue du site (404 « Enchère introuvable », relevé du 15/10 au soir) :
-        la mise est close comme perdue, au lieu de faire échouer le passage du sniper à chaque règlement."""
+        gagnée si la carte est arrivée dans la collection ; sinon relue pendant VANISHED_GRACE après la fin, puis
+        close comme perdue, au lieu de faire échouer le passage du sniper à chaque règlement."""
         try:
-            return await self.api.auction(row["auction_id"])
+            auction = await self.api.auction(row["auction_id"])
+            self._vanished_retry.pop(row["id"], None)
+            return auction
         except ApiError as exc:
             if exc.status != 404:
                 raise
         simulated = row["status"] == "simulated"
         label = f"{row['title']} ({row['rarity']}), {row['amount']} WB"
+        if not simulated:
+            if await self._won_vanished(row):
+                return None
+            # En tête à notre dernière lecture : peut-être gagnée. Surenchérie : déjà comptée perdue, close tout de suite.
+            if row["status"] == "placed" and utcnow() - datetime.fromisoformat(row["end_at"]) < VANISHED_GRACE:
+                self._vanished_retry[row["id"]] = utcnow() + VANISHED_RETRY
+                self.log.info("%s : enchère introuvable sur le site, relue dans %d min", label,
+                              VANISHED_RETRY.seconds // 60)
+                return None
+        self._vanished_retry.pop(row["id"], None)
         self.log.info("%s : enchère introuvable sur le site, mise close comme perdue", label)
         await self._close_bid(row, False, simulated)
-        await self.db.update_bid(row["id"], note="enchère introuvable sur le site")
+        await self.db.update_bid(row["id"], note=VANISHED_NOTE)
         if not simulated and row["status"] != "outbid":  # déjà comptée perdue : pas d'alerte
             self.notifier.warning("Mise à vérifier", f"{label} : enchère introuvable sur le site, comptée perdue. "
                                   "Vérifie dans ta collection si la carte est arrivée.")
         return None
+
+    async def _arrived_copy(self, row) -> OwnedCard | None:
+        """Exemplaire de la carte misée (même rareté, shiny ou non) obtenu depuis la mise, parmi les derniers obtenus."""
+        placed = datetime.fromisoformat(row["placed_at"]) - timedelta(minutes=1)
+        try:
+            page = await self.api.collection_page(0, sort="added")
+        except ApiError as exc:
+            self.log.debug("collection illisible (%s)", exc)
+            return None
+        return next((c for c in page.rows() if c.catalog_id == row["card_id"] and c.rarity == row["rarity"]
+                     and c.is_shiny == bool(row["is_shiny"]) and c.obtained_at and c.obtained_at >= placed), None)
+
+    async def _won_vanished(self, row) -> bool:
+        """Enchère introuvable mais carte arrivée : gagnée, au prix de notre mise (une position, à revendre)."""
+        copy = await self._arrived_copy(row)
+        if copy is None:
+            return False
+        self._vanished_retry.pop(row["id"], None)
+        self.log.info("%s (%s), %d WB : enchère introuvable, mais la carte est arrivée : gagnée", row["title"],
+                      row["rarity"], row["amount"])
+        await self._close_bid(row, True, False, copy.card, final=row["amount"])
+        await self.db.update_bid(row["id"], note="enchère introuvable, carte arrivée dans la collection")
+        return True
+
+    async def _recover_vanished(self) -> None:
+        """Mises réelles comptées perdues car introuvables, ces 2 derniers jours : gagnées si la carte est arrivée
+        (avant VANISHED_GRACE, une seule lecture 404 suffisait à les clore). Message « Position achetée ! »."""
+        for row in await self.db.vanished_bids(utcnow() - OUTBID_SETTLE_WINDOW, VANISHED_NOTE):
+            await self._won_vanished(row)
 
     async def _close_bid(self, row, won: bool, simulated: bool, card: Card | None = None,
                          final: int | None = None) -> None:
