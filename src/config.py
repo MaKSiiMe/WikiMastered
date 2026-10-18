@@ -298,10 +298,15 @@ class Settings(BaseSettings):
     @field_validator("*", mode="before")
     @classmethod
     def _pad_hours(cls, value: Any, info: ValidationInfo) -> Any:
-        """Une heure s'écrit aussi sans zéro initial : 3:00 vaut 03:00 (17/10 : SNIPER_LIVE_START=3:00 refusé)."""
+        """Une heure s'écrit aussi sans zéro initial : 3:00 vaut 03:00 (17/10 : SNIPER_LIVE_START=3:00 refusé).
+
+        Vide vaut « pas de réglage » quand l'heure est facultative : Portainer garde la variable vidée (18/10).
+        """
         field = cls.model_fields.get(info.field_name or "")
         if field is not None and time in (field.annotation, *get_args(field.annotation)) and isinstance(value, str):
             value = value.strip()
+            if not value and type(None) in get_args(field.annotation):
+                return None
             if re.fullmatch(r"\d:\d\d(:\d\d)?", value):
                 return f"0{value}"
         return value

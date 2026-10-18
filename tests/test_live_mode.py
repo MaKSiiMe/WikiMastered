@@ -182,3 +182,10 @@ def test_hours_without_leading_zero():
     s = Settings(_env_file=None, sniper_live_start="3:00", sniper_live_end=" 9:30", night_start="2:00")
     assert (s.sniper_live_start, s.sniper_live_end, s.night_start) == (time(3, 0), time(9, 30), time(2, 0))
     assert Settings(_env_file=None, sniper_live_start="23:00").sniper_live_start == time(23, 0)
+
+
+def test_empty_hours_mean_always_live():
+    """18/10 : SNIPER_LIVE_START / END vidés dans Portainer refusaient le démarrage au lieu de valoir « toujours »."""
+    s = Settings(_env_file=None, dry_run=False, sniper_live_start="", sniper_live_end=" ")
+    assert (s.sniper_live_start, s.sniper_live_end) == (None, None)
+    assert s.sniper_live_now() and s.mode_label == "RÉEL"
