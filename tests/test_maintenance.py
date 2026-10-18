@@ -74,9 +74,9 @@ async def test_estimates_compare_same_rarity_and_shiny(tmp_path):
         raise ApiError(429, {}, "card_sales_summary")
 
     prices._market = no_market  # type: ignore[method-assign]
-    assert await prices.quote("x", "C") == Quote(11.0, 2)
-    assert await prices.quote("x", "UR") == Quote(510.0, 2)
-    assert await prices.quote("x", "C", shiny=True) == Quote(90.0, 1)
+    assert await prices.quote("x", "C") == Quote(11.0, 2, contested=2, spread=1.2)
+    assert await prices.quote("x", "UR") == Quote(510.0, 2, contested=2, spread=1.04)
+    assert await prices.quote("x", "C", shiny=True) == Quote(90.0, 1, contested=1, spread=1.0)
     assert await prices.quote("x", "L") == Quote(None, 0)  # jamais vue en L : pas d'estimation
     assert set(await prices.observed_quote("x")) == {"C", "UR"}
     assert sorted(await db.observed_prices_since("x", now - timedelta(days=1), 5, rarity="C", shiny=False)) == [10, 12]
@@ -154,7 +154,11 @@ def test_outlier_sales_are_ignored():
 def test_uncontested_sales_cannot_raise_the_estimate():
     from src.core.pricing import trusted_prices
     # Ventes disputées à 400 et 420 ; une vente à une seule mise à 1500 (prix de départ gonflé).
-    assert trusted_prices([(1500, True), (400, False), (420, False)]) == [410, 400, 420]
+    assert trusted_prices([(1500, True), (400, False), (420, False), (440, False)]) == [420, 400, 420, 440]
+    assert trusted_prices([(1500, True), (400, False), (420, False)]) == [420, 400, 420]  # 2 disputées : la plus haute
     assert trusted_prices([(300, True), (400, False)]) == [300, 400]   # moins chère : gardée telle quelle
     assert trusted_prices([(500, True), (900, True)]) == [500, 500]    # aucune vente disputée : la plus basse
+    # 18/10, éclipse XXIe : 900, 800 et 999 au prix de départ ne tombent plus à 584 (médiane de 733 et 435).
+    eclipse = trusted_prices([(900, True), (733, False), (800, True), (999, True), (435, False)])
+    assert eclipse == [733, 733, 733, 733, 435]
     assert trusted_prices([]) == []

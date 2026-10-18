@@ -176,6 +176,8 @@ class Database:
             if column not in existing:
                 await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_observed_pair ON observed_sales (seller_id, buyer_id)")
+        await self._db.execute("CREATE INDEX IF NOT EXISTS idx_seen_card ON auctions_seen (card_id, end_at)")
+        await self._db.execute("CREATE INDEX IF NOT EXISTS idx_seen_end ON auctions_seen (end_at)")
         for statement in OBSOLETE:
             await self._db.execute(statement)
         await self._db.commit()
@@ -532,7 +534,7 @@ class Database:
 
         Le dernier `current_bid` vu par le sniper (qui scrute les fins imminentes toutes
         les ~3 s) approche le prix final. Une enchère sans mise n'est pas une vente."""
-        rows = await self._all("SELECT * FROM auctions_seen")
+        rows = await self._all("SELECT * FROM auctions_seen WHERE end_at < ?", (iso(before),))
         done, sales = [], []
         for r in rows:
             end, seen = parse_iso(r["end_at"]), parse_iso(r["seen_at"])
@@ -686,6 +688,16 @@ class Database:
             await self.db.execute("DELETE FROM bids WHERE dry_run = 1")
             await self.db.commit()
         return counts
+
+    async def cheapest_ask(self, card_id: str, rarity: str | None, shiny: bool, after: datetime,
+                           exclude: str, me: str | None) -> int | None:
+        """Mise minimale la plus basse des autres ventes de cette carte (même rareté, shiny ou non) encore en cours
+        après `after` : la concurrence d'une revente. Lue sans requête, dans les ventes déjà vues."""
+        row = await self._one(
+            "SELECT MIN(COALESCE(min_bid, base_amount)) AS ask FROM auctions_seen WHERE card_id = ? AND rarity IS ? "
+            "AND is_shiny = ? AND end_at > ? AND auction_id != ? AND (seller_id IS NULL OR lower(seller_id) != ?)",
+            (card_id, rarity, int(shiny), iso(after), exclude, (me or "").lower()))
+        return int(row["ask"]) if row and row["ask"] is not None else None
 
     async def prune_auctions(self, before: datetime) -> None:
         await self._exec("DELETE FROM auctions_seen WHERE end_at < ?", (iso(before),))

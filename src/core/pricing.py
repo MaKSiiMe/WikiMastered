@@ -15,6 +15,9 @@ une vente plus de 3 fois au-dessus ou au-dessous de la médiane est écartée, e
 un vendeur et un acheteur qui ont déjà fait affaire ensemble ne comptent pas (core/database.py).
 Une vente sans concurrence (une seule mise, au prix de départ : le schéma d'une vente factice, prix
 de départ gonflé puis un complice qui mise une fois) ne peut pas faire monter l'estimation.
+Le sniper n'achète que si les dernières ventes sont assez disputées et pas trop dispersées (`contested`,
+`spread`) : le 18/10, l'éclipse XXIe était estimée 1197 sur 3 ventes au prix de départ et 2 disputées (970 et
+1774), et revendue ensuite autour de 850.
 `count` = nombre de ventes observées : sans observation, l'estimation n'est pas fiable.
 Les ventes observées sont comparées à rareté égale, et shiny à part : un exemplaire Commun ne
 s'estime pas sur les ventes de la même carte en UR ou en shiny.
@@ -45,6 +48,8 @@ _EPOCH = datetime.min.replace(tzinfo=UTC)
 class Quote:
     average: float | None  # estimation de revente (médiane récente ou moyenne)
     count: int | None      # ventes observées (0 = aucune) ; None = inconnu
+    contested: int | None = None  # ventes disputées parmi les dernières observées ; None = inconnu
+    spread: float | None = None   # plus haute / plus basse des dernières ventes observées ; None = inconnu
 
     def reliable(self, min_sales: int) -> bool:
         return self.average is not None and (self.count is None or self.count >= min_sales)
@@ -61,13 +66,21 @@ def robust_median(prices: list[int]) -> float:
     return float(statistics.median(prices))
 
 
+CONTESTED_FOR_MEDIAN = 3  # ventes disputées au moins pour que leur médiane plafonne les autres
+
+
 def trusted_prices(sales: list[tuple[int, bool]]) -> list[int]:
-    """Prix retenus : une vente sans concurrence est ramenée au plus à la médiane des ventes disputées,
-    ou, sans vente disputée, à la plus basse des ventes."""
+    """Prix retenus : une vente sans concurrence est ramenée au plus à la médiane des ventes disputées (3 au
+    moins), à la plus haute d'entre elles (1 ou 2), ou, sans vente disputée, à la plus basse des ventes.
+    Le 18/10, l'éclipse XXIe vendue 900, 800 et 999 au prix de départ était ramenée à 584, la médiane de
+    deux ventes disputées parties de 500 et 200 : son estimation tombait sous les vraies ventes."""
     if not sales:
         return []
     contested = [price for price, single in sales if not single]
-    ceiling = statistics.median(contested) if contested else min(price for price, _ in sales)
+    if len(contested) >= CONTESTED_FOR_MEDIAN:
+        ceiling = statistics.median(contested)
+    else:
+        ceiling = max(contested) if contested else min(price for price, _ in sales)
     return [min(price, ceiling) if single else price for price, single in sales]
 
 
@@ -75,13 +88,24 @@ def trusted(observed: dict[str, tuple[list[tuple[int, bool]], int]]) -> dict[str
     return {rarity: (trusted_prices(sales), n) for rarity, (sales, n) in observed.items()}
 
 
-def combine(observed: list[int], n_observed: int, site_average: float | None) -> Quote:
+def steadiness(observed: dict[str, tuple[list[tuple[int, bool]], int]]) -> dict[str, tuple[int, float | None]]:
+    """Par rareté : (ventes disputées, plus haute / plus basse) parmi les dernières ventes observées."""
+    result = {}
+    for rarity, (sales, _) in observed.items():
+        prices = [price for price, _ in sales if price > 0]
+        result[rarity] = (sum(1 for _, single in sales if not single),
+                          max(prices) / min(prices) if prices else None)
+    return result
+
+
+def combine(observed: list[int], n_observed: int, site_average: float | None,
+            contested: int | None = None, spread: float | None = None) -> Quote:
     """Médiane des ventes observées, plafonnée par la moyenne du site ; sinon la moyenne seule."""
     if observed:
         estimate = robust_median(observed)
         if site_average is not None:
             estimate = min(estimate, site_average)
-        return Quote(estimate, n_observed)
+        return Quote(estimate, n_observed, contested, spread)
     return Quote(site_average, 0)
 
 
@@ -142,7 +166,8 @@ class PriceService:
                      shiny: bool = False, fetch: bool = True) -> dict[str, Quote]:
         """Estimation par rareté (clé ANY : toutes raretés, seulement si le site ne les distingue pas).
         `fetch=False` : sans aucune requête (ventes observées et cote du site en cache)."""
-        observed = trusted(await self.db.observed_by_rarity(card_id, self.recent_n, shiny))
+        raw = await self.db.observed_by_rarity(card_id, self.recent_n, shiny)
+        observed, steady = trusted(raw), steadiness(raw)
         try:
             market = await self._market(card_id, max_age or self.default_ttl, wait, fetch)
         except (RateLimited, ApiError):
@@ -150,7 +175,8 @@ class PriceService:
                 raise
             market = {}
         keys = {r for r in market if r in RARITIES} | set(observed)
-        quotes = {r: combine(*observed.get(r, ([], 0)), market.get(r, (None, None))[0]) for r in keys}
+        quotes = {r: combine(*observed.get(r, ([], 0)), market.get(r, (None, None))[0], *steady.get(r, (None, None)))
+                  for r in keys}
         if not quotes and ANY in market:
             quotes[ANY] = combine([], 0, market[ANY][0])
         return quotes

@@ -350,6 +350,8 @@ async def test_relist_follows_the_copy_back_under_a_new_id(tmp_path):
             return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
         if path == "/api/my-collection":
             return httpx.Response(200, json={"collection": [owned("new", "ecl", "Liste des éclipses solaires")]})
+        if request.method == "GET":  # ventes concurrentes : aucune
+            return httpx.Response(200, json={"auctions": [], "hasMore": False})
         body = json.loads(request.content)
         posted.append(body)
         if "new" not in json.dumps(body):

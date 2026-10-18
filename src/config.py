@@ -145,6 +145,11 @@ class Settings(BaseSettings):
     price_cache_ttl_minutes: float = 180.0
     price_min_sales: int = 2     # ventes observées minimum avant d'acheter une carte
     price_recent_sales: int = 5  # estimation = médiane des N dernières ventes observées
+    # Achat d'une position : parmi ces N ventes, au moins tant de ventes disputées (plus d'une mise), et la plus
+    # haute pas plus de X fois la plus basse (0 = sans limite). Le 18/10, l'éclipse XXIe était achetée 882 sur une
+    # estimation de 1197 faite de 3 ventes au prix de départ et de 2 disputées (970 et 1774).
+    sniper_min_contested_sales: int = 3
+    sniper_max_price_spread: float = 2.0
 
     # --- Module D : sniper ------------------------------------------------------
     sniper_poll_min_seconds: float = 2.5
@@ -225,6 +230,9 @@ class Settings(BaseSettings):
     position_list_duration_minutes: int = 360
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2
+    # Revente publiée juste sous la vente concurrente la moins chère de la même carte (jamais sous le prix d'achat).
+    # Concurrente sous le prix d'achat : la revente attend, jusqu'à N min, puis part au prix d'achat (0 = sans attendre).
+    position_undercut_wait_minutes: int = 360
 
     # --- Module C : inventaire --------------------------------------------------
     inventory_interval_minutes: float = 360.0
