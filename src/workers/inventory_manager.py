@@ -47,7 +47,7 @@ POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la ca
 POSITION_COPY_RETRY = timedelta(minutes=10)
 # Introuvable N fois de suite (~2 h) : la carte a quitté la collection (vendue ou échangée à la main ?).
 POSITION_MAX_COPY_MISSES = 12
-# Revente face à une concurrente moins chère que le prix d'achat : nouvel essai dans N min.
+# Revente face à une concurrente moins chère que le prix d'achat : gardée hors des places, nouvel essai dans N min.
 UNDERCUT_RETRY = timedelta(minutes=30)
 # Vente concurrente d'une revente : encore en cours au moins N après la publication (comme pour l'achat).
 RIVAL_MIN_OVERLAP = timedelta(hours=1)
@@ -236,7 +236,6 @@ class InventoryManager(Worker):
         super().__init__(ctx)
         self._starred_warned: set[int] = set()  # positions dont l'exemplaire est en favori (prévenu une fois)
         self._copy_retry: dict[int, tuple[int, datetime]] = {}  # position -> (essais manqués, prochain essai)
-        self._undercut_since: dict[int, datetime] = {}  # revente -> début de l'attente (concurrente sous l'achat)
 
     async def setup(self) -> None:
         self._next_scan = utcnow() + timedelta(minutes=2)
@@ -555,9 +554,10 @@ class InventoryManager(Worker):
 
     async def _undercut(self, row) -> int | None:
         """Prix de départ d'une revente face aux autres ventes de la même carte : juste sous la moins chère, jamais
-        sous le prix d'achat (commission comprise). Concurrente sous ce plancher : None, la revente attend
-        (POSITION_UNDERCUT_WAIT_MINUTES), puis part au plancher. Le 18/10, l'éclipse XXIe en vente à 1040 face à
-        d'autres à 600 et 900 restait sans acheteur."""
+        sous le prix d'achat (commission comprise). Concurrente sous ce plancher : None, la revente est gardée hors des
+        places de vente (statut « waiting », sans place réservée) et relue toutes les 30 min, jusqu'à ce que le marché
+        remonte. Le 18/10, l'éclipse XXIe achetée 883 face à une vente à 296, et Jorge Jesus achetée 216 face à 83,
+        réservaient 2 des 5 places, puis seraient parties au prix d'achat sans acheteur."""
         bid = await self.db.get_bid(row["bid_id"])
         try:
             auctions, _ = await self.api.market_page(sort="ending_soon", q=row["title"], limit=50)
@@ -571,27 +571,19 @@ class InventoryManager(Worker):
                   and a.shiny == shiny and a.status == "active" and a.end_at > overlap
                   and (a.seller_id or "").lower() != me]
         if not rivals or min(rivals) > row["base_amount"]:
-            self._undercut_since.pop(row["id"], None)
             return row["base_amount"]
         floor = list_price(bid["amount"], 0.0, self.settings.sale_fee_pct) if bid else 1
         target = min(rivals) - 1
         if target >= floor:
-            self._undercut_since.pop(row["id"], None)
             self.log.info("%s : vente concurrente à %d WB, revente à %d au lieu de %d", row["title"], min(rivals),
                           target, row["base_amount"])
             return target
-        wait = timedelta(minutes=self.settings.position_undercut_wait_minutes)
-        since = self._undercut_since.setdefault(row["id"], utcnow())
-        if utcnow() - since >= wait:
-            self._undercut_since.pop(row["id"], None)
-            self.log.info("%s : concurrente à %d WB sous le prix d'achat depuis %d min, revente au plancher %d",
-                          row["title"], min(rivals), wait.total_seconds() // 60, floor)
-            return floor
         retry = utcnow() + UNDERCUT_RETRY
-        await self.db.update_listing(row["id"], post_at=retry,
+        await self.db.update_listing(row["id"], status="waiting", post_at=retry,
                                      target_end=retry + timedelta(minutes=row["duration_minutes"] or 0))
-        self.log.info("%s : vente concurrente à %d WB, sous le prix d'achat (%d) : revente en attente, nouvel essai "
-                      "à %s", row["title"], min(rivals), floor, f"{retry.astimezone(now_local().tzinfo):%H:%M}")
+        self.log.info("%s : vente concurrente à %d WB, sous le prix d'achat (%d) : gardée hors des places de vente, "
+                      "nouvel essai à %s", row["title"], min(rivals), floor,
+                      f"{retry.astimezone(now_local().tzinfo):%H:%M}")
         return None
 
     async def _listing_auction_id(self, payload, card_id: str) -> str | None:

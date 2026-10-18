@@ -230,9 +230,6 @@ class Settings(BaseSettings):
     position_list_duration_minutes: int = 360
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2
-    # Revente publiée juste sous la vente concurrente la moins chère de la même carte (jamais sous le prix d'achat).
-    # Concurrente sous le prix d'achat : la revente attend, jusqu'à N min, puis part au prix d'achat (0 = sans attendre).
-    position_undercut_wait_minutes: int = 360
 
     # --- Module C : inventaire --------------------------------------------------
     inventory_interval_minutes: float = 360.0
