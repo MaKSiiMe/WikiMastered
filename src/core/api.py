@@ -75,8 +75,9 @@ class WikiMastersAPI:
         return AuctionDetail.model_validate(
             await self.client.get("auction_detail", urgent=urgent, auction_id=auction_id)).auction
 
-    async def sales_summary(self, card_id: str, *, wait: bool = True) -> SalesSummary:
-        return SalesSummary.model_validate(await self.client.get("sales_summary", card_id=card_id, wait=wait))
+    async def sales_summary(self, card_id: str, *, wait: bool = True, background: bool = False) -> SalesSummary:
+        return SalesSummary.model_validate(await self.client.get("sales_summary", card_id=card_id, wait=wait,
+                                                                 background=background))
 
     async def my_bids(self) -> list[Auction]:
         """Enchères sur lesquelles j'ai misé (/api/marketplace?mine=1, clé `bidding`)."""

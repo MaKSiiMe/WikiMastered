@@ -129,13 +129,14 @@ class PriceService:
         self.recent_n = recent_n
         self.pro = False  # compte PRO, d'après la dernière cote lue (isPro)
 
-    async def _fetch(self, card_id: str, wait: bool) -> dict[str, tuple[float | None, int | None]]:
+    async def _fetch(self, card_id: str, wait: bool,
+                     background: bool = False) -> dict[str, tuple[float | None, int | None]]:
         # Historique des ventes : réservé aux comptes PRO (403 sinon, relevé du 14/10). Demandé seulement quand la
         # cote du site dit le compte PRO ; avant, chaque 403 coûtait en plus une vérification de session.
         if self.pro and self.api.client.endpoints.has("sales_history"):
             try:
                 history = SalesHistory.model_validate(
-                    await self.api.client.get("sales_history", card_id=card_id, wait=wait))
+                    await self.api.client.get("sales_history", card_id=card_id, wait=wait, background=background))
                 data = recent_estimates(history.rows(), self.recent_n)
                 if data:
                     return data
@@ -143,7 +144,7 @@ class PriceService:
                 raise
             except (ApiError, ValueError) as exc:
                 log.debug("historique indisponible pour %s (%s), repli sur la moyenne", card_id, exc)
-        summary = await self.api.sales_summary(card_id, wait=wait)
+        summary = await self.api.sales_summary(card_id, wait=wait, background=background)
         self.pro = summary.is_pro
         return {
             r: (s.average, s.count)
@@ -151,25 +152,33 @@ class PriceService:
             if r in RARITIES and (s.average is None or s.average >= 0)
         }
 
-    async def _market(self, card_id: str, max_age: timedelta, wait: bool,
-                      fetch: bool = True) -> dict[str, tuple[float | None, int | None]]:
+    async def _market(self, card_id: str, max_age: timedelta, wait: bool, fetch: bool = True,
+                      background: bool = False) -> dict[str, tuple[float | None, int | None]]:
         cached = await self.db.price_get(card_id)
         if cached and utcnow() - cached[0] <= max_age:
             return cached[1]
         if not fetch:
             return {}
-        data = await self._fetch(card_id, wait)
+        try:
+            data = await self._fetch(card_id, wait, background)
+        except (RateLimited, ApiError):
+            # Route refusée : l'ancienne cote du site plafonne encore l'estimation (le sniper restait sans plafond
+            # pendant chaque pause de la route, que l'analyse de l'inventaire rend plus fréquentes).
+            if cached:
+                return cached[1]
+            raise
         await self.db.price_put(card_id, data)
         return data
 
     async def quotes(self, card_id: str, *, max_age: timedelta | None = None, wait: bool = True,
-                     shiny: bool = False, fetch: bool = True) -> dict[str, Quote]:
+                     shiny: bool = False, fetch: bool = True, background: bool = False) -> dict[str, Quote]:
         """Estimation par rareté (clé ANY : toutes raretés, seulement si le site ne les distingue pas).
-        `fetch=False` : sans aucune requête (ventes observées et cote du site en cache)."""
+        `fetch=False` : sans aucune requête (ventes observées et cote du site en cache) ; `background` : la
+        requête passe après toutes les autres."""
         raw = await self.db.observed_by_rarity(card_id, self.recent_n, shiny)
         observed, steady = trusted(raw), steadiness(raw)
         try:
-            market = await self._market(card_id, max_age or self.default_ttl, wait, fetch)
+            market = await self._market(card_id, max_age or self.default_ttl, wait, fetch, background)
         except (RateLimited, ApiError):
             if not observed:
                 raise
