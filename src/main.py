@@ -4,6 +4,7 @@
     python -m src.main check                    # vérifie la session et affiche le solde
     python -m src.main inspect                  # capture et compare les vraies réponses JSON
     python -m src.main inventory scan|list|discard [--apply]
+    python -m src.main value [--lookups 0]      # cartes de valeur de l'inventaire, derniers exemplaires compris
     python -m src.main report                   # envoie le bilan du jour sur Discord
     python -m src.main trends [--days 7]        # les tendances auraient-elles rapporté ?
     python -m src.main packs [--hours 24]       # paquets ouverts récemment
@@ -55,6 +56,8 @@ from src.workers.inventory_manager import cli as inventory_cli
 from src.workers.pack_opener import PackOpener, checks_report
 from src.workers.profile_guard import ProfileGuard
 from src.workers.trend_report import day_line, trends_text
+from src.workers.value_scan import ValueScan
+from src.workers.value_scan import cli as value_cli
 from src.workers.wiki_trends import WikiTrends
 
 log = logging.getLogger("wikimastered")
@@ -429,6 +432,8 @@ async def run_bot(settings: Settings) -> None:
             workers.append(CollectionWorker(ctx))
         if settings.enable_achievements:
             workers.append(AchievementsWorker(ctx))
+        if settings.enable_value_scan:
+            workers.append(ValueScan(ctx))
         if settings.enable_profile_guard and settings.supabase_anon_key:
             workers.insert(0, ProfileGuard(ctx))  # en premier : une sanction arrête le bot avant les autres
         elif settings.enable_profile_guard:
@@ -623,6 +628,9 @@ def main(argv: list[str] | None = None) -> None:
     pr = sub.add_parser("prices", help="ventes observées d'une carte, estimation du bot et ventes en cours "
                                        "(lecture seule)")
     pr.add_argument("title", help="titre exact de la carte, entre guillemets")
+    val = sub.add_parser("value", help="cartes de valeur de l'inventaire, derniers exemplaires compris (lecture seule)")
+    val.add_argument("--lookups", type=int, default=0,
+                     help="cotes demandées au site en plus du cache (route limitée ; défaut 0)")
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
     inv.add_argument("action", choices=["scan", "report", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
@@ -653,6 +661,7 @@ def main(argv: list[str] | None = None) -> None:
         "sniper-report": lambda ctx: sniper_report_status(ctx, args.hours, args.summary),
         "prices": lambda ctx: prices_status(ctx, args.title),
         "inventory": lambda ctx: inventory_cli(ctx, args.action, args.apply, args.lookups),
+        "value": lambda ctx: value_cli(ctx, max(0, args.lookups)),
     }
     in_context(settings, commands[command])
 
