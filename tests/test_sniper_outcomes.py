@@ -24,8 +24,9 @@ def sale(aid: str, title: str, seconds: float, base: int = 10, bid: int | None =
             "base_amount": base, "current_bid": bid, "current_bidder_id": bidder}
 
 
-async def start(tmp_path, market: dict, replies: list, state: dict | None = None):
-    """Sniper réel pour la collection (jours manquants) ; chaque mise reçoit la prochaine réponse de `replies`."""
+async def start(tmp_path, market: dict, replies: list, state: dict | None = None, simulate: tuple = ("sniper",)):
+    """Sniper réel pour la collection (jours manquants) ; chaque mise reçoit la prochaine réponse de `replies`.
+    Les positions sont simulées (`simulate`), sauf demande contraire."""
     def handler(request):
         path = request.url.path
         if request.method == "POST":
@@ -48,7 +49,7 @@ async def start(tmp_path, market: dict, replies: list, state: dict | None = None
             return httpx.Response(200, json={"auctions": list(market.values()), "hasMore": False})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"],
+    client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=list(simulate),
                                    collection_sets=["jours"], collection_max_price=20)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
@@ -141,7 +142,7 @@ async def test_collection_bids_capped_per_verification(tmp_path):
     ok = (200, {"current_bid": 10, "bidder_balance": 2990})
     market = {"a": sale("a", "14 octobre", 15)}
     replies = [ok, ok]
-    sniper, db, _ = await start(tmp_path, market, replies, state)
+    sniper, db, _ = await start(tmp_path, market, replies, state, simulate=())
     await sniper.step()
     market["b"] = sale("b", "15 octobre", 15)
     await sniper.step()
@@ -156,6 +157,23 @@ async def test_collection_bids_capped_per_verification(tmp_path):
     await sniper._bid(Auction.model_validate(sale("d", "16 octobre", 15)),
                       Decision(10, 20, "collection : carte manquante ≤ 20", None), sniper_params(sniper.api.client))
     assert sniper._collection_since_check == 0 and sniper.blocked
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_collection_quota_not_kept_while_positions_are_simulated(tmp_path):
+    """18/10 après 12:00 (fin de SNIPER_LIVE_END) : les L simulées, la collection gardait quand même leur quota."""
+    state = {"owned": [], "missing": ["14 octobre", "15 octobre", "16 octobre"], "total": 366}
+    ok = (200, {"current_bid": 10, "bidder_balance": 2990})
+    market = {"a": sale("a", "14 octobre", 15)}
+    replies = [ok, ok, ok]
+    sniper, db, _ = await start(tmp_path, market, replies, state)  # positions simulées
+    for aid, day in (("b", "15 octobre"), ("c", "16 octobre")):
+        await sniper.step()
+        market[aid] = sale(aid, day, 15)
+    await sniper.step()
+    assert not replies and sniper._collection_since_check == 3
+    assert "quota de la vérification gardé" not in sniper.recap()[1]
     await db.close()
 
 
