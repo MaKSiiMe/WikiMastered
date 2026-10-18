@@ -16,7 +16,9 @@ from src.core.pricing import Quote, combine, recent_estimates
 from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
 from src.tools.parse_curl import parse_curl, to_endpoint
-from src.workers.auction_sniper import decide, in_snipe_window, portfolio_state, position_cap, snipe_params
+from src.workers.auction_sniper import (
+    decide, in_snipe_window, portfolio_state, position_cap, refusal, snipe_params,
+)
 from src.workers.inventory_manager import (
     achievement_guard, group_by_card, plan_listing_time, select_for_discard, select_for_sale,
 )
@@ -118,6 +120,24 @@ def test_portfolio_decision_needs_real_profit():
     assert big and big.ceiling == 265 and big.profit == 200             # min(280, 400-135, 540)
     assert decide(auction(card=card, base_amount=300), params, Quote(400.0, 5), 3, pf) is None
     assert decide(auction(card=card, base_amount=200), params, Quote(400.0, 1), 3, pf) is None  # 1 vente
+
+
+def test_position_needs_contested_and_steady_recent_sales():
+    """18/10 : l'éclipse XXIe achetée 882, estimée 1197 sur 3 ventes au prix de départ et 2 disputées (970, 1774)."""
+    s = settings()
+    params = snipe_params(s, night=False)
+    pf = portfolio_state(s, balance=3000, held_count=0, held_real_cost=0, held_sim_cost=0,
+                         engaged_real=0, engaged_sim=0, bot_engaged_count=0)
+    card = {"id": "c", "wikipedia_title": "x", "rarity": "L"}
+    sale = auction(card=card, base_amount=200)
+    assert decide(sale, params, Quote(400.0, 5, contested=3, spread=1.5), 3, pf)
+    eclipse = Quote(400.0, 5, contested=2, spread=1.83)
+    assert decide(sale, params, eclipse, 3, pf) is None
+    assert refusal(sale, params, eclipse, 3, pf) == "trop peu de ventes disputées"
+    wild = Quote(400.0, 5, contested=4, spread=2.5)
+    assert decide(sale, params, wild, 3, pf) is None and refusal(sale, params, wild, 3, pf) == "ventes trop dispersées"
+    loose = snipe_params(settings(sniper_min_contested_sales=0, sniper_max_price_spread=0), night=False)
+    assert decide(sale, loose, wild, 3, pf) and decide(sale, loose, eclipse, 3, pf)
 
 
 def test_position_bid_pushed_toward_ceiling_collection_stays_at_minimum():

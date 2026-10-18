@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -62,3 +63,96 @@ async def test_prices_unknown_title(tmp_path):
     ctx = await make_context(tmp_path, client, notifier)
     assert "ni vente observée ni vente en cours" in await prices_status(ctx, "Inconnue")
     await ctx.db.close()
+
+
+async def seen(db, aid: str, min_bid: int, hours: float, *, card: str = "ecl21", seller: str = "s",
+               shiny: int = 0) -> None:
+    end = datetime.now(UTC) + timedelta(hours=hours)
+    await db.upsert_auctions([{"auction_id": aid, "card_id": card, "title": TITLE, "rarity": "L", "is_shiny": shiny,
+                               "current_bid": None, "base_amount": min_bid, "min_bid": min_bid,
+                               "end_at": end.isoformat(), "seen_at": datetime.now(UTC).isoformat(),
+                               "seller_id": seller}])
+
+
+@pytest.mark.asyncio
+async def test_resale_estimate_capped_by_the_cheapest_rival_sale(tmp_path):
+    """18/10 : l'éclipse XXIe achetée 882 (estimée 1197) alors que d'autres étaient en vente à 600 et 900."""
+    from src.core.models import Auction
+    from src.core.pricing import Quote
+    from src.workers.auction_sniper import AuctionSniper
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500))
+    ctx = await make_context(tmp_path, client, notifier)
+    sniper = AuctionSniper(ctx)
+    target = Auction.model_validate({**selling("t", 800), "end_at": (datetime.now(UTC) + timedelta(seconds=15))
+                                     .isoformat()})
+    quote = Quote(1197.0, 5, 3, 1.5)
+    await seen(ctx.db, "t", 800, 0.01)            # l'enchère visée elle-même
+    await seen(ctx.db, "soon", 300, 0.5)          # finit avant que la revente soit en concurrence
+    await seen(ctx.db, "mine", 400, 5, seller=ME)  # la mienne
+    await seen(ctx.db, "shiny", 200, 5, shiny=1)
+    await seen(ctx.db, "other", 100, 5, card="ecl20")
+    assert await sniper._against_rivals(target, quote) == quote
+    await seen(ctx.db, "m2", 900, 10)
+    await seen(ctx.db, "m1", 600, 11)
+    assert (await sniper._against_rivals(target, quote)).average == 600.0
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_resale_listed_just_under_the_cheapest_rival(tmp_path):
+    """18/10 : l'éclipse XXIe en vente à 1040 face à d'autres à 600 et 900 restait sans acheteur."""
+    from src.core.models import Auction
+    from src.workers.inventory_manager import InventoryManager
+
+    market: list[dict] = []
+    posted: list[dict] = []
+
+    def handler(request):
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if request.method == "GET":
+            return httpx.Response(200, json={"auctions": market, "hasMore": False})
+        posted.append(json.loads(request.content))
+        return httpx.Response(201, json={"auction_id": f"a{len(posted)}"})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, position_undercut_wait_minutes=60)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    inv = InventoryManager(ctx)
+
+    async def position(price: int, cost: int) -> tuple[int, int]:
+        bid = await db.record_bid(auction_id=f"b{price}", card_id="ecl21", title=TITLE, rarity="L", is_shiny=False,
+                                  amount=cost, reference_price=1197, reason="revente ~1197 WB", night=False,
+                                  dry_run=False, status="won", end_at=now)
+        lid = await db.schedule_listing(owned_card_id=f"o{price}", card_id="ecl21", title=TITLE, rarity="L",
+                                        base_amount=price, duration_minutes=360, post_at=now - timedelta(seconds=1),
+                                        target_end=now, reason="position", bid_id=bid)
+        return bid, lid
+
+    async def listing(lid):
+        return await db._one("SELECT status, base_amount, post_at FROM listings WHERE id = ?", (lid,))
+
+    market[:] = [selling("m1", 1200), selling("soon", 500) | {"end_at": (now + timedelta(minutes=20)).isoformat()},
+                 selling("mine", 300, seller=ME)]
+    _, lid = await position(1040, 882)
+    await inv.post_due_listings()  # concurrente plus chère (les autres ne comptent pas) : prix gardé
+    assert (await listing(lid))["base_amount"] == 1040 and "1040" in json.dumps(posted[-1])
+
+    market[:] = [selling("m2", 900, 850)]  # mise actuelle 850 : on se place sous la prochaine mise permise
+    _, lid = await position(1041, 500)
+    await inv.post_due_listings()
+    row = await listing(lid)
+    assert row["status"] == "posted" and row["base_amount"] == Auction.model_validate(market[0]).min_bid - 1
+
+    market[:] = [selling("m3", 600)]  # sous le prix d'achat (882) : la revente attend
+    _, lid = await position(1042, 882)
+    await inv.post_due_listings()
+    row = await listing(lid)
+    assert row["status"] == "scheduled" and datetime.fromisoformat(row["post_at"]) > now + timedelta(minutes=25)
+    inv._undercut_since[lid] -= timedelta(hours=1)  # attente écoulée : au prix d'achat
+    await db.update_listing(lid, post_at=now - timedelta(seconds=1))
+    await inv.post_due_listings()
+    assert (await listing(lid))["status"] == "posted" and (await listing(lid))["base_amount"] == 883
+    await db.close()

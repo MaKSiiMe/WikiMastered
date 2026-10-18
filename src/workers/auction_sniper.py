@@ -69,6 +69,8 @@ QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
 # Mises surenchéries relues à la fin de leur enchère (gagnées malgré tout ?) : celles des 2 derniers jours,
 # pas tout l'historique (enchères anciennes souvent disparues du site).
 OUTBID_SETTLE_WINDOW = timedelta(days=2)
+# Vente concurrente d'une revente : encore en cours au moins N après l'achat (une qui finit avant ne gêne guère).
+RIVAL_MIN_OVERLAP = timedelta(hours=1)
 _EPOCH = datetime.min.replace(tzinfo=UTC)
 
 
@@ -90,6 +92,8 @@ class SnipeParams:
     max_bid: int   # 0 = pas de plafond absolu
     budget: int    # 0 = pas de budget quotidien
     night: bool
+    min_contested: int = 0   # ventes disputées minimum parmi les dernières observées (position)
+    max_spread: float = 0.0  # plus haute / plus basse des dernières ventes, au plus (0 = sans limite)
 
 
 def snipe_params(s: Settings, night: bool) -> SnipeParams:
@@ -102,7 +106,18 @@ def snipe_params(s: Settings, night: bool) -> SnipeParams:
         max_bid=s.sniper_max_bid,
         budget=(s.sniper_daily_budget + (s.night_budget_bonus if night else 0)) if s.sniper_daily_budget else 0,
         night=night,
+        min_contested=s.sniper_min_contested_sales,
+        max_spread=s.sniper_max_price_spread,
     )
+
+
+def unsteady(quote: Quote, params: SnipeParams) -> str | None:
+    """Pourquoi les dernières ventes ne suffisent pas à acheter : trop peu disputées, ou trop dispersées."""
+    if quote.contested is not None and quote.contested < params.min_contested:
+        return "trop peu de ventes disputées"
+    if params.max_spread > 0 and quote.spread is not None and quote.spread > params.max_spread:
+        return "ventes trop dispersées"
+    return None
 
 
 @dataclass(frozen=True)
@@ -194,7 +209,7 @@ def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales
     if cap is not None and amount <= cap:
         label = f"{COLLECTION_PREFIX} : {auction.rarity}{' shiny' if auction.shiny else ''} ≤ {cap}"
         options.append(Decision(amount, cap, label, quote.average if quote else None))
-    if resale and quote is not None and quote.reliable(min_sales):
+    if resale and quote is not None and quote.reliable(min_sales) and not unsteady(quote, params):
         net = quote.average * (1 - fee)  # type: ignore[operator]
         limit = math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
         if portfolio is not None:
@@ -223,6 +238,8 @@ def refusal(auction: Auction, params: SnipeParams, quote: Quote | None, min_sale
         return "rareté non revendue"
     if quote is None or not quote.reliable(min_sales):
         return "pas assez vue vendue"
+    if why := unsteady(quote, params):
+        return why
     amount = auction.min_bid
     if amount > math.floor(quote.average * params.deal_ratio):  # type: ignore[operator]
         return f"mise > {params.deal_ratio:.0%} de l'estimation"
@@ -419,6 +436,7 @@ class AuctionSniper(Worker):
         if kind == "recent":
             auctions, more = await self.api.market_page(sort="recent", rarity=rarity, limit=MARKET_LIMIT)
             self._check_gap(rarity, auctions, more, now, (now - previous).total_seconds() if previous else None)
+            await self._remember(auctions, now)  # ventes en cours : la concurrence d'une revente (_against_rivals)
             await self._ingest(auctions, params, now)
         elif kind == "ended":
             # Ventes terminées pas encore clôturées : leur dernier prix devient une vente observée.
@@ -685,7 +703,9 @@ class AuctionSniper(Worker):
             if auction.rarity not in self._resale_rarities or self._wanted(auction) \
                     or self.is_manual_interest(auction) or await self.db.last_bid(auction.id) is not None:
                 continue
-            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False)
+            quote = await self._against_rivals(
+                auction, await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny,
+                                                     fetch=False))
             decision = decide(auction, shadow, quote, s.price_min_sales, portfolio, s.sale_fee_pct, resale=True,
                               push=s.sniper_bid_push)
             if decision is not None and not decision.collection:
@@ -892,7 +912,9 @@ class AuctionSniper(Worker):
         if resale:
             # Sans requête : la cote a été mise en cache avant la relecture (_prepare, _prefetch). Une requête
             # ici ferait vieillir l'enchère, et les suivantes du même passage, sous le seuil de mise.
-            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False)
+            quote = await self._against_rivals(
+                auction, await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny,
+                                                     fetch=False))
         else:
             # Rareté jamais revendue : la cote ne sert que de repère, prise dans les ventes observées (sans requête).
             quote = (await self.ctx.prices.observed_quote(auction.catalog_id)).get(auction.rarity or "")
@@ -907,6 +929,20 @@ class AuctionSniper(Worker):
                           refusal(auction, params, quote, self.settings.price_min_sales, portfolio,
                                   self.settings.sale_fee_pct, resale))
         return decision
+
+    async def _against_rivals(self, auction: Auction, quote: Quote) -> Quote:
+        """Revente estimée au plus au prix de la vente concurrente la moins chère de la même carte encore en cours à
+        la fin de celle-ci : sur ce marché, beaucoup de cartes partent au prix demandé (le 18/10, l'éclipse XXIe
+        achetée 882 sur une estimation de 1197 se retrouvait face à d'autres en vente à 600 et 900)."""
+        if quote.average is None:
+            return quote
+        ask = await self.db.cheapest_ask(auction.catalog_id, auction.rarity, auction.shiny,
+                                         auction.end_at + RIVAL_MIN_OVERLAP, auction.id, self.api.user_id)
+        if ask is None or ask >= quote.average:
+            return quote
+        self.log.debug("%s : vente concurrente à %d WB, estimation %.0f ramenée à ce prix", auction.title, ask,
+                       quote.average)
+        return replace(quote, average=float(ask))
 
     def _outcome(self, auction: Auction, outcome: str) -> None:
         """Retient l'issue d'une enchère ; une mise placée n'est plus remplacée par un refus ultérieur."""
