@@ -365,6 +365,11 @@ class Database:
             (iso(outbid_since or before), iso(before), limit),
         )
 
+    async def vanished_bids(self, since: datetime, note: str) -> list[aiosqlite.Row]:
+        """Mises réelles closes perdues car leur enchère était introuvable, finies depuis `since`."""
+        return await self._all("SELECT * FROM bids WHERE status = 'lost' AND dry_run = 0 AND note = ? AND end_at >= ? "
+                               "ORDER BY end_at", (note, iso(since)))
+
     async def collection_cards(self, statuses: tuple[str, ...]) -> list[str]:
         """Titres des achats « collection » du bot ayant ce statut."""
         marks = ",".join("?" * len(statuses))

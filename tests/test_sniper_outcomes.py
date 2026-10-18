@@ -24,11 +24,14 @@ def sale(aid: str, title: str, seconds: float, base: int = 10, bid: int | None =
             "base_amount": base, "current_bid": bid, "current_bidder_id": bidder}
 
 
-async def start(tmp_path, market: dict, replies: list, state: dict | None = None, simulate: tuple = ("sniper",)):
+async def start(tmp_path, market: dict, replies: list, state: dict | None = None, simulate: tuple = ("sniper",),
+                owned: list | None = None):
     """Sniper réel pour la collection (jours manquants) ; chaque mise reçoit la prochaine réponse de `replies`.
-    Les positions sont simulées (`simulate`), sauf demande contraire."""
+    Les positions sont simulées (`simulate`), sauf demande contraire. `owned` : derniers exemplaires obtenus."""
     def handler(request):
         path = request.url.path
+        if path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": owned or []})
         if request.method == "POST":
             status, body = replies.pop(0)
             return httpx.Response(status, json=body)
@@ -208,8 +211,60 @@ async def test_vanished_auction_closes_the_bid_without_failing(tmp_path):
                             dry_run=dry_run, status=status, end_at=ended)
     await sniper._settle()  # aucune exception
     assert (await db.last_bid("gone-sim"))["status"] == "sim_lost"
+    # 18/10 à 23:00, site instable : un 404 juste après la fin ne prouve pas la perte. Relue plus tard.
+    real = await db.last_bid("gone-real")
+    assert real["status"] == "placed" and real["id"] in sniper._vanished_retry
+    await sniper._settle()  # relecture pas encore due : aucune requête
+    assert (await db.last_bid("gone-real"))["status"] == "placed"
+    await db.update_bid(real["id"], end_at=datetime.now(UTC) - timedelta(minutes=40))
+    sniper._vanished_retry.clear()
+    await sniper._settle()
     assert (await db.last_bid("gone-real"))["status"] == "lost"
     assert notifier.sent.count(("WARNING", "Mise à vérifier")) == 1  # seulement pour la mise réelle
+    await db.close()
+
+
+def arrived(card_id: str, rarity: str = "L", at: datetime | None = None) -> dict:
+    return {"id": "o-new", "card_id": card_id, "card": {"id": card_id, "wikipedia_title": "Quentin Dupieux",
+                                                         "rarity": rarity},
+            "obtained_at": (at or datetime.now(UTC)).isoformat()}
+
+
+@pytest.mark.asyncio
+async def test_vanished_auction_won_when_the_card_arrived(tmp_path):
+    """Quentin Dupieux (L), 444 WB, 18/10 à 23:00 : enchère introuvable, mais la carte est dans la collection."""
+    owned = [{**arrived("card-qd", at=datetime.now(UTC) - timedelta(days=3)), "id": "o-old"},  # d'avant la mise
+             arrived("card-qd", "UR")]  # autre rareté
+    sniper, db, notifier = await start(tmp_path, {}, [], simulate=(), owned=owned)
+    await db.record_bid(auction_id="qd", card_id="card-qd", title="Quentin Dupieux", rarity="L", is_shiny=False,
+                        amount=444, reference_price=717, reason="revente ~717 WB", night=False, dry_run=False,
+                        status="placed", end_at=datetime.now(UTC) - timedelta(minutes=2))
+    await sniper._settle()
+    assert (await db.last_bid("qd"))["status"] == "placed"  # pas encore arrivée : relue plus tard
+    owned.append(arrived("card-qd"))
+    sniper._vanished_retry.clear()
+    await sniper._settle()
+    bid = await db.last_bid("qd")
+    assert (bid["status"], bid["closed"], bid["final_price"]) == ("won", 0, 444)  # une position, à revendre
+    assert ("SUCCESS", "Position achetée !") in notifier.sent
+    assert ("WARNING", "Mise à vérifier") not in notifier.sent
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bid_wrongly_counted_lost_is_recovered_at_startup(tmp_path):
+    """Mises closes perdues sur un seul 404 avant ce correctif : retrouvées au démarrage si la carte est arrivée."""
+    owned = [arrived("card-qd")]
+    sniper, db, notifier = await start(tmp_path, {}, [], simulate=(), owned=owned)
+    for aid, card in (("qd", "card-qd"), ("other", "card-zz")):
+        bid_id = await db.record_bid(auction_id=aid, card_id=card, title="Quentin Dupieux", rarity="L",
+                                     is_shiny=False, amount=444, reference_price=717, reason="revente ~717 WB",
+                                     night=False, dry_run=False, status="placed",
+                                     end_at=datetime.now(UTC) - timedelta(minutes=10))
+        await db.update_bid(bid_id, status="lost", note="enchère introuvable sur le site")
+    await sniper.setup()
+    assert (await db.last_bid("qd"))["status"] == "won"
+    assert (await db.last_bid("other"))["status"] == "lost"  # carte jamais arrivée : reste perdue
     await db.close()
 
 
