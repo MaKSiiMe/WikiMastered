@@ -178,6 +178,15 @@ def achievement_guard(count: int, n_discard: int, milestones: list[int], margin:
     return allowed, f"{count} exemplaires, {target} ; on ne repasse pas sous {reached}"
 
 
+async def excluded_copies(ctx: Context, rows: list[OwnedCard]) -> set[str]:
+    """Exemplaires jamais vendus ni défaussés : engagés dans un échange, déjà en vente ou programmés, ou portant une
+    étiquette de PROTECTED_TAGS (casse ignorée)."""
+    excluded = await ctx.api.protected_owned_ids({r.id for r in rows})
+    excluded |= await ctx.db.scheduled_owned_ids()
+    protected = {t.casefold() for t in ctx.settings.protected_tags}
+    return excluded | {r.id for r in rows if r.tag_names & protected}
+
+
 def parse_selling(mine: MyBids) -> list:
     return parse_items(Auction, mine.selling, label="vente")
 
@@ -280,10 +289,7 @@ class InventoryManager(Worker):
                        ) -> tuple[dict[str, list[OwnedCard]], set[str], dict[str, dict[str, Quote]], int]:
         rows = await self.api.load_collection()
         groups = group_by_card(rows)
-        excluded = await self.api.protected_owned_ids({r.id for r in rows})
-        excluded |= await self.db.scheduled_owned_ids()
-        protected = {t.casefold() for t in self.settings.protected_tags}
-        excluded |= {r.id for r in rows if r.tag_names & protected}
+        excluded = await excluded_copies(self.ctx, rows)
         to_price = [cid for cid, copies in groups.items() if spare_copies(copies, min(self.settings.sell_keep_copies,
                     max(1, self.settings.discard_keep_copies)), excluded)]
         self.log.info("collection : %d exemplaires, %d cartes, %d à coter", len(rows), len(groups), len(to_price))

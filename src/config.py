@@ -261,6 +261,18 @@ class Settings(BaseSettings):
     achievement_count_mode: Literal["total", "unique"] = "total"
     achievement_margin: int = 50
 
+    # --- Module I : cartes de valeur dans l'inventaire ------------------------------
+    # Toutes les N heures, toute la collection est cotée, derniers exemplaires compris (la vente automatique ne
+    # vend que des doublons), et les cartes cotées au moins VALUE_SCAN_MIN_VALUE sont signalées sur Discord.
+    enable_value_scan: bool = True
+    value_scan_hours: float = 12.0
+    value_scan_min_value: int = 100
+    # Cotes demandées au site par passage, une toutes les N s : la route des cotes est limitée et sert aussi au
+    # sniper. Une cote de moins de VALUE_SCAN_MAX_AGE_DAYS jours n'est pas redemandée.
+    value_scan_lookups: int = 600
+    value_scan_lookup_seconds: float = 30.0
+    value_scan_max_age_days: float = 7.0
+
     # --- Module E : tendances Wikipédia -----------------------------------------
     trends_interval_minutes: float = 60.0
     trends_top_n: int = 100

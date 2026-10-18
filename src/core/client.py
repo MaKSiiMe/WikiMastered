@@ -63,6 +63,7 @@ class Halted(RuntimeError):
 
 
 HALT_FILE = "HALT"  # dans DATA_DIR ; sa présence garde le bot à l'arrêt, même après un redémarrage
+ROUTE_ALERT_FAILURES = 3  # refus de suite d'une route limitée (403 + Retry-After) avant un message Discord
 
 
 class UncertainMutation(Exception):
@@ -567,12 +568,15 @@ class WikiMastersClient:
         self._route_pause[name] = (time.monotonic() + delay, failures)
         log.warning("Route %s limitée par le site : pause %.0f s (échec #%d)", name, delay, failures)
         now = time.monotonic()
-        if now - self._route_alerted.get(name, float("-inf")) > 3600:
+        # Un refus isolé se règle seul en ~1 min (18/10 : sales_summary refusée une fois toutes les ~80 min, jamais
+        # deux fois de suite) : logs seulement. Message à partir de N refus de suite, dans le salon d'activité.
+        if failures >= ROUTE_ALERT_FAILURES and now - self._route_alerted.get(name, float("-inf")) > 3600:
             self._route_alerted[name] = now
             self.notifier.warning(
                 f"Route limitée : {name}",
-                f"Le site refuse temporairement `{name}` (403). Seule cette route est en pause "
+                f"Le site refuse `{name}` (403) {failures} fois de suite. Seule cette route est en pause "
                 f"({delay:.0f} s) ; les autres workers continuent.",
+                important=False,
             )
         return delay
 

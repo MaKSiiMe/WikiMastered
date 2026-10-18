@@ -227,6 +227,11 @@ class Database:
         fetched = min(parse_iso(r["fetched_at"]) for r in rows)  # type: ignore[type-var]
         return fetched, {r["rarity"]: (r["average"], r["sales_count"]) for r in rows}
 
+    async def price_fetched_at(self) -> dict[str, datetime]:
+        """Date de la cote en cache de chaque carte (la plus ancienne de ses raretés)."""
+        rows = await self._all("SELECT card_id, MIN(fetched_at) AS fetched FROM price_cache GROUP BY card_id")
+        return {r["card_id"]: parse_iso(r["fetched"]) for r in rows}  # type: ignore[misc]
+
     async def price_put(self, card_id: str, summary: dict[str, tuple[float | None, int | None]]) -> None:
         now = iso(utcnow())
         # Ligne sentinelle "_" : une carte sans aucune vente reste en cache.
