@@ -252,6 +252,7 @@ class WikiMastersClient:
         self._last_rate_alert = float("-inf")
         # Limitations propres à une route (ex. 403 + Retry-After sur les cotes) : nom -> (fin, échecs)
         self._route_pause: dict[str, tuple[float, int]] = {}
+        self._route_refused: set[str] = set()  # routes en pause sur un refus du site (403 + Retry-After), pas une panne
         self._route_alerted: dict[str, float] = {}
         # Routes refusées alors que la session est valide (ex. réservées au PRO) : nom -> jusqu'à
         self._route_forbidden: dict[str, float] = {}
@@ -584,6 +585,7 @@ class WikiMastersClient:
                     self.settings.backoff_rate_limit_base_seconds * 2 ** (failures - 1))
         delay = max(delay + random.uniform(0, delay * 0.2), retry_after)
         self._route_pause[name] = (time.monotonic() + delay, failures)
+        self._route_refused.add(name)
         log.warning("Route %s limitée par le site : pause %.0f s (échec #%d)", name, delay, failures)
         now = time.monotonic()
         # Un refus isolé se règle seul en ~1 min (18/10 : sales_summary refusée une fois toutes les ~80 min, jamais
@@ -606,6 +608,7 @@ class WikiMastersClient:
         delay = min(self.settings.backoff_max_seconds, self.settings.backoff_base_seconds * 2 ** (failures - 1))
         delay += random.uniform(0, delay * 0.2)
         self._route_pause[name] = (time.monotonic() + delay, failures)
+        self._route_refused.discard(name)
         log.warning("Route %s en pause %.0f s (%s, échec #%d) ; les autres routes continuent",
                     name, delay, cause, failures)
 
@@ -620,6 +623,10 @@ class WikiMastersClient:
     def route_paused_for(self, name: str) -> float:
         until, _ = self._route_pause.get(name, (0.0, 0))
         return max(0.0, until - time.monotonic())
+
+    def route_refused(self, name: str) -> bool:
+        """Route en pause parce que le site la limite (403 + Retry-After), et non pour une panne (5xx, délai)."""
+        return self.route_paused_for(name) > 0 and name in self._route_refused
 
     def _on_success(self) -> None:
         if self._failures >= 3 and self._degraded_alerted:

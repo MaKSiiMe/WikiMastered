@@ -225,11 +225,12 @@ class ValueScan(Worker):
             self._streak = 0
 
     async def lookup(self) -> float:
-        """Une cote demandée au site. Route limitée : la cote attend, et les suivantes sont plus espacées."""
+        """Une cote demandée au site. Route en pause : la cote attend. Limitée par le site (pas une panne : le 18/10 au
+        soir, des 500 en série faisaient tomber l'analyse à une cote toutes les 182 s) : les suivantes sont plus
+        espacées."""
         assert self._cycle is not None
         client = self.ctx.client
         if (paused := client.route_paused_for(ROUTE)) > 0:
-            self._slow_down()
             return paused + 5
         card_id = self._queue.pop(0)
         try:
@@ -244,9 +245,10 @@ class ValueScan(Worker):
             return self._spacing
         if limited:
             self._queue.insert(0, card_id)
-            self._slow_down()
-            self.log.info("cotes limitées par le site : une toutes les %.0f s au mieux désormais", self._spacing)
-            return self._spacing
+            if client.route_refused(ROUTE):
+                self._slow_down()
+                self.log.info("cotes limitées par le site : une toutes les %.0f s au mieux désormais", self._spacing)
+            return max(self._spacing, client.route_paused_for(ROUTE) + 5)
         self._accepted()
         await self._maybe_freeze(card_id, quotes)
         return self._spacing
