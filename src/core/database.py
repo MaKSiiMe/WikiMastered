@@ -136,8 +136,9 @@ HELD = "status IN ('won', 'sim_won') AND closed = 0"
 SUSPECT_SALE = ("(o.seller_id IS NOT NULL AND o.buyer_id IS NOT NULL AND (o.seller_id = o.buyer_id OR "
                 "(SELECT COUNT(*) FROM observed_sales p WHERE p.seller_id = o.seller_id "
                 f"AND p.buyer_id = o.buyer_id) >= {WASH_PAIR_MIN}))")
-# Une vente « incertaine » a peut-être été créée : elle reste ouverte jusqu'à sa vérification.
-LISTING_OPEN = "('scheduled', 'posted', 'simulated', 'uncertain')"
+# Une vente « incertaine » a peut-être été créée : elle reste ouverte jusqu'à sa vérification. « waiting » : revente
+# d'une position gardée hors des places de vente, une vente concurrente étant sous son prix d'achat.
+LISTING_OPEN = "('scheduled', 'waiting', 'posted', 'simulated', 'uncertain')"
 
 
 def _observed_filter(card_id: str, rarity: str | None, shiny: bool | None) -> tuple[str, tuple]:
@@ -460,7 +461,7 @@ class Database:
     async def due_listings(self, now: datetime) -> list[aiosqlite.Row]:
         # Les positions (cartes achetées pour revente) passent avant les doublons.
         return await self._all(
-            "SELECT * FROM listings WHERE status = 'scheduled' AND post_at <= ? "
+            "SELECT * FROM listings WHERE status IN ('scheduled', 'waiting') AND post_at <= ? "
             "ORDER BY bid_id IS NULL, post_at", (iso(now),)
         )
 
@@ -526,12 +527,14 @@ class Database:
         await self._exec(f"UPDATE listings SET {cols} WHERE id = ?", (*values, listing_id))
 
     async def pending_listings_count(self, real_only: bool = False) -> int:
+        """Ventes programmées, qui réservent une place de vente (pas celles en attente d'un meilleur marché)."""
         extra = " AND owned_card_id NOT LIKE 'sim-%'" if real_only else ""
         row = await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE status = 'scheduled'{extra}")
         return int(row["n"]) if row else 0
 
     async def scheduled_owned_ids(self) -> set[str]:
-        rows = await self._all("SELECT owned_card_id FROM listings WHERE status IN ('scheduled', 'posted', 'uncertain')")
+        rows = await self._all("SELECT owned_card_id FROM listings WHERE status IN ('scheduled', 'waiting', 'posted', "
+                               "'uncertain')")
         return {r["owned_card_id"] for r in rows}
 
     async def record_discards(self, rows: list[tuple[str, str, str, str | None]], dry_run: bool) -> None:

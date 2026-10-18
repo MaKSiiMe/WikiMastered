@@ -108,7 +108,9 @@ def build(rows, fee: float = 0.0) -> dict[str, Block]:
                 latent = (net - r["amount"]) if net is not None else 0.0
                 block.latent += latent
                 resale = ""
-                if r["listing_status"] == "scheduled":
+                if r["listing_status"] == "waiting":
+                    resale = " · hors vente (concurrente sous le prix d'achat)"
+                elif r["listing_status"] == "scheduled":
                     resale = f" · en vente le {_when(r['list_post_at'])} à {r['list_price']}"
                 elif r["listing_status"] in ("posted", "simulated"):
                     resale = f" · en vente à {r['list_price']}"

@@ -116,7 +116,7 @@ async def test_resale_listed_just_under_the_cheapest_rival(tmp_path):
         posted.append(json.loads(request.content))
         return httpx.Response(201, json={"auction_id": f"a{len(posted)}"})
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False, position_undercut_wait_minutes=60)
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     now = datetime.now(UTC)
@@ -146,13 +146,19 @@ async def test_resale_listed_just_under_the_cheapest_rival(tmp_path):
     row = await listing(lid)
     assert row["status"] == "posted" and row["base_amount"] == Auction.model_validate(market[0]).min_bid - 1
 
-    market[:] = [selling("m3", 600)]  # sous le prix d'achat (882) : la revente attend
+    market[:] = [selling("m3", 600)]  # sous le prix d'achat (882) : hors des places de vente, sans en réserver
     _, lid = await position(1042, 882)
     await inv.post_due_listings()
     row = await listing(lid)
-    assert row["status"] == "scheduled" and datetime.fromisoformat(row["post_at"]) > now + timedelta(minutes=25)
-    inv._undercut_since[lid] -= timedelta(hours=1)  # attente écoulée : au prix d'achat
+    assert row["status"] == "waiting" and datetime.fromisoformat(row["post_at"]) > now + timedelta(minutes=25)
+    assert await db.pending_listings_count() == 0
+    assert await db.positions_to_list() == []  # pas de seconde revente programmée pour la même position
+    count = len(posted)
+    await db.update_listing(lid, post_at=now - timedelta(seconds=1))
+    await inv.post_due_listings()  # toujours sous le prix d'achat, même des heures plus tard : jamais publiée
+    assert (await listing(lid))["status"] == "waiting" and len(posted) == count
+    market[:] = [selling("m4", 1500)]  # le marché est remonté : publiée sous la concurrente
     await db.update_listing(lid, post_at=now - timedelta(seconds=1))
     await inv.post_due_listings()
-    assert (await listing(lid))["status"] == "posted" and (await listing(lid))["base_amount"] == 883
+    assert (await listing(lid))["status"] == "posted" and (await listing(lid))["base_amount"] == 1042
     await db.close()
