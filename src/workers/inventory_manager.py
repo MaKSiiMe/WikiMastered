@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 
 from src.config import RARITY_RANK, Settings
+from src.core.api import COLLECTION_PAGE_SIZE
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.models import Auction, DiscardResult, MyBids, OwnedCard, parse_items
 from src.core.notifier import Topic
@@ -46,6 +47,7 @@ POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la ca
 POSITION_COPY_RETRY = timedelta(minutes=10)
 # Introuvable N fois de suite (~2 h) : la carte a quitté la collection (vendue ou échangée à la main ?).
 POSITION_MAX_COPY_MISSES = 12
+COPY_SEARCH_PAGES = 5  # pages de la recherche par titre lues pour retrouver un exemplaire
 _EPOCH = datetime.min.replace(tzinfo=UTC)
 SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une revente simulée
 
@@ -77,6 +79,12 @@ class DiscardCandidate:
 def keep_order(row: OwnedCard) -> tuple:
     """Les exemplaires à garder en premier : favori, shiny, plus haute rareté."""
     return (not row.starred, not row.is_shiny, -RARITY_RANK.get(row.rarity or "", -1), row.id)
+
+
+def newest_sellable(copies: list[OwnedCard]) -> str | None:
+    """Exemplaire à vendre : le plus récent hors favori (le site refuse de vendre un favori)."""
+    copies = sorted((c for c in copies if not c.starred), key=lambda r: r.obtained_at or _EPOCH, reverse=True)
+    return copies[0].id if copies else None
 
 
 def group_by_card(rows: list[OwnedCard]) -> dict[str, list[OwnedCard]]:
@@ -407,15 +415,18 @@ class InventoryManager(Worker):
             self._copy_retry.pop(row["id"], None)
             price = list_price(row["amount"], s.position_list_margin, s.sale_fee_pct,
                                estimate=row["reference_price"], share=s.position_list_profit_share)
+            # Remise en vente refusée : reprise à son prix réduit (le 18/10, Liste des éclipses solaires remise à
+            # 936 repartait à 1040, son prix de départ).
+            relist = await self.db.last_failed_relist(row["id"])
             await self._schedule(owned_id=owned_id, card_id=row["card_id"], title=row["title"], rarity=row["rarity"],
-                                 price=price, reason=f"position (achetée {row['amount']})", bid_id=row["id"])
+                                 price=relist["base_amount"] if relist else price,
+                                 reason=f"position (achetée {row['amount']})", bid_id=row["id"],
+                                 relist_count=relist["relist_count"] if relist else 0)
 
     async def _find_copy(self, row) -> str | None:
         """Exemplaire acheté : le plus récent de cette carte dans la collection, jamais un favori (le site refuse
         de le vendre : le 16/10, Place publique refusée 3 fois « en favori », puis revente abandonnée)."""
-        page = await self.api.collection_page(0, sort="rarity", q=row["title"])
-        taken = await self.db.scheduled_owned_ids()
-        copies = [r for r in page.rows() if r.catalog_id == row["card_id"] and r.id not in taken]
+        copies = await self._owned_copies(row["card_id"], row["title"])
         if not copies:
             log = self.log.warning if row["id"] not in self._copy_retry else self.log.debug  # une fois par série
             log("position %s : exemplaire introuvable dans la collection (nouvel essai toutes les %d min)",
@@ -429,9 +440,24 @@ class InventoryManager(Worker):
                                       "Retire l'étoile pour que le bot la revende (il réessaie toutes les 10 min).")
             self.log.debug("position %s : seul exemplaire en favori (réessai)", row["title"])
             return None
-        copies = [c for c in copies if not c.starred]
-        copies.sort(key=lambda r: r.obtained_at or _EPOCH, reverse=True)
-        return copies[0].id
+        return newest_sellable(copies)
+
+    async def _owned_copies(self, card_id: str, title: str) -> list[OwnedCard]:
+        """Exemplaires de cette carte pas déjà en vente : recherchés par titre sur toutes les pages, sinon parmi les
+        derniers obtenus. Le 18/10, 5G (L, achetée 443) restait introuvable 2 h par la seule 1re page de « q=5G »,
+        et la revente était abandonnée."""
+        taken = await self.db.scheduled_owned_ids()
+
+        def mine(page) -> list[OwnedCard]:
+            return [r for r in page.rows() if r.catalog_id == card_id and r.id not in taken]
+
+        for number in range(COPY_SEARCH_PAGES):
+            page = await self.api.collection_page(number, sort="rarity", q=title)
+            if copies := mine(page):
+                return copies
+            if len(page.collection) < COLLECTION_PAGE_SIZE:
+                break
+        return mine(await self.api.collection_page(0, sort="added"))
 
     # --------------------------------------------------------- publication
     async def post_due_listings(self) -> None:
@@ -478,13 +504,27 @@ class InventoryManager(Worker):
             else:
                 payload = result.payload if isinstance(result.payload, dict) else {}
                 error = payload.get("error") or payload.get("message") or f"HTTP {result.status}"
-                if row["bid_id"] and NOT_OWNED_HINT in str(error).lower() and not row["error"]:
-                    retry = utcnow() + NOT_OWNED_RETRY  # une fois : la carte invendue n'est pas encore revenue
-                    await self.db.update_listing(row["id"], error=str(error)[:300], post_at=retry,
-                                                 target_end=retry + timedelta(minutes=minutes))
-                    self.log.info("%s : carte pas encore revenue dans la collection, nouvel essai à %s", label,
-                                  f"{retry.astimezone(now_local().tzinfo):%H:%M}")
-                    continue
+                if row["bid_id"] and NOT_OWNED_HINT in str(error).lower():
+                    # L'invendue revient sous un autre identifiant d'exemplaire : le 18/10, Liste des éclipses
+                    # solaires et Les Feux de l'amour, refusées 2 fois en 5 min, étaient retrouvées 30 s après.
+                    try:
+                        copy = newest_sellable(await self._owned_copies(row["card_id"], row["title"]))
+                    except ApiError:
+                        copy = None
+                    if copy and copy != row["owned_card_id"]:
+                        retry = utcnow()
+                        self.log.info("%s : exemplaire revenu sous un autre identifiant, nouvel essai", label)
+                    elif not row["error"]:
+                        retry = utcnow() + NOT_OWNED_RETRY  # une fois : la carte invendue n'est pas encore revenue
+                        copy = row["owned_card_id"]
+                        self.log.info("%s : carte pas encore revenue dans la collection, nouvel essai à %s", label,
+                                      f"{retry.astimezone(now_local().tzinfo):%H:%M}")
+                    else:
+                        retry = None
+                    if retry is not None:
+                        await self.db.update_listing(row["id"], owned_card_id=copy, error=str(error)[:300],
+                                                     post_at=retry, target_end=retry + timedelta(minutes=minutes))
+                        continue
                 # Carte en favori : pas un échec (ne mène pas à l'abandon) ; l'exemplaire est recherché de nouveau.
                 status = "favorite" if FAVORITE_HINT in str(error).lower() else "failed"
                 await self.db.update_listing(row["id"], status=status, error=str(error)[:300])
