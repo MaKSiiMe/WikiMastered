@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -271,7 +272,7 @@ async def test_missing_copy_is_retried_slowly_then_closed(tmp_path):
     await inv.setup()
     await inv.manage_positions()
     await inv.manage_positions()  # pas de nouvelle lecture avant POSITION_COPY_RETRY
-    assert len(reads) == 1
+    assert len(reads) == 2  # recherche par titre, puis derniers exemplaires obtenus
     for _ in range(im.POSITION_MAX_COPY_MISSES - 1):
         inv._copy_retry[bid] = (inv._copy_retry[bid][0], datetime.now(UTC))  # délai écoulé
         await inv.manage_positions()
@@ -287,6 +288,8 @@ async def test_relist_waits_for_the_unsold_card_to_come_back(tmp_path):
     def handler(request):
         if request.url.path == "/api/marketplace/mine":
             return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if request.url.path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": []})  # pas encore revenue
         return httpx.Response(400, json={"error": "Vous ne possédez pas cette carte"})
 
     client, notifier = make_client(tmp_path, handler, dry_run=False)
@@ -306,6 +309,91 @@ async def test_relist_waits_for_the_unsold_card_to_come_back(tmp_path):
     await db.update_listing(lid, post_at=now - timedelta(seconds=1))  # toujours refusée : vrai échec
     await inv.post_due_listings()
     assert await db.failed_listings_count(3) == 1
+    await db.close()
+
+
+def owned(oid: str, card_id: str, title: str, rarity: str = "L") -> dict:
+    return {"id": oid, "card_id": card_id, "starred": False, "obtained_at": "2026-10-18T03:48:00+00:00",
+            "card": {"id": card_id, "wikipedia_title": title, "rarity": rarity}}
+
+
+@pytest.mark.asyncio
+async def test_bought_copy_found_among_recent_cards_when_the_title_search_misses(tmp_path):
+    """18/10 : 5G (L, achetée 443) introuvable 2 h par la recherche « q=5G », revente abandonnée."""
+    others = [owned(f"o{i}", f"c{i}", f"Réseau 5G n°{i}", "C") for i in range(50)]
+
+    def handler(request):
+        q, page = request.url.params.get("q"), int(request.url.params.get("page", 0))
+        if q:  # la recherche renvoie d'autres cartes : 5G n'est pas sur la 1re page
+            return httpx.Response(200, json={"collection": others if page == 0 else []})
+        return httpx.Response(200, json={"collection": [owned("x5g", "5g", "5G")]})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    ctx = await make_context(tmp_path, client, notifier)
+    bid = await ctx.db.record_bid(auction_id="a", card_id="5g", title="5G", rarity="L", is_shiny=False, amount=443,
+                                  reference_price=664, reason="revente ~664 WB", night=True, dry_run=False,
+                                  status="won", end_at=datetime.now(UTC))
+    inv = InventoryManager(ctx)
+    assert await inv._find_copy((await ctx.db.positions_to_list())[0]) == "x5g"
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_relist_follows_the_copy_back_under_a_new_id(tmp_path):
+    """18/10 : Liste des éclipses solaires invendue, remise à 936 refusée 2 fois (« Vous ne possédez pas cette
+    carte ») puis reprise à 1040, son prix de départ : l'exemplaire était revenu sous un autre identifiant."""
+    posted = []
+
+    def handler(request):
+        path = request.url.path
+        if path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": [owned("new", "ecl", "Liste des éclipses solaires")]})
+        body = json.loads(request.content)
+        posted.append(body)
+        if "new" not in json.dumps(body):
+            return httpx.Response(400, json={"error": "Vous ne possédez pas cette carte"})
+        return httpx.Response(201, json={"auction_id": "auc"})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    lid = await db.schedule_listing(owned_card_id="old", card_id="ecl", title="Liste des éclipses solaires",
+                                    rarity="L", base_amount=936, duration_minutes=360,
+                                    post_at=now - timedelta(seconds=1), target_end=now, reason="position", bid_id=3,
+                                    relist_count=1)
+    inv = InventoryManager(ctx)
+    await inv.post_due_listings()  # refusée : l'exemplaire revenu est retrouvé, nouvel essai tout de suite
+    await inv.post_due_listings()
+    row = await db._one("SELECT status, owned_card_id, base_amount FROM listings WHERE id = ?", (lid,))
+    assert (row["status"], row["owned_card_id"], row["base_amount"]) == ("posted", "new", 936)
+    assert len(posted) == 2 and not any(t == "Mise en vente refusée" for _, t in notifier.sent)
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_relist_resumes_at_its_reduced_price(tmp_path):
+    """Remise en vente refusée pour de bon : la position repart à son prix réduit, pas au prix de départ."""
+    def handler(request):
+        return httpx.Response(200, json={"collection": [owned("new", "ecl", "Liste des éclipses solaires")]})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    bid = await db.record_bid(auction_id="a", card_id="ecl", title="Liste des éclipses solaires", rarity="L",
+                              is_shiny=False, amount=882, reference_price=1197, reason="revente ~1197 WB",
+                              night=False, dry_run=False, status="won", end_at=now)
+    for status, price, relists in (("unsold", 1040, 0), ("failed", 936, 1)):
+        lid = await db.schedule_listing(owned_card_id=f"o{price}", card_id="ecl", title="Liste des éclipses solaires",
+                                        rarity="L", base_amount=price, duration_minutes=360, post_at=now,
+                                        target_end=now, reason="position", bid_id=bid, relist_count=relists)
+        await db.update_listing(lid, status=status)
+    await InventoryManager(ctx).manage_positions()
+    row = await db._one("SELECT owned_card_id, base_amount, relist_count FROM listings ORDER BY id DESC LIMIT 1")
+    assert (row["owned_card_id"], row["base_amount"], row["relist_count"]) == ("new", 936, 1)
     await db.close()
 
 

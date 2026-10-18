@@ -915,10 +915,12 @@ class AuctionSniper(Worker):
 
     def _check_quota_spent(self, decision: Decision) -> bool:
         """Mise de collection à ne pas faire : sa part des mises permises par la vérification est prise.
-        Le 17/10, chaque vérification a laissé passer 9 ou 10 mises, puis le site l'a redemandée."""
+        Le 17/10, chaque vérification a laissé passer 9 ou 10 mises, puis le site l'a redemandée.
+        Rien n'est gardé quand les mises des L sont simulées (hors SNIPER_LIVE_START-END) : le 18/10 après 12:00,
+        la collection laissait passer des jours à 10 WB pour un quota que personne n'utilisait."""
         cap = self.settings.collection_bids_per_check
         return (decision.collection and cap > 0 and self.settings.is_live("collection_bid")
-                and self._collection_since_check >= cap)
+                and self.settings.is_live("place_bid") and self._collection_since_check >= cap)
 
     def _antibot_pending(self, decision: Decision) -> bool:
         """Mise réelle à ne pas tenter : la vérification anti-bot attend et la dernière tentative est trop récente."""

@@ -444,6 +444,12 @@ class Database:
             (iso(before),),
         )
 
+    async def last_failed_relist(self, bid_id: int) -> aiosqlite.Row | None:
+        """Dernière remise en vente (après une vente sans acheteur) de cette position, si elle a échoué."""
+        row = await self._one("SELECT status, base_amount, relist_count FROM listings WHERE bid_id = ? "
+                              "ORDER BY id DESC LIMIT 1", (bid_id,))
+        return row if row and row["status"] == "failed" and row["relist_count"] else None
+
     async def failed_listings_count(self, bid_id: int) -> int:
         row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE bid_id = ? AND status = 'failed'", (bid_id,))
         return int(row["n"]) if row else 0
