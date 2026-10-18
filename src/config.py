@@ -267,11 +267,17 @@ class Settings(BaseSettings):
     enable_value_scan: bool = True
     value_scan_hours: float = 12.0
     value_scan_min_value: int = 100
-    # Cotes demandées au site par passage, une toutes les N s : la route des cotes est limitée et sert aussi au
-    # sniper. Une cote de moins de VALUE_SCAN_MAX_AGE_DAYS jours n'est pas redemandée.
-    value_scan_lookups: int = 600
-    value_scan_lookup_seconds: float = 30.0
+    # Cotes demandées au site par passage (0 = toutes), au plus une toutes les N s, et seulement quand aucune autre
+    # requête n'attend. La route des cotes est limitée (18/10 : refusée 3 fois en 4 min au seul sniper) : refusée,
+    # le rythme ralentit de moitié, puis réaccélère. Une cote de moins de VALUE_SCAN_MAX_AGE_DAYS jours est gardée ;
+    # une carte sans aucune vente est recotée après VALUE_SCAN_UNSOLD_DAYS jours.
+    value_scan_lookups: int = 0
+    value_scan_lookup_seconds: float = 3.0
     value_scan_max_age_days: float = 7.0
+    value_scan_unsold_days: float = 30.0
+    # Une carte cotée sous N WB (toutes ses raretés possédées) garde cette cote pour toujours : jamais redemandée,
+    # ni par l'analyse ni par la vente des doublons (0 = jamais figée).
+    value_scan_freeze_below: int = 50
 
     # --- Module E : tendances Wikipédia -----------------------------------------
     trends_interval_minutes: float = 60.0

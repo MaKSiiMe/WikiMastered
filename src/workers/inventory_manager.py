@@ -300,7 +300,11 @@ class InventoryManager(Worker):
         quotes: dict[str, dict[str, Quote]] = {}
         budget = self.settings.sell_price_lookups_per_run if lookups is None else lookups
         looked_up = 0
+        frozen = await self.db.frozen_values()  # cotes sous VALUE_SCAN_FREEZE_BELOW : jamais redemandées
         for card_id in to_price:
+            if {c.rarity or "?" for c in groups[card_id]} <= frozen.get(card_id, {}).keys():
+                quotes[card_id] = {r: Quote(v, 0) for r, v in frozen[card_id].items()}
+                continue
             fresh = await self.ctx.prices.is_fresh(card_id, INVENTORY_PRICE_MAX_AGE)
             if fresh or looked_up < budget:
                 looked_up += not fresh

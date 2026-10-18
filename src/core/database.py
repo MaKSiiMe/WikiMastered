@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS price_history (
     average REAL, sales_count INTEGER, observed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_price_history_card ON price_history (card_id, rarity, observed_at);
+-- Cotes figées par l'analyse de l'inventaire (sous VALUE_SCAN_FREEZE_BELOW) : jamais redemandées, jamais purgées.
+CREATE TABLE IF NOT EXISTS frozen_values (
+    card_id TEXT NOT NULL, rarity TEXT NOT NULL, value REAL NOT NULL, frozen_at TEXT NOT NULL,
+    PRIMARY KEY (card_id, rarity)
+);
 
 CREATE TABLE IF NOT EXISTS pulls (
     id INTEGER PRIMARY KEY, opened_at TEXT NOT NULL, card_id TEXT, owned_card_id TEXT,
@@ -227,10 +232,25 @@ class Database:
         fetched = min(parse_iso(r["fetched_at"]) for r in rows)  # type: ignore[type-var]
         return fetched, {r["rarity"]: (r["average"], r["sales_count"]) for r in rows}
 
-    async def price_fetched_at(self) -> dict[str, datetime]:
-        """Date de la cote en cache de chaque carte (la plus ancienne de ses raretés)."""
-        rows = await self._all("SELECT card_id, MIN(fetched_at) AS fetched FROM price_cache GROUP BY card_id")
-        return {r["card_id"]: parse_iso(r["fetched"]) for r in rows}  # type: ignore[misc]
+    async def price_cache_state(self) -> dict[str, tuple[datetime, bool]]:
+        """Cote en cache de chaque carte : (date, la plus ancienne de ses raretés ; au moins une vente connue)."""
+        rows = await self._all("SELECT card_id, MIN(fetched_at) AS fetched, MAX(average IS NOT NULL) AS priced "
+                               "FROM price_cache GROUP BY card_id")
+        return {r["card_id"]: (parse_iso(r["fetched"]), bool(r["priced"])) for r in rows}  # type: ignore[misc]
+
+    async def frozen_values(self) -> dict[str, dict[str, float]]:
+        """Cotes figées : {carte: {rareté: cote}}."""
+        out: dict[str, dict[str, float]] = {}
+        for r in await self._all("SELECT card_id, rarity, value FROM frozen_values"):
+            out.setdefault(r["card_id"], {})[r["rarity"]] = r["value"]
+        return out
+
+    async def freeze_values(self, card_id: str, values: dict[str, float]) -> None:
+        now = iso(utcnow())
+        await self.db.executemany(
+            "INSERT INTO frozen_values (card_id, rarity, value, frozen_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(card_id, rarity) DO NOTHING", [(card_id, r, v, now) for r, v in values.items()])
+        await self.db.commit()
 
     async def price_put(self, card_id: str, summary: dict[str, tuple[float | None, int | None]]) -> None:
         now = iso(utcnow())
