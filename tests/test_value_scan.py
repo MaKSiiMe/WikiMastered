@@ -190,3 +190,20 @@ def test_settings_defaults():
     s = Settings(_env_file=None)
     assert (s.enable_value_scan, s.value_scan_hours, s.value_scan_min_value) == (True, 12.0, 100)
     assert (s.value_scan_lookups, s.value_scan_lookup_seconds, s.value_scan_freeze_below) == (0, 3.0, 50)
+
+
+@pytest.mark.asyncio
+async def test_pace_slows_on_refusal_and_speeds_up_gently(tmp_path):
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}), value_scan_lookup_seconds=3)
+    worker = ValueScan(await make_context(tmp_path, client, notifier))
+    await worker.setup()
+    worker._slow_down()
+    worker._slow_down()
+    assert worker._spacing == 12
+    for _ in range(20):
+        worker._accepted()
+    assert worker._spacing == 9
+    for _ in range(100):
+        worker._accepted()
+    assert worker._spacing == 3  # jamais sous VALUE_SCAN_LOOKUP_SECONDS
+    await worker.db.close()

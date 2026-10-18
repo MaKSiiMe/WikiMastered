@@ -40,7 +40,8 @@ KV_KEY = "value_scan"
 ROUTE = "sales_summary"
 START_DELAY = timedelta(minutes=10)  # après un démarrage, laisse d'abord le sniper prendre son rythme
 MAX_SPACING = 300.0                  # espacement maximal des cotes quand la route est limitée
-SPEED_UP_AFTER = 20                  # cotes acceptées de suite avant de réaccélérer
+SPEED_UP_AFTER = 20                  # cotes acceptées de suite avant de réaccélérer…
+SPEED_UP = 0.75                      # … doucement : chaque refus met la route en pause ≥ 60 s, sniper compris
 INTERIM_REPORT = timedelta(hours=3)  # passage long (première analyse) : cartes trouvées signalées en chemin
 RISE_TO_REPORT = 1.5                 # carte déjà signalée : de nouveau si sa cote a monté de moitié
 MAX_LINES = 15                       # cartes détaillées dans le message
@@ -220,7 +221,7 @@ class ValueScan(Worker):
         self._looked_up += 1
         self._streak += 1
         if self._streak >= SPEED_UP_AFTER and self._spacing > self.settings.value_scan_lookup_seconds:
-            self._spacing = max(self.settings.value_scan_lookup_seconds, self._spacing / 2)
+            self._spacing = max(self.settings.value_scan_lookup_seconds, self._spacing * SPEED_UP)
             self._streak = 0
 
     async def lookup(self) -> float:
