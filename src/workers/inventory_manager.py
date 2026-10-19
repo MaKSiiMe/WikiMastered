@@ -8,7 +8,9 @@
   Invendue, elle repart à −10 % sans passer sous le prix d'achat, puis est gardée.
   Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
 - Défausse : doublons sans valeur, seulement si aucun palier de succès de taille de
-  collection n'est proche (ACHIEVEMENT_MILESTONES), par lots de 50 [WR discard.js].
+  collection n'est proche (ACHIEVEMENT_MILESTONES), par lots de 50 [WR discard.js]. Les raretés de
+  DISCARD_LAST_COPY_RARITIES partent même en dernier exemplaire, si l'analyse de valeur a coté la carte sans
+  aucune vente au-dessus de DISCARD_MAX_VALUE ; DISCARD_MAX_PER_RUN exemplaires par passage au plus.
 - Jamais touchés : favoris, shiny, exemplaires en échange ou déjà en vente.
 
 Le worker publie les ventes programmées (même celles créées en CLI). Les scans
@@ -133,14 +135,39 @@ def select_for_sale(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[s
     return out
 
 
+def worthless(card_id: str, known: dict[str, float | None], s: Settings,
+              bought: frozenset[str] | set[str] = frozenset()) -> bool:
+    """Carte défaussable même en dernier exemplaire : cotée par l'analyse de valeur (`known`, voir
+    Database.known_values), sans aucune vente connue au-dessus de DISCARD_MAX_VALUE, et pas achetée par le bot."""
+    if not s.discard_last_copy_rarities or card_id not in known or card_id in bought:
+        return False
+    value = known[card_id]
+    return value is None or value <= s.discard_max_value
+
+
 def select_for_discard(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
-                       excluded: set[str], s: Settings) -> list[DiscardCandidate]:
+                       excluded: set[str], s: Settings, known: dict[str, float | None] | None = None,
+                       bought: frozenset[str] | set[str] = frozenset()) -> list[DiscardCandidate]:
+    """Doublons sans valeur. Carte sans valeur (`worthless`) : aussi ses exemplaires d'une rareté de
+    DISCARD_LAST_COPY_RARITIES, même le dernier ; un exemplaire d'une autre rareté est alors gardé à sa place.
+    Jamais un favori, un shiny, un GIF ni un exemplaire protégé."""
     out: list[DiscardCandidate] = []
-    keep = max(1, s.discard_keep_copies)  # on garde toujours au moins un exemplaire
+    keep = max(1, s.discard_keep_copies)  # on garde toujours au moins un exemplaire (hors DISCARD_LAST_COPY_RARITIES)
+    known = known or {}
     for card_id, copies in groups.items():
-        for row in spare_copies(copies, keep, excluded):
-            if row.rarity not in s.discard_rarities or row.card.is_gif:
+        last = worthless(card_id, known, s, bought)
+
+        def anyway(c: OwnedCard) -> bool:
+            return last and c.rarity in s.discard_last_copy_rarities
+        ordered = sorted(copies, key=anyway)  # tri stable : les exemplaires à garder d'abord
+        for i, row in enumerate(ordered):
+            if (i < keep and not anyway(row)) or not spare_copies([row], 0, excluded) or row.card.is_gif:
                 continue  # GIF : se vendraient mieux (16/10), jamais défaussés tant que ce n'est pas mesuré
+            if anyway(row):
+                out.append(DiscardCandidate(row, known[card_id]))
+                continue
+            if row.rarity not in s.discard_rarities:
+                continue
             q = quotes.get(card_id, {}).get(row.rarity or "")
             avg = q.average if q else None
             if (avg is None and s.discard_unknown_price_is_worthless) or (avg is not None and avg <= s.discard_max_value):
@@ -149,12 +176,13 @@ def select_for_discard(groups: dict[str, list[OwnedCard]], quotes: dict[str, dic
 
 
 def valuation(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]], excluded: set[str],
-              s: Settings, bought: frozenset[str] | set[str] = frozenset()) -> list[dict]:
+              s: Settings, bought: frozenset[str] | set[str] = frozenset(),
+              known: dict[str, float | None] | None = None) -> list[dict]:
     """Une ligne par carte et rareté : exemplaires, cote, et ce que deviennent les doublons (mêmes règles que la
     vente et la défausse automatiques). Les exemplaires gardés (1er exemplaire, favoris, shiny, étiquettes
     protégées, en échange ou déjà en vente) ne sont ni vendus ni défaussés."""
     sale = {c.owned.id: c for c in select_for_sale(groups, quotes, excluded, s, bought)}
-    discard = {c.owned.id for c in select_for_discard(groups, quotes, excluded, s)}
+    discard = {c.owned.id for c in select_for_discard(groups, quotes, excluded, s, known, bought)}
     keep = min(s.sell_keep_copies, max(1, s.discard_keep_copies))
     rows: dict[tuple[str, str], dict] = {}
     for card_id, copies in groups.items():
@@ -192,6 +220,12 @@ def achievement_guard(count: int, n_discard: int, milestones: list[int], margin:
     allowed = max(0, min(n_discard, count - reached))
     target = f"prochain palier {upcoming}" if upcoming else "tous les paliers atteints"
     return allowed, f"{count} exemplaires, {target} ; on ne repasse pas sous {reached}"
+
+
+def discard_affects_count(s: Settings) -> bool:
+    """La défausse fait baisser le compte des succès : toujours en mode total, en mode unique seulement si elle
+    touche des derniers exemplaires (DISCARD_LAST_COPY_RARITIES)."""
+    return s.achievement_count_mode == "total" or bool(s.discard_last_copy_rarities)
 
 
 async def excluded_copies(ctx: Context, rows: list[OwnedCard]) -> set[str]:
@@ -735,14 +769,21 @@ class InventoryManager(Worker):
                                       f"{row['relist_count'] + 1} essai(s), carte gardée.")
 
     # ------------------------------------------------------------ défausse
+    async def discard_candidates(self, groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
+                                 excluded: set[str]) -> list[DiscardCandidate]:
+        known = await self.db.known_values() if self.settings.discard_last_copy_rarities else {}
+        return select_for_discard(groups, quotes, excluded, self.settings, known, await self.db.bought_card_ids())
+
     async def discard(self, groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
                       excluded: set[str], total: int) -> dict:
         s = self.settings
-        candidates = select_for_discard(groups, quotes, excluded, s)
+        candidates = await self.discard_candidates(groups, quotes, excluded)
         count = total if s.achievement_count_mode == "total" else len(groups)
         allowed, why = achievement_guard(count, len(candidates), s.achievement_milestones,
-                                         s.achievement_margin, affects_count=s.achievement_count_mode == "total")
-        self.log.info("défausse : %d candidat(s), %d autorisé(s) — %s", len(candidates), allowed, why)
+                                         s.achievement_margin, affects_count=discard_affects_count(s))
+        if s.discard_max_per_run > 0:
+            allowed = min(allowed, s.discard_max_per_run)
+        self.log.info("défausse : %d candidat(s), %d autorisé(s) à ce passage — %s", len(candidates), allowed, why)
         if not allowed:
             return {"candidates": len(candidates), "discarded": 0, "guard": why}
         # Les moins cotés partent en premier.
@@ -777,7 +818,8 @@ async def report(ctx: Context, worker: InventoryManager, lookups: int) -> None:
     """Toute la collection cotée : résumé à l'écran, détail par carte dans data/inventaire-<date>.csv."""
     s = ctx.settings
     groups, excluded, quotes, total = await worker.snapshot(lookups=lookups)
-    rows = valuation(groups, quotes, excluded, s, await ctx.db.bought_card_ids())
+    known = await ctx.db.known_values() if s.discard_last_copy_rarities else {}
+    rows = valuation(groups, quotes, excluded, s, await ctx.db.bought_card_ids(), known)
     path = s.data_dir / f"inventaire-{now_local():%Y%m%d-%H%M}.csv"
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["carte"])
@@ -788,12 +830,14 @@ async def report(ctx: Context, worker: InventoryManager, lookups: int) -> None:
     kept, unknown = count("doublons gardés"), count("sans cote")
     allowed, why = achievement_guard(total if s.achievement_count_mode == "total" else len(groups), discard,
                                      s.achievement_milestones, s.achievement_margin,
-                                     affects_count=s.achievement_count_mode == "total")
+                                     affects_count=discard_affects_count(s))
     print(f"\n{total} exemplaires, {len(groups)} cartes différentes")
     print(f"  À vendre      : {sell} doublon(s) coté(s) ≥ {s.sell_min_value} WB, ~{wb} WB au total "
           f"(5 ventes à la fois : les mieux cotés d'abord)")
-    print(f"  À défausser   : {discard} doublon(s) {'/'.join(s.discard_rarities)} coté(s) ≤ {s.discard_max_value} WB, "
-          f"+{discard} WB ; {allowed} permis aujourd'hui ({why})")
+    last = (f", et derniers exemplaires {'/'.join(s.discard_last_copy_rarities)} sans vente au-dessus"
+            if s.discard_last_copy_rarities else "")
+    print(f"  À défausser   : {discard} doublon(s) {'/'.join(s.discard_rarities)} coté(s) ≤ {s.discard_max_value} WB"
+          f"{last}, +{discard} WB ; {allowed} permis aujourd'hui ({why})")
     print(f"  Gardés        : {kept} doublon(s) entre les deux seuils ou d'une rareté jamais défaussée")
     print(f"  Sans cote     : {unknown} doublon(s) ; relance avec --lookups plus grand (cotes gardées 3 jours)")
     by_rarity: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
@@ -821,10 +865,12 @@ async def cli(ctx: Context, action: str, apply: bool, lookups: int | None = None
     if action == "scan" or not apply:
         groups, excluded, quotes, total = await worker.snapshot()
         sales = select_for_sale(groups, quotes, excluded, s, await ctx.db.bought_card_ids())
-        discards = select_for_discard(groups, quotes, excluded, s)
+        discards = await worker.discard_candidates(groups, quotes, excluded)
         count = total if s.achievement_count_mode == "total" else len(groups)
         allowed, why = achievement_guard(count, len(discards), s.achievement_milestones, s.achievement_margin,
-                                         affects_count=s.achievement_count_mode == "total")
+                                         affects_count=discard_affects_count(s))
+        if s.discard_max_per_run > 0:
+            why += f" ; {min(allowed, s.discard_max_per_run)} par passage (DISCARD_MAX_PER_RUN)"
         print(f"\n== À vendre (cote ≥ {s.sell_min_value} WB, {len(sales)} exemplaire(s)) ==")
         for c in sales[:50]:
             print(f"  {c.owned.rarity:>2} {c.owned.title[:50]:<50} cote {c.average:>7.1f} -> prix {c.price}")

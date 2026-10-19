@@ -239,6 +239,19 @@ class Database:
                                "FROM price_cache GROUP BY card_id")
         return {r["card_id"]: (parse_iso(r["fetched"]), bool(r["priced"])) for r in rows}  # type: ignore[misc]
 
+    async def known_values(self) -> dict[str, float | None]:
+        """Plus haute valeur connue de chaque carte déjà cotée (cote du site en cache ou figée, toutes raretés), ventes
+        observées comprises (même suspectes : par prudence) ; None : cotée, mais aucune vente connue. Une carte jamais
+        cotée est absente."""
+        out: dict[str, float | None] = {}
+        for r in await self._all("SELECT card_id, MAX(average) AS v FROM price_cache GROUP BY card_id "
+                                 "UNION ALL SELECT card_id, MAX(value) FROM frozen_values GROUP BY card_id"):
+            out[r["card_id"]] = max((x for x in (out.get(r["card_id"]), r["v"]) if x is not None), default=None)
+        for r in await self._all("SELECT card_id, MAX(price) AS v FROM observed_sales GROUP BY card_id"):
+            if r["card_id"] in out:
+                out[r["card_id"]] = max((x for x in (out[r["card_id"]], r["v"]) if x is not None), default=None)
+        return out
+
     async def frozen_values(self) -> dict[str, dict[str, float]]:
         """Cotes figées : {carte: {rareté: cote}}."""
         out: dict[str, dict[str, float]] = {}

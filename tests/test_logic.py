@@ -10,6 +10,7 @@ import pytest
 
 from src.config import Settings
 from src.core.client import user_id_from_cookie
+from src.core.database import Database
 from src.core.endpoints import Endpoints
 from src.core.models import Auction, CollectionPage, OwnedCard, PackOpenResult, SaleRow, min_next_bid
 from src.core.pricing import Quote, combine, recent_estimates
@@ -247,6 +248,38 @@ def test_last_copy_rarities_sold_except_bot_buys():
     sale = select_for_sale(groups, quotes, {"t1"}, s, bought={"S"})
     assert {c.owned.id for c in sale} == {"p1", "m1"}  # M : la L se vend, la C est gardée à sa place
     assert {c.owned.id for c in select_for_sale(groups, quotes, set(), settings(sell_min_value=50))} == {"m2"}
+
+
+def test_last_copy_discard_needs_a_known_worthless_card():
+    """DISCARD_LAST_COPY_RARITIES=C,PC : le dernier exemplaire part si la carte est cotée sans vente au-dessus de
+    DISCARD_MAX_VALUE ; jamais une carte pas encore cotée, achetée par le bot, un favori, ni une rareté hors liste
+    (gardée à la place de la C)."""
+    s = settings(discard_max_value=2, discard_last_copy_rarities=["c", "pc"])
+    rows = [owned("n1", "N"), owned("n2", "N"), owned("v1", "V"), owned("u1", "U"), owned("b1", "B"),
+            owned("f1", "F", starred=True), owned("r1", "R", "R"), owned("r2", "R", "C"), owned("p1", "P", "PC"),
+            owned("x1", "X")]
+    groups = group_by_card(rows)
+    known = {"N": None, "V": 40.0, "B": None, "F": None, "R": 1.0, "P": 2.0, "X": None}
+    chosen = select_for_discard(groups, {}, {"x1"}, s, known, bought={"B"})
+    assert {c.owned.id for c in chosen} == {"n1", "n2", "r2", "p1"}  # U jamais cotée : attend l'analyse
+    assert select_for_discard(groups, {}, set(), settings(discard_max_value=2), known) == []  # réglage vide : doublons seuls
+
+
+@pytest.mark.asyncio
+async def test_known_values_mix_site_frozen_and_observed(tmp_path):
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    await db.price_put("never_sold", {})
+    await db.price_put("cheap", {"C": (1.0, 3), "R": (2.0, 1)})
+    await db.price_put("seen_high", {})
+    await db.freeze_values("frozen", {"C": 1.5})
+    end = datetime.now(UTC) - timedelta(minutes=5)
+    await db.upsert_auctions([{"auction_id": "a1", "card_id": "seen_high", "title": "t", "rarity": "L", "is_shiny": 0,
+                               "current_bid": 300, "base_amount": 100, "min_bid": 330, "end_at": end.isoformat(),
+                               "seen_at": (end - timedelta(seconds=5)).isoformat(), "is_gif": 0}])
+    assert await db.harvest_ended_auctions(datetime.now(UTC)) == 1
+    assert await db.known_values() == {"never_sold": None, "cheap": 2.0, "seen_high": 300, "frozen": 1.5}
+    await db.close()
 
 
 def test_achievement_guard():
