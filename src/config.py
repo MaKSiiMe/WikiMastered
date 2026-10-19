@@ -236,6 +236,8 @@ class Settings(BaseSettings):
     auto_list: bool = False
     sell_min_value: int = 15
     sell_keep_copies: int = 1
+    # Raretés vendues même en dernier exemplaire (une L sortie d'un paquet). Jamais une carte achetée par le bot.
+    sell_last_copy_rarities: CsvList = Field(default_factory=list)
     sell_price_multiplier: float = 1.0
     sell_max_listings_per_run: int = 5
     sell_anytime: bool = True        # doublons vendus dès qu'une place se libère (6 h), pas seulement le soir
@@ -334,7 +336,8 @@ class Settings(BaseSettings):
                 return f"0{value}"
         return value
 
-    @field_validator("pack_notify_rarities", "discard_rarities", "sniper_resale_rarities", "sniper_shadow_rarities")
+    @field_validator("pack_notify_rarities", "discard_rarities", "sniper_resale_rarities", "sniper_shadow_rarities",
+                     "sell_last_copy_rarities")
     @classmethod
     def _check_rarities(cls, value: list[str]) -> list[str]:
         value = [v.upper() for v in value]
