@@ -189,11 +189,10 @@ class Settings(BaseSettings):
     sniper_max_buys: int = 0
     # Sniper de test : avec des mises réelles, simule en plus les achats que le sniper réel ne fait pas (au-dessus
     # de SNIPER_MAX_BID, achats réels épuisés, plafond de positions atteint, raretés SNIPER_SHADOW_RARITIES), pour
-    # continuer à mesurer la stratégie. Ses positions simulées ont leur propre plafond, et le sniper réel passe
-    # toujours en premier. Une rareté ajoutée ici coûte des requêtes de repérage (moins de relectures pour le réel).
+    # continuer à mesurer la stratégie. Ni plafond de mise ni plafond de positions (le budget d'une position et le
+    # solde simulé s'appliquent), et le sniper réel passe toujours en premier. Une rareté ajoutée ici coûte des
+    # requêtes de repérage (moins de relectures pour le réel).
     sniper_shadow: bool = False
-    sniper_shadow_max_bid: int = 0          # 0 = pas de plafond (le budget d'une position s'applique)
-    sniper_shadow_max_positions: int = 15
     sniper_shadow_rarities: CsvList = Field(default_factory=list)  # en plus de SNIPER_RESALE_RARITIES
     sniper_avoid_my_bids: bool = True     # ne jamais toucher aux cartes sur lesquelles tu mises toi-même
 

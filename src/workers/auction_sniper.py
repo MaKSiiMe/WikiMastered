@@ -28,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import math
 import random
+import sys
 from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
@@ -701,11 +702,12 @@ class AuctionSniper(Worker):
             await self._play_shadow([a for a in auctions if self._outcomes.get(a.id) not in PLACED], params, now)
 
     async def _play_shadow(self, auctions: list[Auction], params: SnipeParams, now: datetime) -> None:
-        """Sniper de test : simule les achats que le sniper réel n'a pas faits (plafonds du test), avec ses propres
-        limites, pour continuer à mesurer la stratégie. Jamais une carte de collection ni une vente déjà misée."""
+        """Sniper de test : simule les achats que le sniper réel n'a pas faits (plafonds du test), sans plafond de
+        mise ni de positions, pour continuer à mesurer la stratégie. Jamais une carte de collection ni une vente
+        déjà misée."""
         s = self.settings
         portfolio = await self.shadow_portfolio()
-        shadow = replace(params, max_bid=s.sniper_shadow_max_bid)
+        shadow = replace(params, max_bid=0)
         candidates: list[tuple[float, Auction, Decision]] = []
         for auction in auctions:
             if auction.rarity not in self._resale_rarities or self._wanted(auction) \
@@ -721,7 +723,7 @@ class AuctionSniper(Worker):
         opened = spent = 0
         for _, auction, decision in sorted(candidates, key=lambda c: c[0], reverse=True):
             open_now = portfolio.open_positions + opened
-            if open_now >= portfolio.max_positions or auction.seconds_left() <= s.sniper_min_seconds_left:
+            if auction.seconds_left() <= s.sniper_min_seconds_left:
                 continue
             if open_now >= portfolio.sale_room and \
                     (decision.profit or 0) < max(portfolio.min_profit, portfolio.queue_min_profit):
@@ -757,7 +759,7 @@ class AuctionSniper(Worker):
         )
 
     async def shadow_portfolio(self) -> Portfolio:
-        """Positions du sniper de test : simulées seulement, avec leur propre plafond."""
+        """Positions du sniper de test : simulées seulement, sans plafond."""
         held = await self.db.positions_summary()
         pending = await self.db.pending_bids()
         engaged_real = sum(amount for _, amount in self._leading.values())
@@ -765,7 +767,7 @@ class AuctionSniper(Worker):
             self.settings, balance=await self._current_balance(), held_count=held["count"] - held["real_count"],
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"], engaged_real=engaged_real,
             engaged_sim=pending["sim_cost"], bot_engaged_count=pending["positions"] - pending["real_positions"],
-            max_positions=self.settings.sniper_shadow_max_positions, sale_room=self.settings.portfolio_slots,
+            max_positions=sys.maxsize, sale_room=self.settings.portfolio_slots,
         )
 
     async def _current_balance(self) -> int:
