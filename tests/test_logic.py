@@ -236,6 +236,19 @@ def test_sale_and_discard_selection_keeps_one_and_protects():
     assert {c.owned.id for c in discard} == {"b1", "b2"}  # b3 shiny gardé, b4 protégé
 
 
+def test_last_copy_rarities_sold_except_bot_buys():
+    """SELL_LAST_COPY_RARITIES=L : une L de paquet seule se vend ; jamais une carte achetée par le bot, un favori, un
+    shiny, un exemplaire protégé, ni une rareté hors liste."""
+    s = settings(sell_min_value=50, sell_last_copy_rarities=["l"])
+    rows = [owned("p1", "P", "L"), owned("s1", "S", "L"), owned("f1", "F", "L", starred=True),
+            owned("t1", "T", "L"), owned("r1", "R", "SR"), owned("m1", "M", "L"), owned("m2", "M", "C")]
+    groups = group_by_card(rows)
+    quotes = {cid: {"L": Quote(600.0, 5), "SR": Quote(300.0, 5), "C": Quote(80.0, 5)} for cid in "PSFTRM"}
+    sale = select_for_sale(groups, quotes, {"t1"}, s, bought={"S"})
+    assert {c.owned.id for c in sale} == {"p1", "m1"}  # M : la L se vend, la C est gardée à sa place
+    assert {c.owned.id for c in select_for_sale(groups, quotes, set(), settings(sell_min_value=50))} == {"m2"}
+
+
 def test_achievement_guard():
     assert achievement_guard(980, 40, [], 50, True)[0] == 0
     assert achievement_guard(980, 40, [1000], 50, True)[0] == 0          # palier proche

@@ -416,6 +416,11 @@ class Database:
                               "AND reason NOT LIKE 'collection%'")
         return int(row["n"]) if row else 0
 
+    async def bought_card_ids(self) -> set[str]:
+        """Cartes achetées pour de vrai par le bot (positions et collection), revendues ou non."""
+        rows = await self._all("SELECT DISTINCT card_id FROM bids WHERE status = 'won' AND dry_run = 0")
+        return {r["card_id"] for r in rows if r["card_id"]}
+
     async def positions_to_list(self) -> list[aiosqlite.Row]:
         return await self._all(
             f"SELECT * FROM bids b WHERE {HELD} AND NOT EXISTS (SELECT 1 FROM listings l "

@@ -104,11 +104,27 @@ def spare_copies(copies: list[OwnedCard], keep: int, excluded: set[str]) -> list
     return [c for c in copies[keep:] if not c.starred and not c.is_shiny and c.id not in excluded]
 
 
+def sellable_copies(copies: list[OwnedCard], excluded: set[str], s: Settings) -> list[OwnedCard]:
+    """Doublons à vendre, plus les exemplaires d'une rareté de SELL_LAST_COPY_RARITIES (une L sortie d'un paquet se
+    vend même seule). Une autre rareté de la même carte est gardée à sa place : la carte reste dans la collection.
+    Favoris, shiny et exemplaires protégés restent gardés."""
+    def free(c: OwnedCard) -> bool:
+        return c.rarity in s.sell_last_copy_rarities and bool(spare_copies([c], 0, excluded))
+    ordered = sorted(copies, key=free)  # tri stable : les exemplaires à garder d'abord
+    kept = [c for c in ordered[:s.sell_keep_copies] if free(c)]
+    return [*kept, *spare_copies(ordered, s.sell_keep_copies, excluded)]
+
+
 def select_for_sale(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
-                    excluded: set[str], s: Settings) -> list[SaleCandidate]:
+                    excluded: set[str], s: Settings, bought: frozenset[str] | set[str] = frozenset()
+                    ) -> list[SaleCandidate]:
+    """`bought` : cartes achetées par le bot, jamais vendues en dernier exemplaire (leur revente suit ses propres
+    règles : prix d'achat, concurrence, puis carte gardée)."""
     out: list[SaleCandidate] = []
     for card_id, copies in groups.items():
-        for row in spare_copies(copies, s.sell_keep_copies, excluded):
+        rows = sellable_copies(copies, excluded, s) if card_id not in bought else \
+            spare_copies(copies, s.sell_keep_copies, excluded)
+        for row in rows:
             card_quotes = quotes.get(card_id, {})
             q = card_quotes.get(row.rarity or "") or card_quotes.get(ANY)
             if q and q.average is not None and q.average >= s.sell_min_value:
@@ -133,11 +149,11 @@ def select_for_discard(groups: dict[str, list[OwnedCard]], quotes: dict[str, dic
 
 
 def valuation(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]], excluded: set[str],
-              s: Settings) -> list[dict]:
+              s: Settings, bought: frozenset[str] | set[str] = frozenset()) -> list[dict]:
     """Une ligne par carte et rareté : exemplaires, cote, et ce que deviennent les doublons (mêmes règles que la
     vente et la défausse automatiques). Les exemplaires gardés (1er exemplaire, favoris, shiny, étiquettes
     protégées, en échange ou déjà en vente) ne sont ni vendus ni défaussés."""
-    sale = {c.owned.id: c for c in select_for_sale(groups, quotes, excluded, s)}
+    sale = {c.owned.id: c for c in select_for_sale(groups, quotes, excluded, s, bought)}
     discard = {c.owned.id for c in select_for_discard(groups, quotes, excluded, s)}
     keep = min(s.sell_keep_copies, max(1, s.discard_keep_copies))
     rows: dict[tuple[str, str], dict] = {}
@@ -278,7 +294,8 @@ class InventoryManager(Worker):
         stale = self._queue_at is None or utcnow() - self._queue_at > timedelta(minutes=s.inventory_interval_minutes)
         if not self._sale_queue and stale:
             groups, excluded, quotes, _ = await self.snapshot()
-            self._sale_queue, self._queue_at = select_for_sale(groups, quotes, excluded, s), utcnow()
+            self._sale_queue = select_for_sale(groups, quotes, excluded, s, await self.db.bought_card_ids())
+            self._queue_at = utcnow()
             self.log.info("%d doublon(s) à vendre (cote ≥ %d WB)", len(self._sale_queue), s.sell_min_value)
         batch, self._sale_queue = self._sale_queue[:free], self._sale_queue[free:]
         return await self.schedule_sales(batch, slots=free)
@@ -289,8 +306,9 @@ class InventoryManager(Worker):
         rows = await self.api.load_collection()
         groups = group_by_card(rows)
         excluded = await excluded_copies(self.ctx, rows)
-        to_price = [cid for cid, copies in groups.items() if spare_copies(copies, min(self.settings.sell_keep_copies,
-                    max(1, self.settings.discard_keep_copies)), excluded)]
+        keep = min(self.settings.sell_keep_copies, max(1, self.settings.discard_keep_copies))
+        to_price = [cid for cid, copies in groups.items()
+                    if spare_copies(copies, keep, excluded) or sellable_copies(copies, excluded, self.settings)]
         self.log.info("collection : %d exemplaires, %d cartes, %d à coter", len(rows), len(groups), len(to_price))
         # La route des cotes est limitée par le site : au plus SELL_PRICE_LOOKUPS_PER_RUN nouvelles cotes
         # par passage (cartes aux plus nombreux doublons d'abord). Les autres : cache ou ventes observées.
@@ -321,7 +339,8 @@ class InventoryManager(Worker):
         groups, excluded, quotes, total = await self.snapshot()
         report: dict = {}
         if list_cards:
-            report["listed"] = await self.schedule_sales(select_for_sale(groups, quotes, excluded, self.settings))
+            report["listed"] = await self.schedule_sales(select_for_sale(groups, quotes, excluded, self.settings,
+                                                                         await self.db.bought_card_ids()))
         if discard:
             report["discard"] = await self.discard(groups, quotes, excluded, total)
         return report
@@ -758,7 +777,7 @@ async def report(ctx: Context, worker: InventoryManager, lookups: int) -> None:
     """Toute la collection cotée : résumé à l'écran, détail par carte dans data/inventaire-<date>.csv."""
     s = ctx.settings
     groups, excluded, quotes, total = await worker.snapshot(lookups=lookups)
-    rows = valuation(groups, quotes, excluded, s)
+    rows = valuation(groups, quotes, excluded, s, await ctx.db.bought_card_ids())
     path = s.data_dir / f"inventaire-{now_local():%Y%m%d-%H%M}.csv"
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["carte"])
@@ -801,7 +820,7 @@ async def cli(ctx: Context, action: str, apply: bool, lookups: int | None = None
         return
     if action == "scan" or not apply:
         groups, excluded, quotes, total = await worker.snapshot()
-        sales = select_for_sale(groups, quotes, excluded, s)
+        sales = select_for_sale(groups, quotes, excluded, s, await ctx.db.bought_card_ids())
         discards = select_for_discard(groups, quotes, excluded, s)
         count = total if s.achievement_count_mode == "total" else len(groups)
         allowed, why = achievement_guard(count, len(discards), s.achievement_milestones, s.achievement_margin,
