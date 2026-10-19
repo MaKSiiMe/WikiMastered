@@ -255,6 +255,10 @@ class Settings(BaseSettings):
     discard_max_value: int = 2
     discard_keep_copies: int = 1
     discard_unknown_price_is_worthless: bool = False
+    # Raretés défaussées même en dernier exemplaire (la carte quitte la collection), si l'analyse de valeur l'a cotée
+    # et qu'aucune vente connue ne dépasse DISCARD_MAX_VALUE (ou qu'elle n'en a aucune). Vide = jamais.
+    discard_last_copy_rarities: CsvList = Field(default_factory=list)
+    discard_max_per_run: int = 250  # exemplaires défaussés par passage au plus (0 = sans limite)
     achievement_milestones: IntList = Field(default_factory=list)
     achievement_count_mode: Literal["total", "unique"] = "total"
     achievement_margin: int = 50
@@ -336,7 +340,7 @@ class Settings(BaseSettings):
         return value
 
     @field_validator("pack_notify_rarities", "discard_rarities", "sniper_resale_rarities", "sniper_shadow_rarities",
-                     "sell_last_copy_rarities")
+                     "sell_last_copy_rarities", "discard_last_copy_rarities")
     @classmethod
     def _check_rarities(cls, value: list[str]) -> list[str]:
         value = [v.upper() for v in value]
