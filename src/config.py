@@ -168,6 +168,9 @@ class Settings(BaseSettings):
     sniper_rarity_caps: dict[str, int] = Field(default_factory=dict)
     sniper_shiny_cap: int = 0
     sniper_deal_ratio_max: float = 0.70
+    # Position sautée si notre mise vaut moins de cette part de l'estimation (0 = jamais) : du 17 au 20/10,
+    # 0 gagnée sur 33 réelles (5 sur 60 simulées), parties à ~2 fois notre mise ; une place du quota anti-bot perdue.
+    sniper_min_bid_share: float = 0.40
     sniper_max_bid: int = 0          # 0 = pas de plafond absolu (le budget par position s'applique)
     sniper_daily_budget: int = 0     # 0 = pas de budget quotidien
     sniper_min_balance_reserve: int = 50

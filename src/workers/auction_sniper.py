@@ -101,6 +101,7 @@ class SnipeParams:
     night: bool
     min_contested: int = 0   # ventes disputées minimum parmi les dernières observées (position)
     max_spread: float = 0.0  # plus haute / plus basse des dernières ventes, au plus (0 = sans limite)
+    min_bid_share: float = 0.0  # mise / estimation, au moins (0 = sans limite) : voir SNIPER_MIN_BID_SHARE
 
 
 def snipe_params(s: Settings, night: bool) -> SnipeParams:
@@ -115,6 +116,7 @@ def snipe_params(s: Settings, night: bool) -> SnipeParams:
         night=night,
         min_contested=s.sniper_min_contested_sales,
         max_spread=s.sniper_max_price_spread,
+        min_bid_share=s.sniper_min_bid_share,
     )
 
 
@@ -202,6 +204,16 @@ def pushed(minimum: int, ceiling: int, share: float) -> int:
     return min(ceiling, minimum + math.ceil(max(0, ceiling - minimum) * max(0.0, share)))
 
 
+def too_cheap(amount: int, limit: int, quote: Quote, params: SnipeParams, push: float) -> bool:
+    """Notre mise (`amount` poussé vers le plafond) sous SNIPER_MIN_BID_SHARE de l'estimation : enchère qui partira
+    bien plus haut, la mise userait une place du quota anti-bot pour rien."""
+    if params.min_bid_share <= 0:
+        return False
+    ceiling = min(limit, params.max_bid) if params.max_bid else limit
+    bid = pushed(amount, ceiling, push) if push > 0 else amount
+    return bid < quote.average * params.min_bid_share  # type: ignore[operator]
+
+
 def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales: int,
            portfolio: Portfolio | None = None, fee: float = 0.0, collection_cap: int | None = None,
            resale: bool = True, push: float = 0.0) -> Decision | None:
@@ -221,7 +233,7 @@ def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales
         limit = math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
         if portfolio is not None:
             limit = min(limit, math.floor(net - portfolio.required_profit), portfolio.position_budget)
-        if amount <= limit:
+        if amount <= limit and not too_cheap(amount, limit, quote, params, push):
             options.append(Decision(amount, limit, f"revente ~{quote.average:.0f} WB, bénéfice ~{net - amount:.0f}",
                                     quote.average, net - amount))
     if not options:
@@ -239,7 +251,7 @@ def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales
 
 
 def refusal(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales: int,
-            portfolio: Portfolio | None = None, fee: float = 0.0, resale: bool = True) -> str:
+            portfolio: Portfolio | None = None, fee: float = 0.0, resale: bool = True, push: float = 0.0) -> str:
     """Pourquoi `decide` n'a pas retenu une position (pour le récap) : la première règle qui bloque."""
     if not resale:
         return "rareté non revendue"
@@ -257,6 +269,12 @@ def refusal(auction: Auction, params: SnipeParams, quote: Quote | None, min_sale
             return "au-dessus du budget d'une position"
     if params.max_bid and amount > params.max_bid:
         return "au-dessus de SNIPER_MAX_BID"
+    limit = math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
+    if portfolio is not None:
+        limit = min(limit, math.floor(quote.average * (1 - fee) - portfolio.required_profit),  # type: ignore[operator]
+                    portfolio.position_budget)
+    if too_cheap(amount, limit, quote, params, push):
+        return f"mise < {params.min_bid_share:.0%} de l'estimation"
     return "autre"
 
 
@@ -704,10 +722,10 @@ class AuctionSniper(Worker):
     async def _play_shadow(self, auctions: list[Auction], params: SnipeParams, now: datetime) -> None:
         """Sniper de test : simule les achats que le sniper réel n'a pas faits (plafonds du test), sans plafond de
         mise ni de positions, pour continuer à mesurer la stratégie. Jamais une carte de collection ni une vente
-        déjà misée."""
+        déjà misée. Sans SNIPER_MIN_BID_SHARE : les enchères sautées pour garder le quota restent mesurées."""
         s = self.settings
         portfolio = await self.shadow_portfolio()
-        shadow = replace(params, max_bid=0)
+        shadow = replace(params, max_bid=0, min_bid_share=0.0)
         candidates: list[tuple[float, Auction, Decision]] = []
         for auction in auctions:
             if auction.rarity not in self._resale_rarities or self._wanted(auction) \
@@ -931,13 +949,13 @@ class AuctionSniper(Worker):
         collection_cap = await self._collection_cap(auction)
         # Déjà surenchérie : un rival suit nos mises d'un pas, la suivante va droit au plafond (une seule de plus).
         rebid = last is not None and last["status"] in ("placed", "outbid")
+        push = 1.0 if rebid else self.settings.sniper_bid_push
         decision = decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
-                          collection_cap=collection_cap, resale=resale,
-                          push=1.0 if rebid else self.settings.sniper_bid_push)
+                          collection_cap=collection_cap, resale=resale, push=push)
         if decision is None:
             self._outcome(auction, "collection : trop chère" if collection_cap is not None else
                           refusal(auction, params, quote, self.settings.price_min_sales, portfolio,
-                                  self.settings.sale_fee_pct, resale))
+                                  self.settings.sale_fee_pct, resale, push))
         return decision
 
     async def _against_rivals(self, auction: Auction, quote: Quote) -> Quote:
