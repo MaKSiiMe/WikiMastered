@@ -13,7 +13,7 @@
     python -m src.main profile                  # profil du joueur : solde, paquets, pity…
     python -m src.main hours [--rarity UR,L]    # à quelle heure de fin les enchères se vendent le mieux
     python -m src.main gifs                     # les cartes GIF se vendent-elles mieux ?
-    python -m src.main sniper-report [--hours 24] [--summary]  # enchères misées par le sniper
+    python -m src.main sniper-report [--hours 24] [--summary] [--breakdown]  # enchères misées par le sniper
     python -m src.main reset-simulation [--apply]  # efface les mises et ventes simulées
 """
 
@@ -43,7 +43,7 @@ from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
 from src.recap import recap_loop
-from src.sniper_report import sniper_report
+from src.sniper_report import breakdown, sniper_report
 from src.tools.inspect_api import inspect
 from src.workers.achievements import AchievementsWorker
 from src.workers.auction_sniper import AuctionSniper
@@ -584,9 +584,13 @@ async def hours_status(ctx: Context, rarity: str) -> str:
     return hours_text(await ctx.db.hour_stats(rarities), rarities)
 
 
-async def sniper_report_status(ctx: Context, hours: float, summary: bool) -> str:
+async def sniper_report_status(ctx: Context, hours: float, summary: bool, with_breakdown: bool = False) -> str:
     text = await send_sniper_report(ctx, hours, send=False)
-    return text.split("\n\n== ", 1)[0] if summary else text
+    text = text.split("\n\n== ", 1)[0] if summary else text
+    if with_breakdown:
+        rows = await ctx.db.bids_since(utcnow() - timedelta(hours=hours))
+        text += "\n\n" + breakdown(rows, ctx.settings.sale_fee_pct)
+    return text
 
 
 def in_context(settings: Settings, command: Callable[[Context], Awaitable[object]]) -> None:
@@ -625,6 +629,8 @@ def main(argv: list[str] | None = None) -> None:
     snr = sub.add_parser("sniper-report", help="toutes les enchères misées sur les N dernières heures (lecture seule)")
     snr.add_argument("--hours", type=float, default=24)
     snr.add_argument("--summary", action="store_true", help="les chiffres seulement, sans la liste des enchères")
+    snr.add_argument("--breakdown", action="store_true",
+                     help="taux de victoire des positions par critère (enchère déjà disputée, mise / estimation…)")
     pr = sub.add_parser("prices", help="ventes observées d'une carte, estimation du bot et ventes en cours "
                                        "(lecture seule)")
     pr.add_argument("title", help="titre exact de la carte, entre guillemets")
@@ -658,7 +664,7 @@ def main(argv: list[str] | None = None) -> None:
         "gifs": gifs_status,
         "profile": profile_status,
         "hours": lambda ctx: hours_status(ctx, args.rarity),
-        "sniper-report": lambda ctx: sniper_report_status(ctx, args.hours, args.summary),
+        "sniper-report": lambda ctx: sniper_report_status(ctx, args.hours, args.summary, args.breakdown),
         "prices": lambda ctx: prices_status(ctx, args.title),
         "inventory": lambda ctx: inventory_cli(ctx, args.action, args.apply, args.lookups),
         "value": lambda ctx: value_cli(ctx, max(0, args.lookups)),

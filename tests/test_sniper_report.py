@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from src.core.database import Database
-from src.sniper_report import build, render
+from src.sniper_report import breakdown, build, render
 
 
 @pytest.mark.asyncio
@@ -80,4 +80,43 @@ async def test_real_bid_lost_at_our_own_price_is_flagged_not_counted(tmp_path):
     _, _, sections = render(blocks, now - timedelta(hours=1), now, limit=None)
     assert "❌ **Shakira** (L) : misé 479, partie à 479 · ⚠ prix final ≤ notre mise : à vérifier" \
         in dict(sections)["Positions réelles"]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_breakdown_splits_win_rate_by_contest_and_bid_share(tmp_path):
+    """20/10 : 16 L gagnées sur 153 misées. Quelles enchères sont gagnables (quota anti-bot à garder) ?"""
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(UTC)
+
+    async def bid(aid, amount, status, ref, *, reason="revente", dry_run=False, **fields):
+        extra = {k: fields.pop(k) for k in ("ceiling", "min_bid", "start_price", "seconds_left") if k in fields}
+        bid_id = await db.record_bid(auction_id=aid, card_id=f"c-{aid}", title=aid, rarity="L", is_shiny=False,
+                                     amount=amount, reference_price=ref, reason=reason, night=False,
+                                     dry_run=dry_run, status=status, end_at=now, **extra)
+        if fields:
+            await db.update_bid(bid_id, **fields)
+
+    # Personne n'avait misé, revendue 1100 : +500.
+    await bid("a", 600, "won", 1000, min_bid=500, start_price=500, seconds_left=45, closed=1, sale_price=1100)
+    await bid("b", 950, "lost", 2000, min_bid=900, start_price=400, seconds_left=20, final_price=1900)
+    # Mise d'avant la colonne min_bid : minimum recalculé (654 = 550 + 0,5 × (758 − 550)), départ vu au marché.
+    await bid("c", 654, "lost", 1100, ceiling=758, final_price=1300)
+    await db.db.execute("INSERT INTO auctions_seen (auction_id, card_id, title, rarity, base_amount, end_at, "
+                        "seen_at) VALUES ('c', 'c-c', 'c', 'L', 500, ?, ?)", (now.isoformat(), now.isoformat()))
+    await db.db.commit()
+    await bid("s", 350, "sim_won", 800, dry_run=True, min_bid=300, start_price=300)
+    await bid("k", 10, "won", None, reason="collection : carte manquante ≤ 20", min_bid=10, start_price=10)
+    await bid("r", 400, "rejected", 900, min_bid=380, start_price=380, note="Vérification anti-bot requise.")
+
+    text = breakdown(await db.bids_since(now - timedelta(hours=1)))
+    assert "  personne n'avait misé : réelles 1/1 (100 %, +500 WB/enchère) · simulées 1/1 (100 %, +450 WB/enchère)" \
+        in text
+    assert "  déjà misée, minimum ≤ ×1,5 le départ : réelles 0/1 (0 %, +0 WB/enchère) · simulées 0" in text
+    assert "  déjà misée, minimum ×1,5 à ×3 : réelles 0/1 (0 %, +0 WB/enchère) · simulées 0" in text
+    assert "  55-70 % : réelles 1/2 (50 %, +250 WB/enchère) · simulées 0" in text
+    assert "  40-55 % : réelles 0/1 (0 %, +0 WB/enchère) · simulées 1/1 (100 %, +450 WB/enchère)" in text
+    assert "  inconnu : réelles 0/1 (0 %, +0 WB/enchère) · simulées 1/1 (100 %, +450 WB/enchère)" in text
+    assert text.index("40-55 %") < text.index("55-70 %") and "collection" not in text
     await db.close()
