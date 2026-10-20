@@ -101,10 +101,11 @@ async def test_breakdown_splits_win_rate_by_contest_and_bid_share(tmp_path):
     # Personne n'avait misé, revendue 1100 : +500.
     await bid("a", 600, "won", 1000, min_bid=500, start_price=500, seconds_left=45, closed=1, sale_price=1100)
     await bid("b", 950, "lost", 2000, min_bid=900, start_price=400, seconds_left=20, final_price=1900)
-    # Mise d'avant la colonne min_bid : minimum recalculé (654 = 550 + 0,5 × (758 − 550)), départ vu au marché.
+    # Mise d'avant la colonne min_bid : minimum recalculé (654 = 550 + 0,5 × (758 − 550)), départ lu dans la vente
+    # observée (20/10 : l'enchère terminée n'est plus dans auctions_seen, tout tombait en « inconnu »).
     await bid("c", 654, "lost", 1100, ceiling=758, final_price=1300)
-    await db.db.execute("INSERT INTO auctions_seen (auction_id, card_id, title, rarity, base_amount, end_at, "
-                        "seen_at) VALUES ('c', 'c-c', 'c', 'L', 500, ?, ?)", (now.isoformat(), now.isoformat()))
+    await db.db.execute("INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at, "
+                        "base_amount) VALUES ('c', 'c-c', 'c', 'L', 1300, ?, 500)", (now.isoformat(),))
     await db.db.commit()
     await bid("s", 350, "sim_won", 800, dry_run=True, min_bid=300, start_price=300)
     await bid("k", 10, "won", None, reason="collection : carte manquante ≤ 20", min_bid=10, start_price=10)

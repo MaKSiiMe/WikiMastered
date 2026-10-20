@@ -341,7 +341,9 @@ class Database:
             "l.status AS listing_status, l.base_amount AS list_price, l.post_at AS list_post_at, "
             "f.amount AS first_amount, f.ceiling AS first_ceiling, f.min_bid AS first_min, "
             "f.start_price AS first_start, f.seconds_left AS first_seconds_left, f.placed_at AS first_placed_at, "
-            "(SELECT base_amount FROM auctions_seen s WHERE s.auction_id = b.auction_id) AS seen_start "
+            # Enchère terminée : sa fiche passe des enchères vues aux ventes observées (harvest_ended_auctions).
+            "COALESCE((SELECT base_amount FROM auctions_seen s WHERE s.auction_id = b.auction_id), "
+            "(SELECT base_amount FROM observed_sales o WHERE o.auction_id = b.auction_id)) AS seen_start "
             "FROM bids b LEFT JOIN listings l ON l.id = (SELECT MAX(id) FROM listings WHERE bid_id = b.id) "
             "LEFT JOIN bids f ON f.id = (SELECT MIN(id) FROM bids WHERE auction_id = b.auction_id) "
             "WHERE b.id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id) "
