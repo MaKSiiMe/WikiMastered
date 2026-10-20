@@ -12,8 +12,9 @@ Trois blocs : positions réelles, sniper de test (simulé), collection.
 from __future__ import annotations
 
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from src.core import timeutils
 
@@ -179,6 +180,122 @@ def render(blocks: dict[str, Block], since: datetime, until: datetime, *,
             summary.append(f"↳ {block.figures()}")
         sections.append((name, "\n".join(_lines(block, limit))))
     return title, "\n".join(summary) or "Aucune enchère misée sur la période.", sections
+
+
+# Ventilation (sniper-report --breakdown) : quelles enchères sont gagnables ? Chaque mise use le quota de la
+# vérification anti-bot (~10 mises) ; le 20/10, 16 L gagnées sur 153 misées en 72 h, les perdues parties à ~2 fois
+# notre mise. Si un critère sépare les gagnables des autres, le bot peut sauter celles-ci et garder le quota.
+# Mise minimale avant la nôtre, pour les mises d'avant la colonne min_bid : recalculée depuis la mise et le plafond
+# (mise = minimum + SNIPER_BID_PUSH × l'écart jusqu'au plafond : 0,5 depuis la PR #67, le minimum seul avant).
+PUSH_SINCE = datetime(2026, 10, 17, 15, 36, tzinfo=UTC)
+HISTORY_PUSH = 0.5
+
+
+def _first_min(r) -> int | None:
+    if r["first_min"] is not None:
+        return r["first_min"]
+    amount, ceiling = r["first_amount"], r["first_ceiling"]
+    if amount is None:
+        return None
+    if datetime.fromisoformat(r["first_placed_at"]) < PUSH_SINCE:
+        return amount
+    if ceiling is None:
+        return None
+    return round((amount - HISTORY_PUSH * ceiling) / (1 - HISTORY_PUSH))
+
+
+def _contest(r) -> str:
+    start = r["first_start"] if r["first_start"] is not None else r["seen_start"]
+    minimum = _first_min(r)
+    if not start or minimum is None:
+        return "inconnu"
+    ratio = minimum / start
+    if minimum <= start + 1:  # +1 : arrondi du recalcul
+        return "personne n'avait misé"
+    if ratio <= 1.5:
+        return "déjà misée, minimum ≤ ×1,5 le départ"
+    if ratio <= 3:
+        return "déjà misée, minimum ×1,5 à ×3"
+    return "déjà misée, minimum > ×3 le départ"
+
+
+def _bucket(value: float | None, edges: list[tuple[float, str]], last: str) -> str:
+    if value is None:
+        return "inconnu"
+    return next((label for edge, label in edges if value < edge), last)
+
+
+def _bid_share(r) -> str:
+    ref = r["reference_price"]
+    return _bucket(r["first_amount"] / ref if ref else None,
+                   [(0.4, "< 40 %"), (0.55, "40-55 %"), (0.7, "55-70 %")], "≥ 70 %")
+
+
+def _estimate(r) -> str:
+    return _bucket(r["reference_price"], [(500, "< 500 WB"), (1000, "500-1000 WB"), (2000, "1000-2000 WB")],
+                   "≥ 2000 WB")
+
+
+def _end_hour(r) -> str:
+    hour = datetime.fromisoformat(r["end_at"]).astimezone(timeutils.PARIS).hour if r["end_at"] else None
+    return _bucket(hour, [(8, "00-08 h"), (14, "08-14 h"), (20, "14-20 h")], "20-24 h")
+
+
+def _time_left(r) -> str:
+    return _bucket(r["first_seconds_left"], [(30, "< 30 s"), (60, "30-60 s")], "≥ 60 s")
+
+
+BREAKDOWN: list[tuple[str, Callable[..., str]]] = [
+    ("Avant notre mise", _contest),
+    ("Notre mise / estimation", _bid_share),
+    ("Estimation", _estimate),
+    ("Fin de l'enchère (Paris)", _end_hour),
+    ("Temps restant à notre mise (nouvelles mises seulement)", _time_left),
+]
+
+
+# Ordre d'affichage des valeurs de chaque critère (« inconnu » en dernier).
+ORDER = ["personne n'avait misé", "déjà misée, minimum ≤ ×1,5 le départ", "déjà misée, minimum ×1,5 à ×3",
+         "déjà misée, minimum > ×3 le départ", "< 40 %", "40-55 %", "55-70 %", "≥ 70 %", "< 500 WB", "500-1000 WB",
+         "1000-2000 WB", "≥ 2000 WB", "00-08 h", "08-14 h", "14-20 h", "20-24 h", "< 30 s", "30-60 s", "≥ 60 s",
+         "inconnu"]
+
+
+def _gain(r, fee: float) -> float:
+    """Gain d'une enchère gagnée : revente faite, sinon plus-value latente (estimation − commission − prix)."""
+    if r["closed"] and r["sale_price"] is not None:
+        return r["sale_price"] - r["amount"]
+    return r["reference_price"] * (1 - fee) - r["amount"] if r["reference_price"] else 0.0
+
+
+def breakdown(rows, fee: float = 0.0) -> str:
+    """Positions (réelles, simulées) tranchées, par critère : gagnées / misées, gain moyen par enchère misée."""
+    # (critère, valeur, réelle/simulée) → gain de chaque enchère, None si perdue
+    groups: dict[tuple[int, str, str], list[float | None]] = {}
+    for r in rows:
+        if str(r["reason"] or "").startswith(COLLECTION_PREFIX) or r["status"] not in WON + LOST:
+            continue
+        kind = "sim" if r["dry_run"] else "real"
+        gain = _gain(r, fee) if r["status"] in WON else None
+        for i, (_, key) in enumerate(BREAKDOWN):
+            groups.setdefault((i, key(r), kind), []).append(gain)
+    if not groups:
+        return "Ventilation : aucune position gagnée ou perdue sur la période."
+
+    def cell(gains: list[float | None] | None, name: str) -> str:
+        if not gains:
+            return f"{name} 0"
+        won = [g for g in gains if g is not None]
+        return (f"{name} {len(won)}/{len(gains)} ({100 * len(won) / len(gains):.0f} %, "
+                f"{sum(won) / len(gains):+.0f} WB/enchère)")
+
+    lines = ["Ventilation des positions : gagnées / misées (taux, gain moyen par enchère misée, perdues comprises)"]
+    for i, (title, _) in enumerate(BREAKDOWN):
+        lines.append(f"{title} :")
+        values = sorted({v for (j, v, _) in groups if j == i}, key=ORDER.index)
+        lines += [f"  {v} : {cell(groups.get((i, v, 'real')), 'réelles')} · "
+                  f"{cell(groups.get((i, v, 'sim')), 'simulées')}" for v in values]
+    return "\n".join(lines)
 
 
 async def sniper_report(db, since: datetime, until: datetime, fee: float = 0.0, *,

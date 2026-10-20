@@ -127,6 +127,7 @@ python -m src.main inspect                         # compare les vraies réponse
 python -m src.main profile                         # profil du joueur lu sur le site : solde, paquets, pity…
 python -m src.main report                          # envoie le bilan du jour sur Discord
 python -m src.main sniper-report --hours 12        # toutes les enchères misées : gagnées, perdues, gain latent et manqué
+python -m src.main sniper-report --hours 72 --summary --breakdown  # taux de victoire des positions par critère
 python -m src.main inventory scan                  # ce qui serait vendu / défaussé, et pourquoi
 python -m src.main inventory report --lookups 300  # toute la collection cotée : résumé + data/inventaire-<date>.csv
 python -m src.main inventory list --apply          # programme les ventes

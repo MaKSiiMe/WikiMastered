@@ -1036,7 +1036,8 @@ class AuctionSniper(Worker):
             auction_id=auction.id, card_id=auction.catalog_id, title=auction.title, rarity=auction.rarity,
             is_shiny=auction.shiny, amount=decision.amount, reference_price=decision.reference,
             reason=decision.reason, night=params.night, dry_run=not live, end_at=auction.end_at,
-            ceiling=decision.ceiling,
+            ceiling=decision.ceiling, min_bid=auction.min_bid, start_price=auction.base_amount,
+            seconds_left=int(auction.seconds_left()),
         )
         label = f"{auction.title} ({auction.rarity}{' ✨' if auction.shiny else ''})"
         try:
