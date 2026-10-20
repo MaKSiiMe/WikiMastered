@@ -137,7 +137,8 @@ SUSPECT_SALE = ("(o.seller_id IS NOT NULL AND o.buyer_id IS NOT NULL AND (o.sell
                 "(SELECT COUNT(*) FROM observed_sales p WHERE p.seller_id = o.seller_id "
                 f"AND p.buyer_id = o.buyer_id) >= {WASH_PAIR_MIN}))")
 # Une vente « incertaine » a peut-être été créée : elle reste ouverte jusqu'à sa vérification. « waiting » : revente
-# d'une position gardée hors des places de vente, une vente concurrente étant sous son prix d'achat.
+# d'une position gardée hors des places de vente face à une concurrente sous son prix d'achat (jusqu'au 20/10 ; plus
+# créée, une ancienne est publiée comme une vente programmée).
 LISTING_OPEN = "('scheduled', 'waiting', 'posted', 'simulated', 'uncertain')"
 
 

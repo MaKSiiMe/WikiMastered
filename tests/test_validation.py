@@ -17,9 +17,9 @@ from src.workers.inventory_manager import InventoryManager
 from tests.test_integration import make_client, make_context, seed_observed
 
 
-async def simulated_position(db: Database, base_amount: int) -> int:
+async def simulated_position(db: Database, base_amount: int, auction_id: str = "a1") -> int:
     now = datetime.now(UTC)
-    bid = await db.record_bid(auction_id="a1", card_id="c1", title="Mème", rarity="C", is_shiny=False, amount=100,
+    bid = await db.record_bid(auction_id=auction_id, card_id="c1", title="Mème", rarity="C", is_shiny=False, amount=100,
                               reference_price=400, reason="revente ~400 WB", night=False, dry_run=True,
                               status="sim_won", end_at=now)
     lid = await db.schedule_listing(owned_card_id=f"sim-{bid}", card_id="c1", title="Mème", rarity="C",
@@ -47,11 +47,41 @@ async def test_simulated_resale_follows_the_observed_market(tmp_path):
     await inv.settle_listings()
     await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = 3",
                    ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
-    await inv.settle_listings()  # 2 remises déjà faites : carte gardée
-    assert (await db.get_bid(bid))["closed"] == 1 and (await db.get_bid(bid))["sale_price"] is None
+    await inv.settle_listings()  # 2 remises à -10 % déjà faites : place libre, remise au prix d'achat
+    rows = await db._all("SELECT status, base_amount, relist_count FROM listings ORDER BY id")
+    assert rows[-1]["status"] == "scheduled" and rows[-1]["base_amount"] == 101 and rows[-1]["relist_count"] == 3
+    assert (await db.get_bid(bid))["closed"] == 0
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_unsold_position_kept_only_when_every_slot_is_taken(tmp_path):
+    """20/10 : Jorge Jesus et Les Feux de l'amour, gardées après 3 essais, se sont vendues à la main. Le bot ne garde
+    une position invendue que si toutes les places de vente sont prises."""
+    selling = {"n": 5}
+
+    def handler(request):
+        return httpx.Response(200, json={"sellingCount": selling["n"], "maxConcurrentAuctions": 5})
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    inv = InventoryManager(ctx)
+    bid = await simulated_position(db, 101)
+    await db._exec("UPDATE listings SET relist_count = 2")
+    await inv.settle_listings()  # 5 ventes sur 5 : carte gardée
+    assert (await db.get_bid(bid))["closed"] == 1
+    assert ("WARNING", "Position invendue") in notifier.sent
     stats = await db.validation_stats(datetime.now(UTC) - timedelta(days=1), 2)
     assert stats["sim_kept"] == 1 and stats["sim_kept_cost"] == 100 and stats["sim_sold"] == 0
-    assert ("WARNING", "Position invendue") in notifier.sent
+
+    selling["n"] = 4
+    bid = await simulated_position(db, 101, "a2")
+    await db._exec("UPDATE listings SET relist_count = 2 WHERE bid_id = ?", (bid,))
+    await inv.settle_listings()  # une place libre : remise en vente au prix d'achat
+    rows = await db._all("SELECT status, base_amount FROM listings WHERE bid_id = ? ORDER BY id", (bid,))
+    assert [r["status"] for r in rows] == ["sim_unsold", "scheduled"] and rows[1]["base_amount"] == 101
+    assert (await db.get_bid(bid))["closed"] == 0
     await db.close()
 
 

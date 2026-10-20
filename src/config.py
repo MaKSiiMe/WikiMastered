@@ -228,7 +228,7 @@ class Settings(BaseSettings):
     # Durée de la revente : 6 h, pour faire tourner plus vite les 5 places de vente.
     position_list_duration_minutes: int = 360
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
-    position_max_relists: int = 2
+    position_max_relists: int = 2         # puis au prix d'achat, tant qu'une place de vente est libre
 
     # --- Module C : inventaire --------------------------------------------------
     inventory_interval_minutes: float = 360.0

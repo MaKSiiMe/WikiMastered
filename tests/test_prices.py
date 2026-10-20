@@ -146,19 +146,11 @@ async def test_resale_listed_just_under_the_cheapest_rival(tmp_path):
     row = await listing(lid)
     assert row["status"] == "posted" and row["base_amount"] == Auction.model_validate(market[0]).min_bid - 1
 
-    market[:] = [selling("m3", 600)]  # sous le prix d'achat (882) : hors des places de vente, sans en réserver
+    # Sous le prix d'achat (882) : publiée quand même, au prix d'achat (20/10 : Diana Spencer gardée hors vente toute
+    # la nuit face à 605-807, vendue 2000 à la main).
+    market[:] = [selling("m3", 600)]
     _, lid = await position(1042, 882)
     await inv.post_due_listings()
     row = await listing(lid)
-    assert row["status"] == "waiting" and datetime.fromisoformat(row["post_at"]) > now + timedelta(minutes=25)
-    assert await db.pending_listings_count() == 0
-    assert await db.positions_to_list() == []  # pas de seconde revente programmée pour la même position
-    count = len(posted)
-    await db.update_listing(lid, post_at=now - timedelta(seconds=1))
-    await inv.post_due_listings()  # toujours sous le prix d'achat, même des heures plus tard : jamais publiée
-    assert (await listing(lid))["status"] == "waiting" and len(posted) == count
-    market[:] = [selling("m4", 1500)]  # le marché est remonté : publiée sous la concurrente
-    await db.update_listing(lid, post_at=now - timedelta(seconds=1))
-    await inv.post_due_listings()
-    assert (await listing(lid))["status"] == "posted" and (await listing(lid))["base_amount"] == 1042
+    assert row["status"] == "posted" and row["base_amount"] == 883 and "883" in json.dumps(posted[-1])
     await db.close()

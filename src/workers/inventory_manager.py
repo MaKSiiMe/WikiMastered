@@ -5,7 +5,8 @@
 - Positions : chaque carte achetée par le sniper est remise en vente en priorité (avant
   les doublons). C'est une enchère : le prix de départ est le prix d'achat + la moitié du bénéfice
   attendu (POSITION_LIST_PROFIT_SHARE), au moins + POSITION_LIST_MARGIN ; les joueurs le font monter.
-  Invendue, elle repart à −10 % sans passer sous le prix d'achat, puis est gardée.
+  Invendue, elle repart à −10 % (POSITION_MAX_RELISTS fois), puis au prix d'achat tant qu'une place de vente
+  est libre ; jamais sous le prix d'achat.
   Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
 - Défausse : doublons sans valeur, seulement si aucun palier de succès de taille de
   collection n'est proche (ACHIEVEMENT_MILESTONES), par lots de 50 [WR discard.js]. Les raretés de
@@ -49,8 +50,6 @@ POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la ca
 POSITION_COPY_RETRY = timedelta(minutes=10)
 # Introuvable N fois de suite (~2 h) : la carte a quitté la collection (vendue ou échangée à la main ?).
 POSITION_MAX_COPY_MISSES = 12
-# Revente face à une concurrente moins chère que le prix d'achat : gardée hors des places, nouvel essai dans N min.
-UNDERCUT_RETRY = timedelta(minutes=30)
 # Vente concurrente d'une revente : encore en cours au moins N après la publication (comme pour l'achat).
 RIVAL_MIN_OVERLAP = timedelta(hours=1)
 COPY_SEARCH_PAGES = 5  # pages de la recherche par titre lues pour retrouver un exemplaire
@@ -542,9 +541,6 @@ class InventoryManager(Worker):
             price = row["base_amount"]
             if row["bid_id"] and not simulated:
                 price = await self._undercut(row)
-                if price is None:
-                    selling -= 1
-                    continue
                 if price != row["base_amount"]:
                     await self.db.update_listing(row["id"], base_amount=price)
             minutes = row["duration_minutes"]
@@ -605,12 +601,12 @@ class InventoryManager(Worker):
                 await self.db.update_listing(row["id"], status=status, error=str(error)[:300])
                 self.notifier.warning("Mise en vente refusée", f"{label} : {error}")
 
-    async def _undercut(self, row) -> int | None:
+    async def _undercut(self, row) -> int:
         """Prix de départ d'une revente face aux autres ventes de la même carte : juste sous la moins chère, jamais
-        sous le prix d'achat (commission comprise). Concurrente sous ce plancher : None, la revente est gardée hors des
-        places de vente (statut « waiting », sans place réservée) et relue toutes les 30 min, jusqu'à ce que le marché
-        remonte. Le 18/10, l'éclipse XXIe achetée 883 face à une vente à 296, et Jorge Jesus achetée 216 face à 83,
-        réservaient 2 des 5 places, puis seraient parties au prix d'achat sans acheteur."""
+        sous le prix d'achat (commission comprise). Concurrente sous ce plancher : publiée au plancher. Appelée
+        seulement quand une place de vente est libre, et une place vide ne rapporte rien : le 20/10, Diana Spencer
+        (achetée 1022), gardée hors vente toute la nuit face à des ventes à 605-807, s'est vendue 2000 à la main, et
+        les reventes du bot cette nuit-là ont fini à ×1,1-2,1 leur prix de départ."""
         bid = await self.db.get_bid(row["bid_id"])
         try:
             auctions, _ = await self.api.market_page(sort="ending_soon", q=row["title"], limit=50)
@@ -626,18 +622,14 @@ class InventoryManager(Worker):
         if not rivals or min(rivals) > row["base_amount"]:
             return row["base_amount"]
         floor = list_price(bid["amount"], 0.0, self.settings.sale_fee_pct) if bid else 1
-        target = min(rivals) - 1
-        if target >= floor:
+        target = max(floor, min(rivals) - 1)
+        if min(rivals) - 1 < floor:
+            self.log.info("%s : vente concurrente à %d WB, sous le prix d'achat : revente au prix d'achat (%d) au lieu "
+                          "de %d", row["title"], min(rivals), floor, row["base_amount"])
+        else:
             self.log.info("%s : vente concurrente à %d WB, revente à %d au lieu de %d", row["title"], min(rivals),
                           target, row["base_amount"])
-            return target
-        retry = utcnow() + UNDERCUT_RETRY
-        await self.db.update_listing(row["id"], status="waiting", post_at=retry,
-                                     target_end=retry + timedelta(minutes=row["duration_minutes"] or 0))
-        self.log.info("%s : vente concurrente à %d WB, sous le prix d'achat (%d) : gardée hors des places de vente, "
-                      "nouvel essai à %s", row["title"], min(rivals), floor,
-                      f"{retry.astimezone(now_local().tzinfo):%H:%M}")
-        return None
+        return target
 
     async def _listing_auction_id(self, payload, card_id: str) -> str | None:
         """Identifiant de l'enchère créée : dans la réponse, sinon dans mes ventes en cours."""
@@ -748,25 +740,43 @@ class InventoryManager(Worker):
         return market if prices and market >= row["base_amount"] else None
 
     async def _unsold(self, row, bid, label: str) -> None:
-        """Invendue : remise en vente à prix réduit, puis carte gardée (réel comme simulé)."""
+        """Invendue : remise en vente à −10 % (POSITION_MAX_RELISTS fois), puis au prix d'achat tant qu'une place de
+        vente reste libre ; toutes prises, la carte est gardée (réel comme simulé). Le 20/10, Jorge Jesus (achetée
+        216) et Les Feux de l'amour, gardées après 3 essais, se sont vendues à la main (250 et 330)."""
         if not bid:
             return
+        # Jamais sous le prix d'achat (commission comprise) : une revente à perte n'a pas d'intérêt.
+        floor = list_price(bid["amount"], 0.0, self.settings.sale_fee_pct)
         if row["relist_count"] < self.settings.position_max_relists:
-            # Jamais sous le prix d'achat (commission comprise) : une revente à perte n'a pas d'intérêt.
-            floor = list_price(bid["amount"], 0.0, self.settings.sale_fee_pct)
             price = max(floor, round(row["base_amount"] * self.settings.position_relist_discount))
-            self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
-            if not bid["dry_run"]:
-                self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
-                                   f"(achetée {bid['amount']}).", important=True)
-            await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
-                                 rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
-                                 bid_id=bid["id"], relist_count=row["relist_count"] + 1)
+        elif await self._slot_for_relist(bid["id"]):
+            price = floor
         else:
             await self.db.close_position(bid["id"], None)
             if not bid["dry_run"] or self.settings.notify_simulated:
-                self.notifier.warning("Position invendue", f"{label} : invendue après "
-                                      f"{row['relist_count'] + 1} essai(s), carte gardée.")
+                self.notifier.warning("Position invendue", f"{label} : invendue après {row['relist_count'] + 1} "
+                                      "essai(s), carte gardée : toutes les places de vente sont prises.")
+            return
+        self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
+        if not bid["dry_run"]:
+            # Déjà au prix d'achat : message discret, la carte peut tourner plusieurs fois.
+            self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
+                               f"(achetée {bid['amount']}).", important=row["base_amount"] > floor)
+        await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
+                             rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
+                             bid_id=bid["id"], relist_count=row["relist_count"] + 1)
+
+    async def _slot_for_relist(self, bid_id: int) -> bool:
+        """Place de vente libre pour cette position, une fois servies les ventes programmées et les autres positions
+        à revendre. Places illisibles : oui (la publication attend de toute façon une place libre)."""
+        try:
+            selling, maximum = await self.slot_usage()
+        except (ApiError, RateLimited):
+            return True
+        real_only = self.listing_live
+        others = [r for r in await self.db.positions_to_list()
+                  if r["id"] != bid_id and not (real_only and r["dry_run"])]
+        return selling + await self.db.pending_listings_count(real_only) + len(others) < maximum
 
     # ------------------------------------------------------------ défausse
     async def discard_candidates(self, groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
