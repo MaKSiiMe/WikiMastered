@@ -401,16 +401,30 @@ class InventoryManager(Worker):
         reserved = await self.db.pending_listings_count(real_only) + len(positions)
         return max(0, maximum - selling - reserved)
 
-    def _plan(self, now: datetime, *, position: bool, at_peak: bool) -> tuple[datetime, int, datetime]:
-        """Revente d'une position : publiée vers 11 h-12 h pour 12 h ; doublon : fin dans la fenêtre choisie."""
+    async def position_minutes(self) -> int:
+        """Durée de revente d'une position : longue (12 h, plus vue) tant que moins de POSITION_LIST_LONG_BELOW
+        positions sont détenues, carte en cours de programmation comprise ; sinon courte (6 h), pour faire tourner
+        les 5 places de vente. Ventes réelles : seules les positions réelles comptent."""
         s = self.settings
+        if s.position_list_long_below > 0:
+            held = await self.db.positions_summary()
+            if (held["real_count"] if self.listing_live else held["count"]) < s.position_list_long_below:
+                return s.position_list_long_minutes
+        return s.position_list_duration_minutes
+
+    def _plan(self, now: datetime, *, position: bool, at_peak: bool,
+              position_minutes: int | None = None) -> tuple[datetime, int, datetime]:
+        """Revente d'une position : publiée tout de suite (ou vers 11 h-12 h) pour `position_minutes` (défaut :
+        POSITION_LIST_DURATION_MINUTES) ; doublon : fin dans la fenêtre choisie."""
+        s = self.settings
+        position_minutes = position_minutes or s.position_list_duration_minutes
         if position and s.position_post_now:
-            minutes = min(s.listing_duration_options or [s.position_list_duration_minutes],
-                          key=lambda d: abs(d - s.position_list_duration_minutes))
+            minutes = min(s.listing_duration_options or [position_minutes],
+                          key=lambda d: abs(d - position_minutes))
             return now, minutes, now + timedelta(minutes=minutes)
         if position:
             return plan_position_time(now, s.position_post_start, s.position_post_end,
-                                      s.position_list_duration_minutes, s.listing_duration_options)
+                                      position_minutes, s.listing_duration_options)
         start, end = self._window(at_peak)
         return plan_listing_time(now, start, end, s.listing_duration_options, s.listing_min_duration_minutes,
                                  preferred=s.listing_preferred_duration_minutes)
@@ -426,7 +440,9 @@ class InventoryManager(Worker):
 
     async def _schedule(self, *, owned_id: str, card_id: str, title: str, rarity: str | None, price: int,
                         reason: str, at_peak: bool = True, bid_id: int | None = None, relist_count: int = 0) -> bool:
-        post_at, minutes, target = self._plan(now_local(), position=bid_id is not None, at_peak=at_peak)
+        position = bid_id is not None
+        post_at, minutes, target = self._plan(now_local(), position=position, at_peak=at_peak,
+                                              position_minutes=await self.position_minutes() if position else None)
         listing_id = await self.db.schedule_listing(
             owned_card_id=owned_id, card_id=card_id, title=title, rarity=rarity, base_amount=price,
             duration_minutes=minutes, post_at=post_at, target_end=target, reason=reason, bid_id=bid_id,
@@ -682,7 +698,7 @@ class InventoryManager(Worker):
                            f"{retry.astimezone(now_local().tzinfo):%H:%M}")
             return
         post_at, minutes, target = self._plan(now_local() + timedelta(days=1), position=row["bid_id"] is not None,
-                                              at_peak=True)
+                                              at_peak=True, position_minutes=await self.position_minutes())
         await self.db.update_listing(row["id"], post_at=max(post_at, now_local()), duration_minutes=minutes,
                                      target_end=target)
         self.log.info("ventes pleines : %s reportée, fin visée %s", row["title"], f"{target:%d/%m %H:%M}")

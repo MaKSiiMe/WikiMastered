@@ -228,8 +228,11 @@ class Settings(BaseSettings):
     position_post_now: bool = True
     position_post_start: time = time(11, 0)  # fenêtre de publication (Paris) si POSITION_POST_NOW=false
     position_post_end: time = time(12, 0)
-    # Durée de la revente : 6 h, pour faire tourner plus vite les 5 places de vente.
+    # Durée de la revente : 6 h, pour faire tourner plus vite les 5 places de vente. Moins de
+    # POSITION_LIST_LONG_BELOW positions détenues (rien n'attend de place) : POSITION_LIST_LONG_MINUTES, plus vue.
     position_list_duration_minutes: int = 360
+    position_list_long_minutes: int = 720
+    position_list_long_below: int = 5     # 0 = toujours POSITION_LIST_DURATION_MINUTES
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2         # puis au prix d'achat, tant qu'une place de vente est libre
 
