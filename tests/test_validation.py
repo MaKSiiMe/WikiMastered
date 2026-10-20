@@ -217,6 +217,32 @@ async def test_inventory_report_values_every_card(tmp_path, capsys):
 
 
 @pytest.mark.asyncio
+async def test_position_listed_12h_until_5_positions_are_held(tmp_path):
+    """20/10 : tant que moins de 5 L attendent leur revente, une vente de 12 h est plus vue ; au-delà, 6 h pour
+    faire tourner les 5 places de vente."""
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}), dry_run=False)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+
+    async def held(aid: str, *, dry_run: bool = False) -> None:
+        await db.record_bid(auction_id=aid, card_id=f"c-{aid}", title=aid, rarity="L", is_shiny=False, amount=500,
+                            reference_price=900, reason="revente ~900 WB", night=False, dry_run=dry_run,
+                            status="sim_won" if dry_run else "won", end_at=now)
+
+    inv = InventoryManager(ctx)
+    for i in range(4):
+        await held(f"a{i}")
+    await held("sim", dry_run=True)  # ventes réelles : une position simulée n'occupe pas tes places
+    assert await inv.position_minutes() == 720
+    _, minutes, end = inv._plan(now, position=True, at_peak=True, position_minutes=720)
+    assert minutes == 720 and end == now + timedelta(hours=12)
+    await held("a4")
+    assert await inv.position_minutes() == 360
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_position_posted_now_and_old_schedules_advanced(tmp_path):
     """16/10 : 2 L sur 3 attendaient le lendemain 11 h. Une revente part dès que la carte est là."""
     from src.workers.inventory_manager import InventoryManager

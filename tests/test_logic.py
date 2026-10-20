@@ -123,6 +123,28 @@ def test_portfolio_decision_needs_real_profit():
     assert decide(auction(card=card, base_amount=200), params, Quote(400.0, 1), 3, pf) is None  # 1 vente
 
 
+def test_position_skipped_when_our_bid_is_far_below_the_estimate():
+    """17-20/10 : mises sous 40 % de l'estimation, 0 gagnée sur 33 (parties à ~2 fois notre mise). Sautées :
+    la place du quota anti-bot sert à une enchère gagnable."""
+    s = settings()
+    assert s.sniper_min_bid_share == 0.40
+    params = snipe_params(s, night=False)
+    pf = portfolio_state(s, balance=3000, held_count=0, held_real_cost=0, held_sim_cost=0,
+                         engaged_real=0, engaged_sim=0, bot_engaged_count=0)
+    card = {"id": "c", "wikipedia_title": "x", "rarity": "L"}
+    quote = Quote(1000.0, 5, contested=3, spread=1.5)
+    # Plafond min(700, 1000 − 135, 540) = 540 ; mise 200 + ⌈340 × 0,5⌉ = 370 < 400 (40 %) : sautée.
+    cheap = auction(card=card, base_amount=200)
+    assert decide(cheap, params, quote, 3, pf, push=0.5) is None
+    assert refusal(cheap, params, quote, 3, pf, push=0.5) == "mise < 40% de l'estimation"
+    # Surenchérie : la mise suivante va au plafond (540 ≥ 400), elle part.
+    assert decide(cheap, params, quote, 3, pf, push=1.0).amount == 540
+    fair = decide(auction(card=card, base_amount=300), params, quote, 3, pf, push=0.5)
+    assert fair and fair.amount == 420  # 300 + 120
+    off = snipe_params(settings(sniper_min_bid_share=0), night=False)
+    assert decide(cheap, off, quote, 3, pf, push=0.5).amount == 370
+
+
 def test_position_needs_contested_and_steady_recent_sales():
     """18/10 : l'éclipse XXIe achetée 882, estimée 1197 sur 3 ventes au prix de départ et 2 disputées (970, 1774)."""
     s = settings()
@@ -165,7 +187,7 @@ def test_positions_follow_free_sale_slots():
 
 
 def test_queued_positions_need_a_better_deal():
-    s = settings()
+    s = settings(sniper_min_bid_share=0)  # 120 pour 400 : sous 40 %, règle testée à part
     params = snipe_params(s, night=False)
     card = {"id": "c", "wikipedia_title": "x", "rarity": "C"}
     quote = Quote(400.0, 5)

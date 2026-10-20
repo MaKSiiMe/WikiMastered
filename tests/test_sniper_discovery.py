@@ -95,7 +95,7 @@ async def test_sniper_spots_sales_early_then_rereads_them_to_bid(tmp_path):
 
 
 def test_resale_only_for_watched_rarities():
-    params = snipe_params(Settings(_env_file=None), night=False)
+    params = snipe_params(Settings(_env_file=None, sniper_min_bid_share=0), night=False)  # 5 pour 400
     auction = Auction.model_validate(sale("x", "Ada", "C", 15, base=5))
     quote = Quote(400, 5)
     assert decide(auction, params, quote, 2) is not None
