@@ -14,6 +14,7 @@
     python -m src.main hours [--rarity UR,L]    # à quelle heure de fin les enchères se vendent le mieux
     python -m src.main gifs                     # les cartes GIF se vendent-elles mieux ?
     python -m src.main sniper-report [--hours 24] [--summary] [--breakdown]  # enchères misées par le sniper
+    python -m src.main sniper-backtest [--days 7] [--capital 20000]  # autres réglages rejoués sur les ventes vues
     python -m src.main reset-simulation [--apply]  # efface les mises et ventes simulées
 """
 
@@ -43,6 +44,8 @@ from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
 from src.recap import recap_loop
+from src.sniper_backtest import cases_from
+from src.sniper_backtest import render as backtest_text
 from src.sniper_report import breakdown, sniper_report
 from src.tools.inspect_api import inspect
 from src.workers.achievements import AchievementsWorker
@@ -487,6 +490,20 @@ async def reset_simulation(settings: Settings, apply: bool) -> None:
         print(f"À effacer : {what}. Relance avec --apply pour les effacer (les données réelles sont gardées).")
 
 
+async def sniper_backtest(settings: Settings, days: float, capital: int, resale: float, rarity: str) -> None:
+    """Réglages du sniper rejoués sur les ventes observées : base seule, aucune requête au site."""
+    db = Database(settings.data_dir / "wikimastered.db")
+    await db.connect()
+    try:
+        since = utcnow() - timedelta(days=days)
+        cases = cases_from(await db.backtest_sales(rarity), await db.site_average_history(rarity), since, settings)
+        actual = await db.position_bids_outcome(since, rarity)
+    finally:
+        await db.close()
+    budget = int(capital * settings.portfolio_capital_ratio / max(1, settings.portfolio_slots))
+    print(backtest_text(cases, actual, settings, budget, days, resale))
+
+
 async def packs_status(ctx: Context, hours: int) -> None:
     """Paquets ouverts ces dernières heures (lecture de la base, aucune requête)."""
     rows = await ctx.db.recent_pulls(utcnow() - timedelta(hours=hours))
@@ -631,6 +648,12 @@ def main(argv: list[str] | None = None) -> None:
     snr.add_argument("--summary", action="store_true", help="les chiffres seulement, sans la liste des enchères")
     snr.add_argument("--breakdown", action="store_true",
                      help="taux de victoire des positions par critère (enchère déjà disputée, mise / estimation…)")
+    bt = sub.add_parser("sniper-backtest", help="autres réglages du sniper rejoués sur les ventes observées "
+                                                "(lecture seule, sans requête au site)")
+    bt.add_argument("--days", type=float, default=7)
+    bt.add_argument("--capital", type=int, default=20000, help="WikiBidous + positions (budget d'une position)")
+    bt.add_argument("--resale", type=float, default=1.0, help="revente = estimation × ce facteur (défaut 1)")
+    bt.add_argument("--rarity", default="L")
     pr = sub.add_parser("prices", help="ventes observées d'une carte, estimation du bot et ventes en cours "
                                        "(lecture seule)")
     pr.add_argument("title", help="titre exact de la carte, entre guillemets")
@@ -652,6 +675,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if command == "reset-simulation":  # base seule : aucune requête au site
         asyncio.run(reset_simulation(settings, args.apply))
+        return
+    if command == "sniper-backtest":  # base seule : aucune requête au site
+        asyncio.run(sniper_backtest(settings, args.days, args.capital, args.resale, args.rarity.upper()))
         return
     commands: dict[str, Callable[[Context], Awaitable[object]]] = {
         "check": check_session,
