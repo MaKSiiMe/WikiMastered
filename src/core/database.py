@@ -630,6 +630,28 @@ class Database:
             "SELECT rarity, price, base_amount, ended_at FROM observed_sales o WHERE is_shiny = 0 "
             f"AND rarity IN ({marks}) AND NOT {SUSPECT_SALE} ORDER BY ended_at", tuple(rarities))
 
+    async def backtest_sales(self, rarity: str) -> list[aiosqlite.Row]:
+        """Ventes observées d'une rareté (sans shiny ni ventes suspectes), des plus anciennes aux plus récentes."""
+        return await self._all(
+            "SELECT card_id, price, base_amount, ended_at FROM observed_sales o WHERE is_shiny = 0 AND rarity = ? "
+            f"AND NOT {SUSPECT_SALE} ORDER BY ended_at", (rarity,))
+
+    async def site_average_history(self, rarity: str) -> list[aiosqlite.Row]:
+        """Cotes du site relevées pour une rareté, des plus anciennes aux plus récentes."""
+        return await self._all(
+            "SELECT card_id, average, observed_at FROM price_history WHERE rarity = ? AND average IS NOT NULL "
+            "ORDER BY observed_at", (rarity,))
+
+    async def position_bids_outcome(self, since: datetime, rarity: str) -> aiosqlite.Row:
+        """Enchères de positions misées depuis `since` (dernière mise de chacune) : nombre, gagnées (réelles ou
+        simulées), mises réelles parties (refusées exclues)."""
+        rows = await self._all(
+            "SELECT COUNT(*) AS bids, COALESCE(SUM(status IN ('won', 'sim_won')), 0) AS wins, "
+            "COALESCE(SUM(dry_run = 0 AND status != 'rejected'), 0) AS real_bids FROM bids b "
+            "WHERE rarity = ? AND reason NOT LIKE 'collection%' AND placed_at >= ? "
+            "AND id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)", (rarity, iso(since)))
+        return rows[0]
+
     async def observed_prices(self, card_id: str, limit: int, rarity: str | None = None,
                               shiny: bool | None = None) -> tuple[list[int], int]:
         """(prix des `limit` dernières ventes observées, plus récentes d'abord ; nombre total).
