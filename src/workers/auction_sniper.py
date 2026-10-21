@@ -67,6 +67,9 @@ ANTIBOT_RETRY = timedelta(minutes=5)
 ANTIBOT_REMIND = timedelta(hours=1)  # alerte renouvelée tant que la vérification n'est pas faite
 PENDING_ANTIBOT = "pas tentée : vérification anti-bot en attente"
 QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
+# Mises acceptées après lesquelles le quota de la collection repart sans refus : le 21/10, 36 mises sont passées
+# en 10 h sans vérification après 14:19, et la collection avait sauté 56 jours manquants « pour les L ».
+CHECK_QUOTA_BIDS = 10
 # Mises surenchéries relues à la fin de leur enchère (gagnées malgré tout ?) : celles des 2 derniers jours,
 # pas tout l'historique (enchères anciennes souvent disparues du site).
 OUTBID_SETTLE_WINDOW = timedelta(days=2)
@@ -336,6 +339,7 @@ class AuctionSniper(Worker):
         self._antibot_remind_at = _EPOCH  # prochain rappel d'alerte tant que la vérification attend
         self._antibot_missed = 0  # mises non placées depuis le début du blocage
         self._collection_since_check = 0  # mises réelles de collection depuis la dernière vérification
+        self._bids_since_check = 0  # mises réelles acceptées depuis la dernière vérification (ou CHECK_QUOTA_BIDS)
         self._buys_left: int | None = None  # achats réels encore permis (SNIPER_MAX_BUYS), None = illimité
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
@@ -1093,6 +1097,10 @@ class AuctionSniper(Worker):
                 self.notifier.success("Sniper : vérification levée", "Les mises passent de nouveau.")
             if decision.collection and live:
                 self._collection_since_check += 1
+            if live:
+                self._bids_since_check += 1
+                if self._bids_since_check >= CHECK_QUOTA_BIDS:  # quota épuisé sans refus : un nouveau est ouvert
+                    self._bids_since_check = self._collection_since_check = 0
             self._engaged[auction.id] = auction.end_at
             self._bot_engaged.add(auction.id)
             self._report_bid("Enchère placée", f"{summary}, solde {confirmed.bidder_balance}")
@@ -1110,7 +1118,8 @@ class AuctionSniper(Worker):
             else:
                 self._antibot_since = utcnow()
                 self._antibot_remind_at = self._antibot_since + ANTIBOT_REMIND
-                self._collection_since_check = 0  # la prochaine vérification ouvre un nouveau quota
+                # La prochaine vérification ouvre un nouveau quota.
+                self._collection_since_check = self._bids_since_check = 0
                 # Le 16/10, les paquets s'ouvraient encore pendant que les mises étaient refusées : la page
                 # Paquets ne la propose pas forcément.
                 self.notifier.critical(

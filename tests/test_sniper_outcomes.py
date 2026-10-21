@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from src.core.models import Auction
-from src.workers.auction_sniper import AuctionSniper, Decision, Target, position_cap
+from src.workers.auction_sniper import CHECK_QUOTA_BIDS, AuctionSniper, Decision, Target, position_cap
 from src.workers.collection import progress_lines
 from tests.test_integration import ME, make_client, make_context, seed_observed
 
@@ -160,6 +160,30 @@ async def test_collection_bids_capped_per_verification(tmp_path):
     await sniper._bid(Auction.model_validate(sale("d", "16 octobre", 15)),
                       Decision(10, 20, "collection : carte manquante ≤ 20", None), sniper_params(sniper.api.client))
     assert sniper._collection_since_check == 0 and sniper.blocked
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_collection_quota_renewed_after_check_quota_without_refusal(tmp_path):
+    """21/10 après 14:19 : 36 mises sans vérification, la collection gardait son quota épuisé pendant 10 h."""
+    state = {"owned": [], "missing": ["14 octobre", "15 octobre", "16 octobre"], "total": 366}
+    ok = (200, {"current_bid": 10, "bidder_balance": 2990})
+    market = {"a": sale("a", "14 octobre", 15)}
+    replies = [ok] * (CHECK_QUOTA_BIDS + 1)
+    sniper, db, _ = await start(tmp_path, market, replies, state, simulate=())
+    await sniper.step()
+    market["b"] = sale("b", "15 octobre", 15)
+    await sniper.step()
+    assert sniper._collection_since_check == 2
+    for n in range(CHECK_QUOTA_BIDS - 2):  # les autres mises du quota, acceptées sans refus
+        await sniper._bid(Auction.model_validate(sale(f"x{n}", "16 octobre", 15)),
+                          Decision(10, 20, "collection : carte manquante ≤ 20", None),
+                          sniper_params(sniper.api.client))
+    assert sniper._collection_since_check == 0 and sniper._bids_since_check == 0
+
+    market["c"] = sale("c", "16 octobre", 15)
+    await sniper.step()  # quota renouvelé : la mise part
+    assert not replies and "quota de la vérification gardé" not in sniper.recap()[1]
     await db.close()
 
 
