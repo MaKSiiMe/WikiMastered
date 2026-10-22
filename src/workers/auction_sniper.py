@@ -91,6 +91,12 @@ class Target:
     seen_at: datetime
     recheck: bool = False
     last_look: bool = False  # mise en tête relue avant la fin (une fois par mise)
+    ceiling: int | None = None  # plafond d'après les ventes observées au repérage (None : collection, inconnu)
+
+    @property
+    def room(self) -> float:
+        """Écart entre le plafond estimé et la mise minimale lue : les plus grands sont relus d'abord."""
+        return -math.inf if self.ceiling is None else self.ceiling - self.auction.min_bid
 
 
 @dataclass(frozen=True)
@@ -317,6 +323,9 @@ class AuctionSniper(Worker):
         self._gap_warned_at = _EPOCH
         # Depuis le dernier récap : trous dans les nouvelles ventes, ventes de jours manquants trouvées.
         self._gaps = self._days_found = 0
+        # Ventes jamais relues dans leur fenêtre de mise : id -> (plafond estimé, fin), jugées à leur fin.
+        self._unread: dict[str, tuple[int, datetime]] = {}
+        self._unread_winnable = 0
         # Mises réelles en tête : auction_id -> (bid_id, montant)
         self._leading: dict[str, tuple[int, int]] = {}
         for row in await self.db.placed_bids():
@@ -473,10 +482,20 @@ class AuctionSniper(Worker):
             # Ventes terminées pas encore clôturées : leur dernier prix devient une vente observée.
             auctions, _ = await self.api.market_page(sort="ending_soon", rarity=rarity, limit=MARKET_LIMIT)
             await self._remember(auctions, now)
+            self._judge_unread(auctions, now)
             await self._ingest(auctions, params, now)
         else:
             auctions, _ = await self.api.market_page(sort="ending_soon", q=self._next_day(), limit=MARKET_LIMIT)
             await self._ingest(auctions, params, now)
+
+    def _judge_unread(self, auctions: list[Auction], now: datetime) -> None:
+        """Ventes terminées jamais relues : gagnables si notre plafond estimé couvrait la mise qui battait le prix
+        final. Mesure ce que coûtent les relectures manquées (le 21/10 : ~50 ventes dans la journée)."""
+        for a in auctions:
+            if a.seconds_left(now) <= 0 and (unread := self._unread.pop(a.id, None)) is not None:
+                self._unread_winnable += unread[0] >= a.min_bid
+        horizon = now - timedelta(minutes=10)  # le flux des ventes terminées les garde ~3 min
+        self._unread = {aid: u for aid, u in self._unread.items() if u[1] > horizon}
 
     def _next_day(self) -> str:
         """Prochain jour manquant à chercher (rotation sur tous les jours manquants)."""
@@ -515,9 +534,9 @@ class AuctionSniper(Worker):
             known = self._targets.get(a.id)
             if known is not None:
                 if not known.recheck:
-                    self._targets[a.id] = Target(a, now)
+                    self._targets[a.id] = Target(a, now, ceiling=known.ceiling)
             elif await self._worth_watching(a, params, now):
-                self._targets[a.id] = Target(a, now)
+                self._targets[a.id] = Target(a, now, ceiling=await self._observed_ceiling(a, params))
 
     async def _worth_watching(self, a: Auction, params: SnipeParams, now: datetime) -> bool:
         """Sans requête : la vente peut-elle intéresser le sniper à sa fin (prix actuel sous le plafond) ?"""
@@ -531,10 +550,19 @@ class AuctionSniper(Worker):
             return True
         if a.rarity not in self._resale_rarities or (self._buys_left == 0 and not self._shadow_on):
             return False  # achats réels épuisés, sans sniper de test : les relectures servent à la collection
+        ceiling = await self._observed_ceiling(a, params)
+        return ceiling is not None and a.min_bid <= ceiling
+
+    async def _observed_ceiling(self, a: Auction, params: SnipeParams) -> int | None:
+        """Plafond d'après les ventes observées seules, sans requête (la cote du site ne peut que le baisser) ;
+        None pour une rareté pas revendue ou trop peu de ventes."""
+        if a.rarity not in self._resale_rarities:
+            return None
         observed = trusted(await self.db.observed_by_rarity(a.catalog_id, self.settings.price_recent_sales, a.shiny))
         quote = combine(*observed.get(a.rarity or "", ([], 0)), None)
-        return quote.reliable(self.settings.price_min_sales) and \
-            a.min_bid <= math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
+        if not quote.reliable(self.settings.price_min_sales):
+            return None
+        return math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
 
     # ------------------------------------------------------------ cibles
     def _prune(self, now: datetime) -> None:
@@ -548,6 +576,8 @@ class AuctionSniper(Worker):
                 self._outcome(t.auction, "collection : pas relue à temps" if self._wanted(t.auction)
                               else "pas relue à temps")
                 self._log_collection_outcomes([t.auction])
+                if t.ceiling is not None and not self._wanted(t.auction):
+                    self._unread[aid] = (t.ceiling, t.auction.end_at)
         if len(self._targets) > 5000:  # garde-fou mémoire : les plus lointaines d'abord
             for aid, _ in sorted(self._targets.items(), key=lambda kv: kv[1].auction.end_at)[4000:]:
                 del self._targets[aid]
@@ -563,7 +593,11 @@ class AuctionSniper(Worker):
                        and t.auction.id in self._leading
                        and low < t.auction.seconds_left(now) <= low + LAST_LOOK_SECONDS]
         if in_window_:
-            return min(in_window_, key=lambda t: (not self._wanted(t.auction), t.auction.end_at))
+            # Cartes de collection, nos mises en tête, puis le plus grand écart au plafond : le 21/10 au soir, 2/3 des
+            # ventes suivies n'étaient pas relues à temps, et par ordre de fin 25 ventes gagnables entre 20 h et
+            # minuit sont passées sans mise.
+            return min(in_window_, key=lambda t: (not self._wanted(t.auction), not t.recheck, -t.room,
+                                                  t.auction.end_at))
         ended = [t for t in self._targets.values() if t.recheck and t.auction.seconds_left(now) < -3]
         return min(ended, key=lambda t: t.auction.end_at) if ended else None
 
@@ -580,15 +614,17 @@ class AuctionSniper(Worker):
 
     async def _read_target(self, target: Target, now: datetime) -> None:
         if not target.recheck:
-            await self._prepare(target.auction, now)
+            await self._prepare(target, now)
         await self._refresh_target(target)
 
-    async def _prepare(self, auction: Auction, now: datetime) -> None:
+    async def _prepare(self, target: Target, now: datetime) -> None:
         """Avant la relecture d'une cible : solde, places de vente et cote mis en cache, pour miser juste
         après la relecture sans autre requête (chacune coûte ~1,5 s, l'enchère vieillirait sous le seuil).
-        Pas de cote pour une carte de collection : sa mise n'en dépend pas, et la route des cotes est lente."""
+        Pas de cote pour une carte de collection : sa mise n'en dépend pas, et la route des cotes est lente.
+        Pas de cote non plus pour une cible déjà au-dessus de son plafond estimé : la cote ne ferait que le baisser."""
         await self.portfolio(now)
-        if auction.rarity in self._resale_rarities and not self._wanted(auction):
+        auction = target.auction
+        if auction.rarity in self._resale_rarities and not self._wanted(auction) and target.room >= 0:
             with contextlib.suppress(RateLimited, ApiError):
                 await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
 
@@ -614,7 +650,8 @@ class AuctionSniper(Worker):
             return
         me = self.api.user_id
         if target.recheck and me and (auction.current_bidder_id or "").lower() == me:
-            self._targets[aid] = Target(auction, now, recheck=True, last_look=target.last_look)  # toujours en tête
+            self._targets[aid] = Target(auction, now, recheck=True, last_look=target.last_look,
+                                        ceiling=target.ceiling)  # toujours en tête
             return
         if target.recheck:
             if auction.end_at > target.auction.end_at + timedelta(seconds=5):  # prolongée (60 s par mise tardive)
@@ -622,17 +659,18 @@ class AuctionSniper(Worker):
                               f"{auction.end_at.astimezone(timeutils.PARIS):%H:%M:%S}")
             else:
                 self.log.info("%s surenchérie à %.0f s de la fin : rejouée", auction.title, auction.seconds_left(now))
-        self._targets[aid] = Target(auction, now)
+        self._targets[aid] = Target(auction, now, ceiling=target.ceiling)
 
     async def _prefetch(self, now: datetime) -> bool:
-        """Cote à l'avance une cible de revente qui finit dans les 15 min (route des cotes limitée).
-        Renvoie True si une requête est partie."""
+        """Cote à l'avance une cible de revente qui finit dans les 15 min (route des cotes limitée), le plus grand
+        écart au plafond d'abord, comme les relectures. Renvoie True si une requête est partie."""
         if now < self._next_prefetch:
             return False
         self._next_prefetch = now + timedelta(seconds=self.settings.sniper_prefetch_seconds)
-        soon = sorted((t.auction for t in self._targets.values()
-                       if not t.recheck and t.auction.rarity in self._resale_rarities
-                       and t.auction.seconds_left(now) <= 900), key=lambda a: a.end_at)
+        soon = [t.auction for t in sorted(
+            (t for t in self._targets.values()
+             if not t.recheck and t.auction.rarity in self._resale_rarities and t.room >= 0
+             and t.auction.seconds_left(now) <= 900), key=lambda t: (-t.room, t.auction.end_at))]
         for a in soon:
             if await self.ctx.prices.is_cached(a.catalog_id):
                 continue
@@ -1024,7 +1062,9 @@ class AuctionSniper(Worker):
                 f"{self._days_found} vente(s) de jours manquants trouvée(s)"
         if self._gaps:
             found += f", {self._gaps} trou(s) dans les nouvelles ventes"
-        self._gaps = self._days_found = 0
+        if self._unread_winnable:
+            found += f", {self._unread_winnable} vente(s) gagnable(s) jamais relue(s) (plafond estimé ≥ prix final)"
+        self._gaps = self._days_found = self._unread_winnable = 0
         if not outcomes:
             return [found, "Aucune enchère dans la fenêtre de mise."]
         ranked = Counter(outcomes.values()).most_common()
