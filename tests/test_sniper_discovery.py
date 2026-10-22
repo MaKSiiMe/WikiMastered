@@ -188,6 +188,51 @@ async def test_unread_collection_target_is_logged(tmp_path, caplog):
     await db.close()
 
 
+@pytest.mark.asyncio
+async def test_widest_room_to_ceiling_is_reread_first(tmp_path):
+    """21/10 au soir : 2/3 des ventes suivies pas relues à temps ; la plus prometteuse passe avant la plus proche."""
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"bidding": [], "balance": 0}),
+                                   sniper_resale_rarities=["L"])
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    await seed_observed(db, "card-far", [4000, 4100, 3900], rarity="L")
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    params = snipe_params(client.settings, night=False)
+    now = datetime.now(UTC)
+    await sniper._ingest([Auction.model_validate(sale("far", "Pablo Escobar", "L", 19, base=1))], params, now)
+    assert sniper._targets["far"].ceiling == int(4000 * params.deal_ratio)
+    sniper._targets["far"].seen_at = now - timedelta(seconds=30)
+    sniper._targets["near"] = Target(Auction.model_validate(sale("near", "Ada", "L", 15, base=450)),
+                                     now - timedelta(seconds=30), ceiling=500)
+    sniper._targets["blind"] = Target(Auction.model_validate(sale("blind", "Nightcall", "L", 13)),
+                                      now - timedelta(seconds=30))
+    assert sniper._next_due(params, now).auction.id == "far"
+    del sniper._targets["far"]
+    assert sniper._next_due(params, now).auction.id == "near"  # plafond inconnu : en dernier
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_unread_winnable_sales_are_counted_in_recap(tmp_path):
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"bidding": [], "balance": 0}),
+                                   sniper_resale_rarities=["L"])
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    now = datetime.now(UTC)
+    for aid in ("cheap", "dear"):
+        sniper._targets[aid] = Target(Auction.model_validate(sale(aid, aid, "L", 5)), now, ceiling=900)
+    sniper._prune(now)  # fenêtre de mise passée sans relecture
+    ended = [Auction.model_validate(sale("cheap", "cheap", "L", -20, bid=700)),   # battue à 770 ≤ 900
+             Auction.model_validate(sale("dear", "dear", "L", -20, bid=900))]     # battue à 990 > 900
+    sniper._judge_unread(ended, now)
+    assert "1 vente(s) gagnable(s) jamais relue(s)" in sniper.recap()[0]
+    assert not sniper._unread
+    await db.close()
+
+
 def _bare_handler(calls, market):
     def handler(request):
         path, params = request.url.path, request.url.params
