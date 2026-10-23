@@ -291,6 +291,11 @@ class Settings(BaseSettings):
     # quand la cote bouge, retirée sous le plus bas. L'exemplaire étiqueté n'est jamais vendu ni défaussé. Vide = non.
     value_tag_tiers: IntList = Field(default_factory=list)
     value_tag_name: str = "💎 {}+"
+    # Les cartes cotées au moins VALUE_WATCH_MIN sont cherchées sur le marché toutes les VALUE_WATCH_MINUTES, en
+    # requêtes de fond : leurs ventes en cours sont gardées (table value_sightings), pour savoir si elles passent
+    # vraiment sur le marché et à quel prix. 0 = pas de surveillance.
+    value_watch_min: int = 500
+    value_watch_minutes: float = 60.0
 
     # --- Module E : tendances Wikipédia -----------------------------------------
     trends_interval_minutes: float = 60.0

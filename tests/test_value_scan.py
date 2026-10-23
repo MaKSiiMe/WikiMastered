@@ -328,3 +328,63 @@ async def test_server_errors_pause_the_scan_without_slowing_it(tmp_path):
     assert await worker.lookup() > 25  # toujours en pause : aucune requête, pas de ralentissement
     assert worker._spacing == 3
     await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_valuable_cards_are_watched_on_the_market(tmp_path):
+    """Une C cotée 10 972 WB sur une seule vente : la surveillance dit si elle passe vraiment sur le marché."""
+    collection = [{"id": "o1", "card_id": "c1", "card": {"id": "c1", "wikipedia_title": "Volley albanais",
+                                                          "rarity": "C"}},
+                  {"id": "o2", "card_id": "c2", "card": {"id": "c2", "wikipedia_title": "Mème", "rarity": "C"}}]
+    from tests.test_integration import ME as me
+    soon = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
+    past = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+
+    def auction(aid, card, rarity="C", seller="22222222-2222-2222-2222-222222222222", end=soon, bid=None):
+        return {"id": aid, "card": {"id": card, "wikipedia_title": "Volley albanais", "rarity": rarity},
+                "status": "active", "seller_id": seller, "end_at": end, "base_amount": 300, "current_bid": bid,
+                "current_bidder_id": None}
+    market = [auction("a1", "c1"), auction("a2", "c1", "PC"), auction("a3", "autre"), auction("a4", "c1", seller=me),
+              auction("a5", "c1", end=past)]
+    searched = []
+
+    def handler(request):
+        path = request.url.path
+        if path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": collection})
+        if path == "/api/trades":
+            return httpx.Response(200, json={"trades": []})
+        if path.endswith("/sales"):
+            card = path.split("/")[-2]
+            return httpx.Response(200, json={"summary": {"C": {"average": 10972 if card == "c1" else 240}}})
+        if path == "/api/marketplace":
+            searched.append(request.url.params.get("q"))
+            return httpx.Response(200, json={"auctions": market})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    worker = ValueScan(ctx)
+    await worker.setup()
+    worker._next_run = datetime.now(UTC)
+    await worker.step()
+    while worker._queue:
+        await worker.step()
+    await worker.step()  # analyse : seule la carte à 500 WB ou plus est surveillée
+    assert worker._watch == {"c1|C": "Volley albanais"}
+    assert (await ctx.db.kv_get("value_scan"))["watch"] == worker._watch
+    searched.clear()
+    worker._watch_due = datetime.now(UTC)
+    assert await worker.step() > 0
+    assert searched == ["Volley albanais"]
+    rows = await ctx.db.sightings_since(datetime.now(UTC) - timedelta(days=1))
+    assert [(r["auction_id"], r["rarity"], r["current_bid"]) for r in rows] == [("a1", "C", None), ("a2", "PC", None)]
+    assert worker._watch_due - datetime.now(UTC) > timedelta(minutes=55)
+    assert worker.recap()[-1] == "Marché des cartes à 500 WB ou plus (7 j) : 2 vente(s) repérée(s) pour 1/1 carte(s)"
+
+    # Relevée plus tard : la mise est mise à jour, la vente n'est pas comptée deux fois.
+    market[0]["current_bid"] = 450
+    await worker.watch_market()
+    rows = await ctx.db.sightings_since(datetime.now(UTC) - timedelta(days=1))
+    assert [(r["auction_id"], r["current_bid"]) for r in rows] == [("a1", 450), ("a2", None)]
+    await ctx.db.close()

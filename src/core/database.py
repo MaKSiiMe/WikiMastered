@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS trend_terms (
     PRIMARY KEY (source, term)
 );
 
+-- Ventes en cours des cartes de valeur de l'inventaire (VALUE_WATCH_MIN) : la carte passe-t-elle sur le marché ?
+CREATE TABLE IF NOT EXISTS value_sightings (
+    auction_id TEXT PRIMARY KEY, card_id TEXT NOT NULL, title TEXT, rarity TEXT, is_shiny INTEGER NOT NULL DEFAULT 0,
+    base_amount INTEGER, current_bid INTEGER, end_at TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sightings_card ON value_sightings (card_id, end_at);
+
 CREATE TABLE IF NOT EXISTS pageviews (
     article TEXT NOT NULL, day TEXT NOT NULL, views INTEGER NOT NULL, PRIMARY KEY (article, day)
 );
@@ -593,6 +600,25 @@ class Database:
         )
         await self.db.commit()
 
+    async def record_sightings(self, rows: list[dict[str, Any]]) -> set[str]:
+        """Ventes en cours d'une carte de valeur ; renvoie celles vues pour la première fois."""
+        if not rows:
+            return set()
+        known = {r["auction_id"] for r in await self._all(
+            f"SELECT auction_id FROM value_sightings WHERE auction_id IN ({','.join('?' * len(rows))})",
+            [r["auction_id"] for r in rows])}
+        await self.db.executemany(
+            "INSERT INTO value_sightings (auction_id, card_id, title, rarity, is_shiny, base_amount, current_bid, "
+            "end_at, first_seen, last_seen) VALUES (:auction_id, :card_id, :title, :rarity, :is_shiny, :base_amount, "
+            ":current_bid, :end_at, :seen_at, :seen_at) ON CONFLICT(auction_id) DO UPDATE SET "
+            "current_bid = excluded.current_bid, end_at = excluded.end_at, last_seen = excluded.last_seen", rows)
+        await self.db.commit()
+        return {r["auction_id"] for r in rows} - known
+
+    async def sightings_since(self, since: datetime) -> list[aiosqlite.Row]:
+        return await self._all("SELECT * FROM value_sightings WHERE end_at >= ? ORDER BY card_id, end_at",
+                               (iso(since),))
+
     async def harvest_ended_auctions(self, before: datetime, max_gap_seconds: float = 120) -> int:
         """Transforme les enchères vues juste avant leur fin en ventes observées.
 
@@ -866,6 +892,7 @@ class Database:
             "trend_terms": ("first_seen < ?", before(30)),
             "trend_signals": ("signal_at < ?", before(90)),
             "pageviews": ("day < ?", f"{now - timedelta(days=60):%Y%m%d}"),
+            "value_sightings": ("end_at < ?", before(120)),
         }
         removed: dict[str, int] = {}
         for table, (where, value) in rules.items():
