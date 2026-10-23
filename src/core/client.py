@@ -473,15 +473,16 @@ class WikiMastersClient:
             return True
 
     async def supabase(self, method: str, table: str, *, params: dict[str, str] | None = None,
-                       json_body: Any = None, prefer: str = "") -> tuple[int, Any]:
+                       json_body: Any = None, prefer: str = "", background: bool = False) -> tuple[int, Any]:
         """Requête à l'API REST Supabase du site (tables `tags`, `user_card_tags`), comme son éditeur
-        d'étiquettes [WP tags.js]. Nécessite SUPABASE_ANON_KEY et le jeton d'accès de la session."""
+        d'étiquettes [WP tags.js]. Nécessite SUPABASE_ANON_KEY et le jeton d'accès de la session.
+        `background` : passe après toutes les autres requêtes (voir _acquire_background_slot)."""
         await self._maybe_refresh()
         session = self.auth_session()
         key = self.settings.supabase_anon_key
         if not key or session is None or not session.data.get("access_token"):
             raise ApiError(0, None, f"supabase:{table}", "SUPABASE_ANON_KEY ou session Supabase manquante")
-        await self._acquire_slot()
+        await (self._acquire_background_slot() if background else self._acquire_slot())
         base = (self.settings.supabase_url or f"https://{session.ref}.supabase.co").rstrip("/")
         headers = {"apikey": key, "Authorization": f"Bearer {session.data['access_token']}",
                    "Accept": "application/json"}

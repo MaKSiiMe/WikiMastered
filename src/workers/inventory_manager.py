@@ -227,12 +227,15 @@ def discard_affects_count(s: Settings) -> bool:
     return s.achievement_count_mode == "total" or bool(s.discard_last_copy_rarities)
 
 
-async def excluded_copies(ctx: Context, rows: list[OwnedCard]) -> set[str]:
+async def excluded_copies(ctx: Context, rows: list[OwnedCard], *, value_tags: bool = True) -> set[str]:
     """Exemplaires jamais vendus ni défaussés : engagés dans un échange, déjà en vente ou programmés, ou portant une
-    étiquette de PROTECTED_TAGS (casse ignorée)."""
+    étiquette de PROTECTED_TAGS ou de palier de valeur (casse ignorée). `value_tags=False` : les étiquettes de palier
+    ne protègent pas (l'analyse de valeur doit continuer de voir les cartes qu'elle a étiquetées)."""
     excluded = await ctx.api.protected_owned_ids({r.id for r in rows})
     excluded |= await ctx.db.scheduled_owned_ids()
+    tiers = {t.casefold() for t in ctx.settings.value_tiers().values()}
     protected = {t.casefold() for t in ctx.settings.protected_tags}
+    protected = protected | tiers if value_tags else protected - tiers
     return excluded | {r.id for r in rows if r.tag_names & protected}
 
 
