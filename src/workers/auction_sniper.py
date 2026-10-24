@@ -61,9 +61,9 @@ PLACED = ("misée", "misée (collection)", SHADOW_PLACED)
 # Refus d'une mise tant que la vérification humaine du site n'est pas faite : « Vérification anti-bot
 # requise. » (relevé du 15/10/2026, en même temps que celle des paquets).
 ANTIBOT_HINT = "anti-bot"
-# Tant qu'elle attend, une seule mise réelle part par période : elle teste si la vérification est levée. Le 16/10,
-# ~45 mises refusées en 1 h 30 (toutes inutiles), puis vérification des paquets demandée à son tour.
-ANTIBOT_RETRY = timedelta(minutes=5)
+# Tant qu'elle attend, une seule mise réelle part toutes les SNIPER_ANTIBOT_RETRY_SECONDS : elle teste si la
+# vérification est levée. Le 16/10, ~45 mises refusées en 1 h 30 (toutes inutiles), puis vérification des paquets
+# demandée à son tour.
 ANTIBOT_REMIND = timedelta(hours=1)  # alerte renouvelée tant que la vérification n'est pas faite
 PENDING_ANTIBOT = "pas tentée : vérification anti-bot en attente"
 QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
@@ -299,6 +299,14 @@ def in_snipe_window(auction: Auction, me: str | None, window: int, now: datetime
 
 def is_own(auction: Auction, me: str | None) -> bool:
     return me is not None and (auction.seller_id or "").lower() == me
+
+
+def retry_text(seconds: float) -> str:
+    """Rythme des mises tant que la vérification anti-bot attend, pour l'alerte."""
+    if seconds <= 0:
+        return "tente quand même chaque mise"
+    every = f"{seconds / 60:.0f} min" if seconds >= 60 and seconds % 60 == 0 else f"{seconds:.0f} s"
+    return f"ne tente qu'une mise toutes les {every}"
 
 
 class AuctionSniper(Worker):
@@ -1151,7 +1159,8 @@ class AuctionSniper(Worker):
         await self.db.record_bid(**common, status="rejected", note=str(error)[:300])
         self.log.info("mise refusée sur %s : %s", label, error)
         if ANTIBOT_HINT in str(error).lower() or payload.get("human_verification_required"):
-            self._antibot_retry_at = utcnow() + ANTIBOT_RETRY
+            retry = self.settings.sniper_antibot_retry_seconds
+            self._antibot_retry_at = utcnow() + timedelta(seconds=retry)
             self._antibot_missed += 1
             if self._antibot_since:
                 self._antibot_remind()
@@ -1166,8 +1175,8 @@ class AuctionSniper(Worker):
                     "Sniper : vérification anti-bot demandée",
                     f"Le site refuse les mises tant qu'elle n'est pas faite ({label} : {decision.amount} WB "
                     "refusée). Fais-la toi-même dans ton navigateur : mise à la main sur le marché, ou page "
-                    f"Paquets si elle la demande. En attendant, le bot ne tente qu'une mise toutes les "
-                    f"{ANTIBOT_RETRY.seconds // 60} min et te prévient dès qu'une mise repasse.")
+                    f"Paquets si elle la demande. En attendant, le bot {retry_text(retry)} et te prévient dès "
+                    "qu'une mise repasse.")
             return False
         if not retried and isinstance(server_min, int) and decision.amount < server_min <= decision.ceiling:
             # Un rival a misé entre la lecture et la mise : une position repart au-dessus du nouveau minimum.
