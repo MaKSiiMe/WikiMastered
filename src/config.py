@@ -300,6 +300,15 @@ class Settings(BaseSettings):
     # vraiment sur le marché et à quel prix. 0 = pas de surveillance.
     value_watch_min: int = 500
     value_watch_minutes: float = 60.0
+    # Vente des cartes de valeur : une carte surveillée (VALUE_WATCH_MIN) cotée au moins VALUE_SELL_MIN est mise en
+    # vente pour VALUE_SELL_MINUTES, une seule à la fois, à VALUE_SELL_SHARE de sa cote (jamais sous la plus haute
+    # mise vue sur le marché), dernier exemplaire et exemplaire étiqueté compris. Une place de vente lui est gardée ;
+    # les reventes et les doublons se partagent les autres. Jamais un favori, un shiny, une carte achetée par le bot
+    # ni un titre de VALUE_SELL_EXCLUDE. 0 = jamais.
+    value_sell_min: int = 1000
+    value_sell_share: float = 0.6
+    value_sell_minutes: int = 360
+    value_sell_exclude: CsvList = Field(default_factory=list)
 
     # --- Module E : tendances Wikipédia -----------------------------------------
     trends_interval_minutes: float = 60.0
