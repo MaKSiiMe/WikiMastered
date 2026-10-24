@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from src.core.models import Auction
-from src.workers.auction_sniper import CHECK_QUOTA_BIDS, AuctionSniper, Decision, Target, position_cap
+from src.workers.auction_sniper import CHECK_QUOTA_BIDS, AuctionSniper, Decision, Target, position_cap, retry_text
 from src.workers.collection import progress_lines
 from tests.test_integration import ME, make_client, make_context, seed_observed
 
@@ -25,9 +25,10 @@ def sale(aid: str, title: str, seconds: float, base: int = 10, bid: int | None =
 
 
 async def start(tmp_path, market: dict, replies: list, state: dict | None = None, simulate: tuple = ("sniper",),
-                owned: list | None = None):
+                owned: list | None = None, **overrides):
     """Sniper réel pour la collection (jours manquants) ; chaque mise reçoit la prochaine réponse de `replies`.
-    Les positions sont simulées (`simulate`), sauf demande contraire. `owned` : derniers exemplaires obtenus."""
+    Les positions sont simulées (`simulate`), sauf demande contraire. `owned` : derniers exemplaires obtenus.
+    `overrides` : réglages en plus."""
     def handler(request):
         path = request.url.path
         if path == "/api/my-collection":
@@ -53,7 +54,7 @@ async def start(tmp_path, market: dict, replies: list, state: dict | None = None
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=list(simulate),
-                                   collection_sets=["jours"], collection_max_price=20)
+                                   collection_sets=["jours"], collection_max_price=20, **overrides)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     await db.kv_set("collection", state or {"owned": [], "missing": ["14 octobre", "15 octobre"], "total": 366})
@@ -93,7 +94,8 @@ async def test_antibot_refusal_alerts_once_until_a_bid_passes(tmp_path):
     assert sniper.blocked and "vérification anti-bot" in sniper.blocked
     assert "mise refusée : vérification anti-bot 1" in sniper.recap()[1]
 
-    # Le 16/10 : ~45 mises refusées en 1 h 30. Tant que la vérification attend, pas de mise avant ANTIBOT_RETRY.
+    # Le 16/10 : ~45 mises refusées en 1 h 30. Tant que la vérification attend, une mise toutes les
+    # SNIPER_ANTIBOT_RETRY_SECONDS (5 min).
     market["b"] = sale("b", "15 octobre", 15)
     await sniper.step()
     assert len(replies) == 2 and "pas tentée : vérification anti-bot en attente 1" in sniper.recap()[1]
@@ -109,6 +111,29 @@ async def test_antibot_refusal_alerts_once_until_a_bid_passes(tmp_path):
     await sniper.step()
     assert ("SUCCESS", "Sniper : vérification levée") in notifier.sent and sniper.blocked is None
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_antibot_retry_zero_tries_every_bid_while_pending(tmp_path):
+    # Le 24/10 : une extension passe la vérification dans le navigateur ; la levée doit être vue tout de suite.
+    market = {"a": sale("a", "14 octobre", 15)}
+    refusal = (400, {"error": "Vérification anti-bot requise."})
+    replies = [refusal, (200, {"current_bid": 10, "bidder_balance": 2990})]
+    sniper, db, notifier = await start(tmp_path, market, replies, sniper_antibot_retry_seconds=0)
+    await sniper.step()
+    assert ("CRITICAL", "Sniper : vérification anti-bot demandée") in notifier.sent
+
+    market["b"] = sale("b", "15 octobre", 15)
+    await sniper.step()  # tentée sans attendre, et elle passe
+    assert not replies and ("SUCCESS", "Sniper : vérification levée") in notifier.sent
+    assert "pas tentée" not in sniper.recap()[1]
+    await db.close()
+
+
+def test_retry_text():
+    assert retry_text(300) == "ne tente qu'une mise toutes les 5 min"
+    assert retry_text(30) == "ne tente qu'une mise toutes les 30 s"
+    assert retry_text(0) == "tente quand même chaque mise"
 
 
 @pytest.mark.asyncio

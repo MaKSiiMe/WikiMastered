@@ -186,6 +186,10 @@ class Settings(BaseSettings):
     # pas (+10 %) en 20-30 s, et chaque mise use le quota de la vérification anti-bot (~9-10 mises). 0 = minimum.
     sniper_bid_push: float = 0.5
     sniper_settle_grace_seconds: int = 30
+    # Vérification anti-bot en attente : une seule mise réelle tentée toutes les N s, pour voir si elle est levée
+    # (le 16/10, ~45 mises refusées en 1 h 30). 0 = chaque mise est tentée : la levée est vue tout de suite, utile
+    # quand une extension passe la vérification dans le navigateur.
+    sniper_antibot_retry_seconds: float = 300.0
     sniper_max_concurrent_bids: int = 0   # 0 = illimité (le site n'impose pas de limite aux mises)
     # Achats réels de positions au plus, depuis toujours (0 = illimité) : gagnées + mises en cours. Atteint, le
     # sniper ne rachète plus rien à revendre, même quand une revente libère une place (test du 16/10 : 5).
