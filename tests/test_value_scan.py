@@ -388,3 +388,105 @@ async def test_valuable_cards_are_watched_on_the_market(tmp_path):
     rows = await ctx.db.sightings_since(datetime.now(UTC) - timedelta(days=1))
     assert [(r["auction_id"], r["current_bid"]) for r in rows] == [("a1", 450), ("a2", None)]
     await ctx.db.close()
+
+
+def test_value_sale_queue_order_and_exclusions():
+    from src.workers.inventory_manager import value_sale_price, value_sale_queue
+    s = Settings(_env_file=None, value_sell_min=1000, value_sell_exclude=["manifestations du 17 octobre 2026"])
+    watch = {"a|C": "Crouchen", "b|C": "Manifestations du 17 octobre 2026", "c|PC": "Sareee", "d|C": "Bondar",
+             "e|R": "Saint-Amable", "f|L": "Achetée"}
+    values = {"a|C": 23346, "b|C": 10972, "c|PC": 1228, "d|C": 1016, "e|R": 640, "f|L": 5000}
+    queue = value_sale_queue(watch, values, {}, s, bought={"f"})
+    assert [v.title for v in queue] == ["Crouchen", "Sareee", "Bondar"]  # exclue, sous 1000, achetée : jamais
+    # Déjà mises en vente : après celles qui ne l'ont jamais été, la plus ancienne d'abord.
+    listed = {"a|C": NOW - timedelta(hours=1), "c|PC": NOW - timedelta(days=2)}
+    assert [v.title for v in value_sale_queue(watch, values, listed, s, bought={"f"})] == ["Bondar", "Sareee",
+                                                                                          "Crouchen"]
+    assert value_sale_price(23346, 0.6, None) == 14008
+    assert value_sale_price(1228, 0.6, 900) == 900  # jamais sous la plus haute mise vue sur le marché
+
+
+@pytest.mark.asyncio
+async def test_value_cards_sold_one_at_a_time_on_a_reserved_slot(tmp_path):
+    from src.workers.inventory_manager import InventoryManager
+
+    def copy(oid, card, title, rarity="C", **kw):
+        return {"id": oid, "card_id": card, "card": {"id": card, "wikipedia_title": title, "rarity": rarity}, **kw}
+    collection = [copy("o1", "c1", "Crouchen", starred=True), copy("o2", "c1", "Crouchen", is_shiny=True),
+                  copy("o3", "c1", "Crouchen", tags=[{"name": "💎 1000+"}]),
+                  copy("o4", "c2", "Manifestations du 17 octobre 2026"), copy("o5", "c3", "Sareee", "PC")]
+    slots = {"selling": 5}
+    posted, auctions = [], {}
+
+    def handler(request):
+        path = request.url.path
+        if path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": slots["selling"], "maxConcurrentAuctions": 5})
+        if path == "/api/my-collection":
+            q = request.url.params.get("q", "")
+            return httpx.Response(200, json={"collection": [c for c in collection
+                                                            if q in c["card"]["wikipedia_title"]]})
+        if path == "/api/trades":
+            return httpx.Response(200, json={"trades": []})
+        if request.method == "POST" and path == "/api/marketplace":
+            posted.append(request.read().decode())
+            return httpx.Response(201, json={"auction_id": f"v{len(posted)}"})
+        if path.startswith("/api/marketplace/v"):
+            return httpx.Response(200, json={"auction": auctions[path.rsplit("/", 1)[-1]]})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, value_tag_tiers=[1000],
+                                   value_sell_exclude=["Manifestations du 17 octobre 2026"])
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    await db.kv_set("value_scan", {"watch": {"c1|C": "Crouchen", "c2|C": "Manifestations du 17 octobre 2026",
+                                             "c3|PC": "Sareee"}})
+    await db.price_put("c1", {"C": (23346, None)})
+    await db.price_put("c2", {"C": (10972, None)})
+    await db.price_put("c3", {"PC": (1228, None)})
+    now = datetime.now(UTC)
+    await db.record_sightings([{"auction_id": "s1", "card_id": "c3", "title": "Sareee", "rarity": "PC",
+                                "is_shiny": 0, "base_amount": 300, "current_bid": 900,
+                                "end_at": (now + timedelta(hours=1)).isoformat(), "seen_at": now.isoformat()}])
+    inv = InventoryManager(ctx)
+    await inv.setup()
+
+    # Ventes pleines : la carte attend, et la prochaine place libre lui est gardée.
+    assert not await inv.sell_value_card() and inv._value_waiting
+    slots["selling"] = 4
+    assert await inv.free_slots() == 0  # ni doublon ni revente sur la place gardée
+    for i in range(2):  # doublons déjà programmés, plus tôt
+        await db.schedule_listing(owned_card_id=f"d{i}", card_id="d", title=f"Doublon {i}", rarity="C",
+                                  base_amount=20, duration_minutes=360, post_at=now - timedelta(minutes=5),
+                                  target_end=now + timedelta(hours=6), reason="cote 20")
+    await inv.post_due_listings()
+    assert not posted  # 4/5 : la place libre est celle de la carte de valeur, les doublons sont reportés
+    rows = await db._all("SELECT post_at FROM listings WHERE reason = 'cote 20'")
+    assert all(datetime.fromisoformat(r["post_at"]) > now + timedelta(hours=1) for r in rows)
+
+    # La plus chère d'abord, sur l'exemplaire étiqueté (ni le favori ni le shiny), à 60 % de sa cote, pour 6 h.
+    assert await inv.sell_value_card()
+    await inv.post_due_listings()
+    assert len(posted) == 1 and '"card_id":"o3"' in posted[0].replace(" ", "")
+    row = await db._one("SELECT * FROM listings WHERE reason LIKE 'valeur%'")
+    assert (row["status"], row["base_amount"], row["duration_minutes"]) == ("posted", 14008, 360)
+    assert ("INFO", "Carte de valeur mise en vente") in notifier.sent
+    slots["selling"] = 5
+
+    # Une seule à la fois : rien tant que la première n'est pas réglée, et plus de place gardée.
+    assert not await inv.sell_value_card() and not inv._value_waiting
+
+    # Vendue : message, puis la suivante (jamais Manifestations), au prix de la mise vue sur le marché.
+    auctions["v1"] = {"id": "v1", "card": {"id": "c1", "wikipedia_title": "Crouchen", "rarity": "C"},
+                      "status": "settled_sold", "end_at": now.isoformat(), "base_amount": 14008,
+                      "current_bid": 15000, "final_price": 15000}
+    await db._exec("UPDATE listings SET target_end = ? WHERE id = ?",
+                   ((now - timedelta(minutes=5)).isoformat(), row["id"]))
+    await inv.settle_listings()
+    assert ("SUCCESS", "Carte de valeur vendue") in notifier.sent
+    collection[:] = [c for c in collection if c["id"] != "o3"]
+    slots["selling"] = 4
+    assert await inv.sell_value_card()
+    nxt = await db._one("SELECT * FROM listings WHERE reason LIKE 'valeur%' AND status = 'scheduled'")
+    assert (nxt["title"], nxt["base_amount"]) == ("Sareee", 900)
+    await db.close()

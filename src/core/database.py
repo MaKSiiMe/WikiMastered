@@ -570,6 +570,24 @@ class Database:
         row = await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE status = 'scheduled'{extra}")
         return int(row["n"]) if row else 0
 
+    async def open_listings_count(self, reason: str) -> int:
+        """Ventes pas encore réglées (programmées, en cours, incertaines) dont le motif commence par `reason`."""
+        row = await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE reason LIKE ? AND status IN {LISTING_OPEN}",
+                              (f"{reason}%",))
+        return int(row["n"]) if row else 0
+
+    async def last_listed(self, reason: str) -> dict[str, datetime]:
+        """carte|rareté -> dernière mise en vente programmée dont le motif commence par `reason`."""
+        rows = await self._all("SELECT card_id, rarity, MAX(created_at) AS at FROM listings WHERE reason LIKE ? "
+                               "GROUP BY card_id, rarity", (f"{reason}%",))
+        return {f"{r['card_id']}|{r['rarity']}": datetime.fromisoformat(r["at"]) for r in rows}
+
+    async def best_sighting_bid(self, card_id: str, rarity: str, since: datetime) -> int | None:
+        """Plus haute mise vue depuis `since` sur une vente en cours de cette carte (même rareté, pas shiny)."""
+        row = await self._one("SELECT MAX(current_bid) AS bid FROM value_sightings WHERE card_id = ? AND rarity = ? "
+                              "AND is_shiny = 0 AND last_seen >= ?", (card_id, rarity, iso(since)))
+        return int(row["bid"]) if row and row["bid"] is not None else None
+
     async def scheduled_owned_ids(self) -> set[str]:
         rows = await self._all("SELECT owned_card_id FROM listings WHERE status IN ('scheduled', 'waiting', 'posted', "
                                "'uncertain')")
