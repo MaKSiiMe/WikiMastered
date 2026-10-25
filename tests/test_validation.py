@@ -47,9 +47,10 @@ async def test_simulated_resale_follows_the_observed_market(tmp_path):
     await inv.settle_listings()
     await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = 3",
                    ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
-    await inv.settle_listings()  # 2 remises à -10 % déjà faites : place libre, remise au prix d'achat
+    await inv.settle_listings()  # 2 remises à -10 % déjà faites : place libre, remise au plancher
     rows = await db._all("SELECT status, base_amount, relist_count FROM listings ORDER BY id")
-    assert rows[-1]["status"] == "scheduled" and rows[-1]["base_amount"] == 101 and rows[-1]["relist_count"] == 3
+    # 3 invendus : jusqu'à POSITION_MAX_LOSS (10 %) sous le prix d'achat (101 commission comprise).
+    assert rows[-1]["status"] == "scheduled" and rows[-1]["base_amount"] == 91 and rows[-1]["relist_count"] == 3
     assert (await db.get_bid(bid))["closed"] == 0
     await db.close()
 
@@ -78,9 +79,9 @@ async def test_unsold_position_kept_only_when_every_slot_is_taken(tmp_path):
     selling["n"] = 4
     bid = await simulated_position(db, 101, "a2")
     await db._exec("UPDATE listings SET relist_count = 2 WHERE bid_id = ?", (bid,))
-    await inv.settle_listings()  # une place libre : remise en vente au prix d'achat
+    await inv.settle_listings()  # une place libre : remise en vente au plancher (-10 % après 2 invendus)
     rows = await db._all("SELECT status, base_amount FROM listings WHERE bid_id = ? ORDER BY id", (bid,))
-    assert [r["status"] for r in rows] == ["sim_unsold", "scheduled"] and rows[1]["base_amount"] == 101
+    assert [r["status"] for r in rows] == ["sim_unsold", "scheduled"] and rows[1]["base_amount"] == 91
     assert (await db.get_bid(bid))["closed"] == 0
     await db.close()
 

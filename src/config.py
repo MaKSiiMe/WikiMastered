@@ -212,6 +212,11 @@ class Settings(BaseSettings):
     position_list_long_below: int = 5     # 0 = toujours POSITION_LIST_DURATION_MINUTES
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2         # puis au prix d'achat, tant qu'une place de vente est libre
+    # Après POSITION_LOSS_AFTER mises en vente sans acheteur, la revente peut descendre jusqu'à POSITION_MAX_LOSS
+    # sous le prix d'achat : une carte qui ne part pas bloque une des 5 places (~900 WB par revente qui tourne) et son
+    # capital (Mark Wahlberg ✨, achetée 6119, invendue à 7037 puis à 6333 le 25/10). 0 = jamais sous le prix d'achat.
+    position_max_loss: float = 0.10
+    position_loss_after: int = 2
 
     # --- Module C : inventaire --------------------------------------------------
     inventory_interval_minutes: float = 360.0
