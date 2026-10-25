@@ -109,6 +109,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("bids", "min_bid", "INTEGER"),
     ("bids", "start_price", "INTEGER"),
     ("bids", "seconds_left", "INTEGER"),
+    # Secondes entre la dernière lecture d'une enchère et sa fin (négatif : lue après sa fin, prix final sûr).
+    ("observed_sales", "seen_gap", "INTEGER"),
 ]
 # Vestiges d'anciennes versions, supprimés au démarrage d'une base existante.
 # Paquets (ouverts par l'extension depuis le 16/10) et tendances (arrêtées le 19/10) : retirés le 25/10.
@@ -584,7 +586,8 @@ class Database:
         """Transforme les enchères vues juste avant leur fin en ventes observées.
 
         Le dernier `current_bid` vu par le sniper (qui scrute les fins imminentes toutes
-        les ~3 s) approche le prix final. Une enchère sans mise n'est pas une vente."""
+        les ~3 s) approche le prix final. Une enchère sans mise n'est pas une vente. `seen_gap` garde l'écart entre
+        cette lecture et la fin, pour mesurer les prix notés trop tôt (voir HARVEST_DELAY du sniper)."""
         rows = await self._all("SELECT * FROM auctions_seen WHERE end_at < ?", (iso(before),))
         done, sales = [], []
         for r in rows:
@@ -595,13 +598,19 @@ class Database:
             if r["current_bid"] and seen and (end - seen).total_seconds() <= max_gap_seconds:
                 sales.append((r["auction_id"], r["card_id"], r["title"], r["rarity"], r["is_shiny"],
                               r["current_bid"], iso(end), r["seller_id"], r["bidder_id"], r["base_amount"],
-                              r["is_gif"]))
+                              r["is_gif"], round((end - seen).total_seconds())))
         await self.db.executemany(
             "INSERT OR IGNORE INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at, "
-            "seller_id, buyer_id, base_amount, is_gif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", sales)
+            "seller_id, buyer_id, base_amount, is_gif, seen_gap) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", sales)
         await self.db.executemany("DELETE FROM auctions_seen WHERE auction_id = ?", done)
         await self.db.commit()
         return len(sales)
+
+    async def correct_observed_sale(self, auction_id: str, price: int, buyer_id: str | None) -> None:
+        """Prix final et gagnant relus au règlement d'une de nos mises : ils remplacent la dernière lecture."""
+        await self.db.execute("UPDATE observed_sales SET price = ?, buyer_id = COALESCE(?, buyer_id) "
+                              "WHERE auction_id = ?", (price, buyer_id, auction_id))
+        await self.db.commit()
 
     async def gif_stats(self) -> list[aiosqlite.Row]:
         """Ventes observées par rareté, GIF ou non : nombre, cartes, prix et rapport prix final / départ."""

@@ -76,6 +76,15 @@ def list_price(cost: int, margin: float, fee: float = 0.0, estimate: float | Non
     return price
 
 
+def position_floor(cost: int, listings: int, s: Settings) -> int:
+    """Prix plancher d'une revente après `listings` mises en vente sans acheteur : le prix d'achat (commission
+    comprise), puis jusqu'à POSITION_MAX_LOSS dessous à partir de POSITION_LOSS_AFTER invendus."""
+    floor = list_price(cost, 0.0, s.sale_fee_pct)
+    if s.position_max_loss > 0 and listings >= s.position_loss_after:
+        floor = max(1, math.ceil(floor * (1 - s.position_max_loss)))
+    return floor
+
+
 @dataclass(frozen=True)
 class SaleCandidate:
     owned: OwnedCard
@@ -747,7 +756,7 @@ class InventoryManager(Worker):
 
     async def _undercut(self, row) -> int:
         """Prix de départ d'une revente face aux autres ventes de la même carte : juste sous la moins chère, jamais
-        sous le prix d'achat (commission comprise). Concurrente sous ce plancher : publiée au plancher. Appelée
+        sous le plancher (`position_floor`). Concurrente sous ce plancher : publiée au plancher. Appelée
         seulement quand une place de vente est libre, et une place vide ne rapporte rien : le 20/10, Diana Spencer
         (achetée 1022), gardée hors vente toute la nuit face à des ventes à 605-807, s'est vendue 2000 à la main, et
         les reventes du bot cette nuit-là ont fini à ×1,1-2,1 leur prix de départ."""
@@ -765,11 +774,13 @@ class InventoryManager(Worker):
                   and (a.seller_id or "").lower() != me]
         if not rivals or min(rivals) > row["base_amount"]:
             return row["base_amount"]
-        floor = list_price(bid["amount"], 0.0, self.settings.sale_fee_pct) if bid else 1
+        floor = position_floor(bid["amount"], row["relist_count"], self.settings) if bid else 1
         target = max(floor, min(rivals) - 1)
+        if target == row["base_amount"]:
+            return target
         if min(rivals) - 1 < floor:
-            self.log.info("%s : vente concurrente à %d WB, sous le prix d'achat : revente au prix d'achat (%d) au lieu "
-                          "de %d", row["title"], min(rivals), floor, row["base_amount"])
+            self.log.info("%s : vente concurrente à %d WB, sous le plancher : revente au plancher (%d) au lieu de %d",
+                          row["title"], min(rivals), floor, row["base_amount"])
         else:
             self.log.info("%s : vente concurrente à %d WB, revente à %d au lieu de %d", row["title"], min(rivals),
                           target, row["base_amount"])
@@ -891,13 +902,15 @@ class InventoryManager(Worker):
         return market if prices and market >= row["base_amount"] else None
 
     async def _unsold(self, row, bid, label: str) -> None:
-        """Invendue : remise en vente à −10 % (POSITION_MAX_RELISTS fois), puis au prix d'achat tant qu'une place de
+        """Invendue : remise en vente à −10 % (POSITION_MAX_RELISTS fois), puis au plancher (`position_floor` : prix
+        d'achat, ou jusqu'à POSITION_MAX_LOSS dessous après POSITION_LOSS_AFTER invendus) tant qu'une place de
         vente reste libre ; toutes prises, la carte est gardée (réel comme simulé). Le 20/10, Jorge Jesus (achetée
         216) et Les Feux de l'amour, gardées après 3 essais, se sont vendues à la main (250 et 330)."""
         if not bid:
             return
-        # Jamais sous le prix d'achat (commission comprise) : une revente à perte n'a pas d'intérêt.
-        floor = list_price(bid["amount"], 0.0, self.settings.sale_fee_pct)
+        # Plancher de la prochaine mise en vente : le prix d'achat, puis un peu dessous après POSITION_LOSS_AFTER
+        # invendus (une carte qui ne part pas bloque une place de vente et son capital).
+        floor = position_floor(bid["amount"], row["relist_count"] + 1, self.settings)
         if row["relist_count"] < self.settings.position_max_relists:
             price = max(floor, round(row["base_amount"] * self.settings.position_relist_discount))
         elif await self._slot_for_relist(bid["id"]):

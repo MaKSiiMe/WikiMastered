@@ -418,8 +418,20 @@ async def test_ended_auctions_become_observed_sales(tmp_path):
     await db.upsert_auctions([row("a1", 157, 3), row("a2", None, 3), row("a3", 90, 3600)])
     assert await db.harvest_ended_auctions(now - timedelta(seconds=30)) == 1  # sans mise / vue trop tôt : ignorées
     assert await db.observed_prices("gmmtv", 5) == ([157], 1)
+    assert (await db._one("SELECT seen_gap FROM observed_sales"))["seen_gap"] == 3
     assert await db._all("SELECT * FROM auctions_seen") == []
+    # Réglée plus haut (mise de dernière seconde, enchère prolongée) : le prix relu au règlement remplace la lecture.
+    await db.correct_observed_sale("a1", 290, "rival")
+    assert await db.observed_prices("gmmtv", 5) == ([290], 1)
+    assert (await db._one("SELECT buyer_id FROM observed_sales"))["buyer_id"] == "rival"
     await db.close()
+
+
+def test_position_floor_allows_a_small_loss_after_unsold_listings():
+    from src.workers.inventory_manager import position_floor
+    s = Settings(_env_file=None)
+    assert [position_floor(6119, n, s) for n in (0, 1, 2, 3)] == [6120, 6120, 5508, 5508]
+    assert position_floor(6119, 5, Settings(_env_file=None, position_max_loss=0)) == 6120
 
 
 @pytest.mark.asyncio

@@ -82,6 +82,10 @@ VANISHED_NOTE = "enchère introuvable sur le site"
 # Vente concurrente d'une revente : encore en cours au moins N après l'achat (une qui finit avant ne gêne guère).
 RIVAL_MIN_OVERLAP = timedelta(hours=1)
 _EPOCH = datetime.min.replace(tzinfo=UTC)
+# Une enchère finie devient une vente observée après ce délai : une mise de dernière seconde la prolonge, et la
+# relecture suivante (fins imminentes, toutes les ~4 s) doit avoir vu la nouvelle fin. Avec 30 s, sur les enchères
+# où le bot a misé du 16 au 25/10, 453 prix sur 1120 étaient notés trop bas (prix final réel ×1,74 en moyenne).
+HARVEST_DELAY = timedelta(seconds=120)
 
 
 @dataclass
@@ -432,7 +436,7 @@ class AuctionSniper(Worker):
                 t.recheck = True  # déjà en tête : relue à sa fin seulement
 
         if self._ticks % 10 == 5:
-            await self.db.harvest_ended_auctions(now - timedelta(seconds=30))
+            await self.db.harvest_ended_auctions(now - HARVEST_DELAY)
         if self._ticks % 10 == 0 and not guard:
             await self._settle()
             await self._reconcile()
@@ -1233,11 +1237,13 @@ class AuctionSniper(Worker):
                 continue
             simulated = row["status"] == "simulated"
             final = auction.final_price if auction.final_price is not None else auction.current_bid
+            winner = (auction.winner_id or auction.current_bidder_id or "").lower()
             if simulated:
                 won = auction.status == "settled_unsold" or final is None or final < row["amount"]
             else:
-                winner = (auction.winner_id or auction.current_bidder_id or "").lower()
                 won = auction.status == "settled_sold" and me is not None and winner == me
+            if auction.status == "settled_sold" and final:
+                await self.db.correct_observed_sale(row["auction_id"], final, winner or None)
             await self._close_bid(row, won, simulated, auction.card, final=final)
 
     async def _settled_auction(self, row) -> Auction | None:
