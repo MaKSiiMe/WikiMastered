@@ -15,9 +15,7 @@ Toutes les VALUE_SCAN_HOURS heures, ce worker :
 4. signale sur Discord les cartes cotées au moins VALUE_SCAN_MIN_VALUE pas encore signalées (ou dont la cote a
    monté de moitié depuis), avec les ventes concurrentes en cours, à la fin du passage et toutes les 3 h pendant
    un long passage. Il ne vend rien : à toi de décider ;
-5. avec VALUE_TAG_TIERS, étiquette un exemplaire de chaque carte de valeur selon son palier de cote (« 💎 1000+ »…),
-   pour les retrouver sur le site. Cet exemplaire n'est plus jamais vendu ni défaussé par le bot ;
-6. entre deux passages, cherche sur le marché toutes les VALUE_WATCH_MINUTES les cartes cotées au moins
+5. entre deux passages, cherche sur le marché toutes les VALUE_WATCH_MINUTES les cartes cotées au moins
    VALUE_WATCH_MIN et garde leurs ventes en cours (table value_sightings) : la cote d'une C ou d'une PC vient souvent
    d'une seule vente, ces relevés disent si la carte passe vraiment sur le marché, et à quel prix.
 
@@ -34,7 +32,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from src.config import Settings
-from src.core.client import ApiError, RateLimited, WikiMastersClient
+from src.core.client import ApiError, RateLimited
 from src.core.models import OwnedCard
 from src.core.notifier import Topic
 from src.core.pricing import ANY, Quote
@@ -151,43 +149,6 @@ def to_quote(cards: dict[str, int], cache: dict[str, tuple[datetime, bool]], fro
                   key=lambda cid: (cid in cache, cache.get(cid, (_EPOCH, False))[0], -cards[cid], cid))
 
 
-def tier_of(value: float, tiers: dict[int, str]) -> str | None:
-    """Étiquette du plus haut palier atteint par `value` (`tiers` : du plus haut au plus bas), ou None."""
-    return next((name for floor, name in tiers.items() if value >= floor), None)
-
-
-def plan_value_tags(groups: dict[str, list[OwnedCard]], found: list[Valuable], excluded: set[str],
-                    unpriced: set[str], skip: set[str], tiers: dict[int, str]) -> tuple[list[tuple[str, str]],
-                                                                                    list[tuple[str, str]]]:
-    """(ajouts, retraits) d'étiquettes de palier, en (exemplaire, étiquette). Un seul exemplaire libre par carte et
-    rareté porte l'étiquette de son palier : celui qui en a déjà une, sinon un non-shiny. Une carte retombée sous le
-    plus bas palier la perd, sauf si elle attend sa nouvelle cote (`unpriced`). Les cartes de `skip` (achetées par le
-    bot pour être revendues) ne sont jamais étiquetées. Les exemplaires non libres (favori, en vente…) ne sont pas
-    touchés."""
-    names = {name.casefold(): name for name in tiers.values()}
-    want = {v.key: tier_of(v.value, tiers) for v in found if v.card_id not in skip}
-    adds: list[tuple[str, str]] = []
-    removes: list[tuple[str, str]] = []
-    for card_id, copies in groups.items():
-        by_rarity: dict[str, list[OwnedCard]] = defaultdict(list)
-        for copy in free_copies(copies, excluded):
-            by_rarity[copy.rarity or "?"].append(copy)
-        for rarity, free in by_rarity.items():
-            key = f"{card_id}|{rarity}"
-            if key not in want and card_id in unpriced and card_id not in skip:
-                continue  # en attente de sa nouvelle cote : on n'y touche pas
-            tagged = {c.id: sorted(names[t] for t in c.tag_names if t in names) for c in free}
-            tagged = {cid: ts for cid, ts in tagged.items() if ts}
-            target, keeper = want.get(key), None
-            if target:
-                keeper = (next((cid for cid, ts in tagged.items() if target in ts), None) or next(iter(tagged), None)
-                          or min(free, key=lambda c: (c.is_shiny, c.id)).id)
-                if target not in tagged.get(keeper, []):
-                    adds.append((keeper, target))
-            removes += [(cid, t) for cid, ts in tagged.items() for t in ts if not (cid == keeper and t == target)]
-    return adds, removes
-
-
 def line(v: Valuable, rivals: tuple[int, int | None] | None, auto_list: bool) -> str:
     name = f"[{v.title}]({v.url})" if v.url else v.title
     source = f"{v.observed} vente(s) vue(s)" if v.observed else "moyenne du site"
@@ -260,7 +221,7 @@ class ValueScan(Worker):
         s = self.settings
         rows = await self.api.load_collection()
         groups = group_by_card(rows)
-        excluded = await excluded_copies(self.ctx, rows, value_tags=False)
+        excluded = await excluded_copies(self.ctx, rows)
         candidates = [cid for cid, copies in groups.items() if free_copies(copies, excluded)]
         views = {cid: max((c.card.pageviews or 0) for c in groups[cid]) for cid in candidates}
         frozen = await self.db.frozen_values()
@@ -352,7 +313,6 @@ class ValueScan(Worker):
             self.send_report(fresh, await self._rivals(fresh[:MAX_LINES]), priced, len(cycle.candidates))
         self._reported = remembered(found, self._reported, unpriced)
         self._watch = {v.key: v.title for v in found if 0 < s.value_watch_min <= v.value}
-        await self.tag_tiers(found, unpriced)
         self._summary = (f"{'Dernière analyse' if final else 'Analyse en cours'} le {now_local():%d/%m à %H:%M} : "
                          f"{priced}/{len(cycle.candidates)} cartes cotées, {len(found)} à {s.value_scan_min_value} "
                          f"WB ou plus ({len(fresh)} nouvelle(s))")
@@ -365,48 +325,6 @@ class ValueScan(Worker):
                                       "reported": self._reported, "summary": self._summary, "watch": self._watch})
         self.log.info("%s ; %d cote(s) demandée(s) au site, %d figée(s), %d restante(s)", self._summary,
                       self._looked_up, self._frozen_now, len(self._queue))
-
-    async def tag_tiers(self, found: list[Valuable], unpriced: set[str]) -> None:
-        """Pose, change ou retire les étiquettes de palier (VALUE_TAG_TIERS), en requêtes de fond."""
-        cycle, s = self._cycle, self.settings
-        assert cycle is not None
-        tiers = s.value_tiers()
-        if not tiers:
-            return
-        adds, removes = plan_value_tags(cycle.groups, found, cycle.excluded, unpriced,
-                                        await self.db.bought_card_ids(), tiers)
-        if not adds and not removes:
-            return
-        if not s.is_live("tag_card"):
-            self.log.info("[DRY RUN] étiquettes de valeur : %d à poser, %d à retirer", len(adds), len(removes))
-            return
-        client = self.ctx.client
-        try:
-            ids = await tag_ids(client, self.api.user_id or "", list(tiers.values()))
-            done, error = 0, ""
-            for owned_id, name in removes:
-                status, data = await client.supabase("DELETE", "user_card_tags", background=True, params={
-                    "user_card_id": f"eq.{owned_id}", "tag_id": f"eq.{ids[name]}"})
-                if status not in (200, 204):
-                    error = f"retrait refusé (HTTP {status}) : {str(data)[:200]}"
-                    break
-                done += 1
-            added = 0
-            for owned_id, name in adds if not error else []:
-                status, data = await client.supabase("POST", "user_card_tags", prefer="return=minimal",
-                                                     background=True,
-                                                     json_body={"user_card_id": owned_id, "tag_id": ids[name]})
-                if status not in (200, 201, 204, 409):  # 409 : déjà étiquetée
-                    error = f"ajout refusé (HTTP {status}) : {str(data)[:200]}"
-                    break
-                added += 1
-        except ApiError as exc:
-            self.notifier.warning("Étiquettes de valeur impossibles", str(exc))
-            return
-        self.log.info("étiquettes de valeur : %d posée(s), %d retirée(s)%s", added, done,
-                      f" ; {error}" if error else "")
-        if error:
-            self.notifier.warning("Étiquettes de valeur interrompues", error)
 
     async def watch_market(self) -> None:
         """Cherche chaque carte surveillée sur le marché (requêtes de fond) et garde ses ventes en cours, autres
@@ -480,27 +398,6 @@ class ValueScan(Worker):
         else:
             lines = [self._summary or "Pas encore d'analyse"]
         return lines + ([self._watch_summary] if self._watch_summary else [])
-
-
-async def tag_ids(client: WikiMastersClient, user_id: str, names: list[str]) -> dict[str, int | str]:
-    """Identifiant de chaque étiquette de `names` sur ton compte ; une étiquette absente est créée."""
-    status, data = await client.supabase("GET", "tags", background=True,
-                                         params={"select": "id,name", "user_id": f"eq.{user_id}"})
-    if status != 200:
-        raise ApiError(status, data, "supabase:tags", "étiquettes illisibles")
-    ids = {str(t.get("name", "")).strip().casefold(): t["id"] for t in data or [] if isinstance(t, dict)}
-    out: dict[str, int | str] = {}
-    for name in names:
-        if name.casefold() not in ids:
-            status, data = await client.supabase("POST", "tags", prefer="return=representation", background=True,
-                                                 json_body={"name": name, "user_id": user_id})
-            row = data[0] if isinstance(data, list) and data else data
-            if status not in (200, 201) or not isinstance(row, dict) or "id" not in row:
-                raise ApiError(status, data, "supabase:tags", f"étiquette « {name} » non créée (HTTP {status}) : "
-                               "crée-la une fois sur le site")
-            ids[name.casefold()] = row["id"]
-        out[name] = ids[name.casefold()]
-    return out
 
 
 # ------------------------------------------------------------------- CLI

@@ -274,15 +274,12 @@ def discard_affects_count(s: Settings) -> bool:
     return s.achievement_count_mode == "total" or bool(s.discard_last_copy_rarities)
 
 
-async def excluded_copies(ctx: Context, rows: list[OwnedCard], *, value_tags: bool = True) -> set[str]:
+async def excluded_copies(ctx: Context, rows: list[OwnedCard]) -> set[str]:
     """Exemplaires jamais vendus ni défaussés : engagés dans un échange, déjà en vente ou programmés, ou portant une
-    étiquette de PROTECTED_TAGS ou de palier de valeur (casse ignorée). `value_tags=False` : les étiquettes de palier
-    ne protègent pas (l'analyse de valeur doit continuer de voir les cartes qu'elle a étiquetées)."""
+    étiquette de PROTECTED_TAGS (casse ignorée)."""
     excluded = await ctx.api.protected_owned_ids({r.id for r in rows})
     excluded |= await ctx.db.scheduled_owned_ids()
-    tiers = {t.casefold() for t in ctx.settings.value_tiers().values()}
     protected = {t.casefold() for t in ctx.settings.protected_tags}
-    protected = protected | tiers if value_tags else protected - tiers
     return excluded | {r.id for r in rows if r.tag_names & protected}
 
 
@@ -448,16 +445,14 @@ class InventoryManager(Worker):
         return False
 
     async def _value_copy(self, v: ValueSale) -> str | None:
-        """Exemplaire à vendre : même rareté, ni favori, ni shiny, ni protégé (étiquette PROTECTED_TAGS, échange) ;
-        l'étiquette de palier de valeur ne protège pas. Un exemplaire non étiqueté part d'abord."""
+        """Exemplaire à vendre : même rareté, ni favori, ni shiny, ni protégé (étiquette PROTECTED_TAGS, échange)."""
         copies = [c for c in await self._owned_copies(v.card_id, v.title)
                   if (c.rarity or "?") == v.rarity and not c.starred and not c.is_shiny]
         if not copies:
             return None
-        excluded = await excluded_copies(self.ctx, copies, value_tags=False)
-        tiers = {t.casefold() for t in self.settings.value_tiers().values()}
-        free = sorted((c for c in copies if c.id not in excluded), key=lambda c: (bool(c.tag_names & tiers), c.id))
-        return free[0].id if free else None
+        excluded = await excluded_copies(self.ctx, copies)
+        free = sorted(c.id for c in copies if c.id not in excluded)
+        return free[0] if free else None
 
     # ------------------------------------------------------------ analyse
     async def snapshot(self, lookups: int | None = None

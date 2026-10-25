@@ -12,8 +12,7 @@ import pytest
 from src.config import Settings
 from src.core.models import OwnedCard
 from src.core.pricing import Quote
-from src.workers.value_scan import (ValueScan, find_valuable, frozen_value, next_watch, plan_value_tags, remembered,
-                                   tier_of, to_quote, to_report)
+from src.workers.value_scan import ValueScan, find_valuable, frozen_value, next_watch, remembered, to_quote, to_report
 from tests.test_integration import make_client, make_context
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
@@ -192,105 +191,7 @@ def test_settings_defaults():
     s = Settings(_env_file=None)
     assert (s.enable_value_scan, s.value_scan_hours, s.value_scan_min_value) == (True, 12.0, 100)
     assert (s.value_scan_lookups, s.value_scan_lookup_seconds, s.value_scan_freeze_below) == (0, 3.0, 50)
-    assert s.value_tiers() == {}  # pas d'étiquettes de palier sans VALUE_TAG_TIERS
-    s = Settings(_env_file=None, value_tag_tiers="100,1000,500")
-    assert s.value_tiers() == {1000: "💎 1000+", 500: "💎 500+", 100: "💎 100+"}
 
-
-TIERS = {1000: "💎 1000+", 500: "💎 500+", 100: "💎 100+"}
-
-
-def tagged(oid: str, card: str, *tags: str, **kw) -> OwnedCard:
-    return owned(oid, card, tags=[{"id": 1, "name": t} for t in tags], **kw)
-
-
-def test_tier_of_takes_the_highest_tier_reached():
-    assert [tier_of(v, TIERS) for v in (99, 100, 499, 500, 10972)] == [None, "💎 100+", "💎 100+", "💎 500+",
-                                                                       "💎 1000+"]
-
-
-def test_value_tags_follow_the_quote():
-    groups = groups_of(
-        owned("n1", "neuve", is_shiny=True), owned("n2", "neuve"),       # nouvelle : le non-shiny est étiqueté
-        tagged("m1", "montee", "💎 100+"),                                # passée à 600 : palier changé, même exemplaire
-        tagged("d1", "double", "💎 500+"), tagged("d2", "double", "💎 500+"),  # un seul exemplaire garde l'étiquette
-        tagged("t1", "tombee", "💎 100+"),                                # retombée sous 100 : étiquette retirée
-        tagged("a1", "attente", "💎 1000+"),                              # en attente de sa cote : gardée
-        owned("b1", "achetee", "L"),                                      # achetée par le bot pour la revente
-        tagged("v1", "vendue", "💎 100+"),                                # en vente (exclue) : pas touchée
-        tagged("f1", "favori", "💎 100+", starred=True))                   # favori : pas touché
-    quotes = {"neuve": {"C": Quote(1200, 0)}, "montee": {"C": Quote(600, 0)}, "double": {"C": Quote(700, 0)},
-              "tombee": {"C": Quote(60, 0)}, "attente": {"C": Quote(None, 0)}, "achetee": {"L": Quote(2000, 4)},
-              "vendue": {"C": Quote(20, 0)}, "favori": {"C": Quote(20, 0)}}
-    found = find_valuable(groups, quotes, {"v1"}, min_value=100, keep=1)
-    adds, removes = plan_value_tags(groups, found, {"v1"}, {"attente"}, {"achetee"}, TIERS)
-    assert adds == [("n2", "💎 1000+"), ("m1", "💎 500+")]
-    assert removes == [("m1", "💎 100+"), ("d2", "💎 500+"), ("t1", "💎 100+")]
-    # Une fois posées, rien ne bouge.
-    groups = groups_of(tagged("n2", "neuve", "💎 1000+"), tagged("m1", "montee", "💎 500+"))
-    found = find_valuable(groups, quotes, set(), min_value=100, keep=1)
-    assert plan_value_tags(groups, found, set(), set(), set(), TIERS) == ([], [])
-
-
-@pytest.mark.asyncio
-async def test_scan_tags_valuable_cards_and_protects_them(tmp_path):
-    import json as jsonlib
-
-    from src.workers.inventory_manager import excluded_copies
-    from tests.test_session import cookie_for
-
-    def row(oid, card, title, tags=()):
-        return {"id": oid, "card_id": card, "card": {"id": card, "wikipedia_title": title, "rarity": "C"},
-                "tags": [{"id": 9, "name": t} for t in tags]}
-    collection = [row("o1", "c1", "Volley albanais"), row("o2", "c2", "Mème", ["💎 100+"]),
-                  row("o3", "c3", "Banal", ["💎 100+"])]
-    summaries = {"c1": {"C": {"average": 2682}}, "c2": {"C": {"average": 640}}, "c3": {"C": {"average": 30}}}
-    supabase = []
-
-    def handler(request):
-        path = request.url.path
-        if request.url.host.endswith("supabase.co"):
-            body = jsonlib.loads(request.content) if request.content else None
-            supabase.append((request.method, path, body, dict(request.url.params)))
-            if path == "/rest/v1/tags" and request.method == "GET":
-                return httpx.Response(200, json=[{"id": 9, "name": "💎 100+"}, {"id": 3, "name": "date"}])
-            if path == "/rest/v1/tags":  # étiquette absente : créée
-                return httpx.Response(201, json=[{"id": 20 + len(supabase), "name": body["name"]}])
-            return httpx.Response(204 if request.method == "DELETE" else 201)
-        if path == "/api/my-collection":
-            return httpx.Response(200, json={"collection": collection})
-        if path == "/api/trades":
-            return httpx.Response(200, json={"trades": []})
-        if path.endswith("/sales"):
-            return httpx.Response(200, json={"summary": summaries[path.split("/")[-2]]})
-        if path == "/api/marketplace":
-            return httpx.Response(200, json={"auctions": []})
-        raise AssertionError(f"route inattendue {request.url}")
-
-    client, notifier = make_client(tmp_path, handler, dry_run=False, value_tag_tiers=[1000, 500, 100],
-                                   supabase_anon_key="anon-key", wm_cookie=cookie_for("a1", "r1", 3600))
-    ctx = await make_context(tmp_path, client, notifier)
-    worker = ValueScan(ctx)
-    await worker.setup()
-    worker._next_run = datetime.now(UTC)
-    await worker.step()
-    while worker._queue:
-        await worker.step()
-    await worker.step()  # analyse, message et étiquettes
-    writes = [(m, p.rsplit("/", 1)[-1], b, q) for m, p, b, q in supabase if m != "GET"]
-    created = {b["name"]: 20 + i + 1 for i, (m, p, b, q) in enumerate(supabase) if p == "/rest/v1/tags" and m == "POST"}
-    assert set(created) == {"💎 1000+", "💎 500+"}  # « 💎 100+ » existait déjà
-    assert [(m, t) for m, t, _, _ in writes if t == "user_card_tags"] == [("DELETE", "user_card_tags")] * 2 + [
-        ("POST", "user_card_tags")] * 2
-    assert [q for m, _, _, q in writes if m == "DELETE"] == [{"user_card_id": "eq.o2", "tag_id": "eq.9"},
-                                                             {"user_card_id": "eq.o3", "tag_id": "eq.9"}]
-    assert [b for m, t, b, _ in writes if m == "POST" and t == "user_card_tags"] == [
-        {"user_card_id": "o1", "tag_id": created["💎 1000+"]}, {"user_card_id": "o2", "tag_id": created["💎 500+"]}]
-    # L'exemplaire étiqueté n'est jamais vendu ni défaussé ; l'analyse, elle, le voit toujours.
-    rows = await ctx.api.load_collection()
-    assert await excluded_copies(ctx, rows) == {"o2", "o3"}
-    assert await excluded_copies(ctx, rows, value_tags=False) == set()
-    await ctx.db.close()
 
 
 @pytest.mark.asyncio
@@ -414,7 +315,7 @@ async def test_value_cards_sold_one_at_a_time_on_a_reserved_slot(tmp_path):
     def copy(oid, card, title, rarity="C", **kw):
         return {"id": oid, "card_id": card, "card": {"id": card, "wikipedia_title": title, "rarity": rarity}, **kw}
     collection = [copy("o1", "c1", "Crouchen", starred=True), copy("o2", "c1", "Crouchen", is_shiny=True),
-                  copy("o3", "c1", "Crouchen", tags=[{"name": "💎 1000+"}]),
+                  copy("o3", "c1", "Crouchen"),
                   copy("o4", "c2", "Manifestations du 17 octobre 2026"), copy("o5", "c3", "Sareee", "PC")]
     slots = {"selling": 5}
     posted, auctions = [], {}
@@ -436,7 +337,7 @@ async def test_value_cards_sold_one_at_a_time_on_a_reserved_slot(tmp_path):
             return httpx.Response(200, json={"auction": auctions[path.rsplit("/", 1)[-1]]})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False, value_tag_tiers=[1000],
+    client, notifier = make_client(tmp_path, handler, dry_run=False,
                                    value_sell_exclude=["Manifestations du 17 octobre 2026"])
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
@@ -465,7 +366,7 @@ async def test_value_cards_sold_one_at_a_time_on_a_reserved_slot(tmp_path):
     rows = await db._all("SELECT post_at FROM listings WHERE reason = 'cote 20'")
     assert all(datetime.fromisoformat(r["post_at"]) > now + timedelta(hours=1) for r in rows)
 
-    # La plus chère d'abord, sur l'exemplaire étiqueté (ni le favori ni le shiny), à 60 % de sa cote, pour 6 h.
+    # La plus chère d'abord, sur l'exemplaire libre (ni le favori ni le shiny), à 60 % de sa cote, pour 6 h.
     assert await inv.sell_value_card()
     await inv.post_due_listings()
     assert len(posted) == 1 and '"card_id":"o3"' in posted[0].replace(" ", "")

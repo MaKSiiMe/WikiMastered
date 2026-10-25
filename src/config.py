@@ -263,11 +263,6 @@ class Settings(BaseSettings):
     # Une carte cotée sous N WB (toutes ses raretés possédées) garde cette cote pour toujours : jamais redemandée,
     # ni par l'analyse ni par la vente des doublons (0 = jamais figée).
     value_scan_freeze_below: int = 50
-    # Paliers d'étiquettes (VALUE_TAG_TIERS=1000,500,100) : un exemplaire de chaque carte cotée au moins au plus bas
-    # palier porte l'étiquette du sien (VALUE_TAG_NAME, {} = le palier), créée sur ton compte si elle manque, changée
-    # quand la cote bouge, retirée sous le plus bas. L'exemplaire étiqueté n'est jamais vendu ni défaussé. Vide = non.
-    value_tag_tiers: IntList = Field(default_factory=list)
-    value_tag_name: str = "💎 {}+"
     # Les cartes cotées au moins VALUE_WATCH_MIN sont cherchées sur le marché toutes les VALUE_WATCH_MINUTES, en
     # requêtes de fond : leurs ventes en cours sont gardées (table value_sightings), pour savoir si elles passent
     # vraiment sur le marché et à quel prix. 0 = pas de surveillance. La nuit (NIGHT_START-NIGHT_END), moins de monde
@@ -326,11 +321,6 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
         return value
-
-    def value_tiers(self) -> dict[int, str]:
-        """Paliers des étiquettes de valeur, du plus haut au plus bas : {palier : nom de l'étiquette}."""
-        return {t: self.value_tag_name.format(t) for t in sorted({t for t in self.value_tag_tiers if t > 0},
-                                                                   reverse=True)}
 
     def is_live(self, endpoint: str) -> bool:
         """Cette écriture part-elle vraiment au site ? DRY_RUN, sauf LIVE_WRITES ; réel, sauf SIMULATE."""
