@@ -25,7 +25,6 @@ RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
 WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "sniper": ("place_bid",),            # mises des positions (achat pour revendre)
     "collection": ("collection_bid",),   # mises du mode collection (cartes gardées)
-    "packs": ("open_pack",), "paquets": ("open_pack",),
     "ventes": ("create_listing",), "inventory": ("create_listing", "bulk_discard"),
     "defausse": ("bulk_discard",), "tags": ("tag_card",),
     "succes": ("achievements_check", "claim_achievement"),
@@ -120,33 +119,13 @@ class Settings(BaseSettings):
     notify_simulated: bool = True
 
     # --- Workers ----------------------------------------------------------------
-    enable_pack_opener: bool = True
     enable_sniper: bool = True
     enable_inventory: bool = True
-    enable_wiki_trends: bool = True
-    enable_google_trends: bool = True
     enable_achievements: bool = True
     # Garde : profil relu toutes les N min ; une sanction du site arrête tout le bot (data/HALT).
     enable_profile_guard: bool = True
     profile_check_minutes: float = 15.0
     achievements_time: time = time(22, 50)  # succès réclamés une fois par jour, avant le bilan de 23:00
-
-    # --- Module B : paquets -----------------------------------------------------
-    pack_regen_minutes: float = 10.0
-    pack_max_stock: int = 10
-    pack_open_min_stock: int = 1
-    # Rythme humain, pour éviter les vérifications : une session d'ouverture toutes les 15 à 90 min
-    # (stock plafonné à 10, régénéré en 100 min : rien n'est perdu), paquets espacés de 5 à 15 s.
-    pack_interval_min_minutes: float = 15.0
-    pack_interval_max_minutes: float = 90.0
-    pack_between_opens_min_seconds: float = 5.0
-    pack_between_opens_max_seconds: float = 15.0
-    pack_notify_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
-    pack_notify_shiny: bool = True
-    # Ouverture échouée (vérification humaine, refus, limitation) : nouvel essai rapide, pour ne pas
-    # laisser le stock atteindre 10 (au-delà, les paquets sont perdus).
-    pack_retry_min_minutes: float = 5.0
-    pack_retry_max_minutes: float = 10.0
 
     # --- Cotes ------------------------------------------------------------------
     price_cache_ttl_minutes: float = 180.0
@@ -319,19 +298,6 @@ class Settings(BaseSettings):
     value_sell_minutes: int = 60
     value_sell_exclude: CsvList = Field(default_factory=list)
 
-    # --- Module E : tendances Wikipédia -----------------------------------------
-    trends_interval_minutes: float = 60.0
-    trends_top_n: int = 100
-    trends_spike_ratio: float = 3.0
-    trends_min_daily_views: int = 2000
-    trends_rarity_thresholds: dict[str, int] = Field(default_factory=lambda: {"L": 20000})
-    trends_search_limit: int = 15
-    trends_max_price: int = 0   # 0 = budget d'une position (solde × ratio / places)
-    trends_auto_buy: bool = False
-    # Cartes signalées par les tendances : seulement dans les logs et le bilan, sauf avec TRENDS_NOTIFY=true
-    # (un message Discord par passage : toutes les heures pour Wikipédia, toutes les 20 min pour Google).
-    trends_notify: bool = False
-    trends_auto_buy_max: int = 20
     # --- Module G : collection (cartes gardées, jamais revendues) ---------------------
     collection_sets: CsvList = Field(default_factory=list)    # « jours » = les 366 jours de l'année
     collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
@@ -343,14 +309,6 @@ class Settings(BaseSettings):
     collection_bids_per_check: int = 2
     collection_tag: str = "date"           # étiquette ajoutée à un exemplaire de chaque carte possédée ("" = non)
     collection_tag_max_per_run: int = 60   # étiquettes posées par passage (requêtes espacées)
-
-    # --- Module F : Google Trends (flux RSS public) ------------------------------
-    google_trends_url: str = "https://trends.google.com/trending/rss?geo={geo}"
-    google_trends_geo: str = "FR"
-    google_trends_interval_minutes: float = 20.0  # le flux ne couvre que la dernière heure environ
-    google_trends_min_traffic: int = 0
-
-    wikimedia_user_agent: str = "WikiMasteredBot/1.0 (self-hosted; configure WIKIMEDIA_USER_AGENT)"
 
     @field_validator("*", mode="before")
     @classmethod
@@ -377,7 +335,7 @@ class Settings(BaseSettings):
                 return f"0{value}"
         return value
 
-    @field_validator("pack_notify_rarities", "discard_rarities", "sniper_resale_rarities", "sniper_shadow_rarities",
+    @field_validator("discard_rarities", "sniper_resale_rarities", "sniper_shadow_rarities",
                      "sell_last_copy_rarities", "discard_last_copy_rarities")
     @classmethod
     def _check_rarities(cls, value: list[str]) -> list[str]:
@@ -387,7 +345,7 @@ class Settings(BaseSettings):
             raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
         return value
 
-    @field_validator("sniper_rarity_caps", "trends_rarity_thresholds")
+    @field_validator("sniper_rarity_caps")
     @classmethod
     def _check_rarity_keys(cls, value: dict[str, int]) -> dict[str, int]:
         value = {k.upper(): v for k, v in value.items()}

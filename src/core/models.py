@@ -224,28 +224,6 @@ class OwnedCopy(_Model):
     is_shiny: bool = False
 
 
-class PackOpenResult(_Model):
-    cards: list[Any] = []
-    packs_remaining: int | None = None
-    packs_last_regen_at: datetime | None = None
-    owned_copies: list[Any] = []
-    rate_limited: bool = False
-    rate_limit_daily: bool = False
-    retry_after: datetime | None = None
-    human_verification_required: bool = False
-    error: str | None = None
-    message: str | None = None
-
-    def pulled(self) -> list[tuple[Card, OwnedCopy | None]]:
-        """Associe chaque carte à un exemplaire, pour lire le shiny de chaque doublon [WR pack-cards.js]."""
-        copies = parse_items(OwnedCopy, self.owned_copies, label="exemplaire")
-        out: list[tuple[Card, OwnedCopy | None]] = []
-        for card in parse_items(Card, self.cards, label="carte"):
-            idx = next((i for i, c in enumerate(copies) if c.card_id == card.id), None)
-            out.append((card, copies.pop(idx) if idx is not None else None))
-        return out
-
-
 class DiscardResult(_Model):
     discarded_count: int
     failed: list[Any] = []

@@ -15,9 +15,9 @@ from tests.test_integration import ME, make_client, make_context, seed_observed
 def test_simulate_and_live_writes_groups():
     s = Settings(_env_file=None, dry_run=False, simulate=["sniper"], http_peak_spacing_seconds=0)
     assert not s.is_live("place_bid") and s.is_live("collection_bid") and s.is_live("create_listing")
-    assert s.is_live("open_pack") and s.mode_label == "RÉEL (simulé : sniper)"
-    d = Settings(_env_file=None, dry_run=True, live_writes=["packs", "ventes"])
-    assert d.is_live("open_pack") and d.is_live("create_listing") and not d.is_live("place_bid")
+    assert s.is_live("tag_card") and s.mode_label == "RÉEL (simulé : sniper)"
+    d = Settings(_env_file=None, dry_run=True, live_writes=["tags", "ventes"])
+    assert d.is_live("tag_card") and d.is_live("create_listing") and not d.is_live("place_bid")
     assert Settings(_env_file=None, collection_sets='"jours"').collection_sets == ["jours"]  # guillemets retirés
     assert Settings(_env_file=None, dry_run=False).mode_label == \
         "RÉEL, une requête toutes les 1 s de 09:00 à 02:00 (1.5 s sinon)"

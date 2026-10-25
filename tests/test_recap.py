@@ -32,7 +32,6 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     await db.connect()
     now = datetime.now(UTC)
     since = now - timedelta(hours=4)
-    await db.record_pack_open(5)
     for i in range(17):  # 17 positions simulées détenues, plafond 15
         await db.record_bid(auction_id=f"a{i}", card_id="c", title="t", rarity="C", is_shiny=False, amount=16,
                             reference_price=300, reason="revente ~300 WB", night=False, dry_run=True,
@@ -41,7 +40,7 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     workers = [
         worker("sniper", last_ok=now, next_due=now + timedelta(seconds=3),
                lines=["40 enchère(s) examinée(s) : pas assez vue vendue 30 · misée 10"]),
-        worker("packs", last_ok=now - timedelta(hours=2), next_due=now - timedelta(hours=1)),  # bloqué
+        worker("succes", last_ok=now - timedelta(hours=2), next_due=now - timedelta(hours=1)),  # bloqué
         worker("inventory", last_ok=now, next_due=now + timedelta(minutes=10), errors=2, last_error="HTTP 500"),
         worker("collection", last_ok=now, next_due=now + timedelta(hours=6)),
     ]
@@ -50,14 +49,14 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     blocks = dict(sections)
     assert problem and sections[0][0] == "À vérifier"
     assert "sniper : 17 positions ouvertes, plafond 15" in blocks["À vérifier"]
-    assert "packs : aucun passage depuis" in blocks["À vérifier"]
+    assert "succes : aucun passage depuis" in blocks["À vérifier"]
     assert "inventory : 2 erreur(s), dernière : HTTP 500" in blocks["À vérifier"]
     assert "pas assez vue vendue 30" in blocks["🎯 Sniper"] and "✅" in blocks["🎯 Sniper"]
-    assert "1 booster(s)" in blocks["🎴 Paquets"] and "❌ arrêté" in blocks["🎴 Paquets"]
+    assert "❌ arrêté" in blocks["🏆 Succès"]
     assert "⚠️ 2 erreur(s)" in blocks["💰 Ventes"]
     assert blocks["📅 Collection"].startswith("Collection : 37/366 (10,1 %)\nAucune nouvelle carte en 7 jours\n"
                                              "Sniper : 0 gagnée(s) · mises 0")
-    assert "📈 Tendances" not in blocks  # worker absent : pas de bloc
+    assert "💎 Valeur" not in blocks  # worker absent : pas de bloc
     assert description.startswith("Depuis ")
     assert workers[2].recent_errors == 0  # erreurs remises à zéro après le récap
     await db.close()
@@ -69,11 +68,11 @@ async def test_recap_flags_worker_waiting_for_you(tmp_path):
     await db.connect()
     now = datetime.now(UTC)
     ctx = SimpleNamespace(settings=Settings(_env_file=None), db=db, client=SimpleNamespace(session_ok=True))
-    packs = worker("packs", last_ok=now, next_due=now + timedelta(minutes=7), blocked="vérification humaine en attente")
-    problem, _, sections = await build_recap(ctx, [packs], now - timedelta(hours=4), now - timedelta(days=1))
+    sniper = worker("sniper", last_ok=now, next_due=now + timedelta(minutes=7), blocked="vérification humaine en attente")
+    problem, _, sections = await build_recap(ctx, [sniper], now - timedelta(hours=4), now - timedelta(days=1))
     blocks = dict(sections)
-    assert problem and "packs : vérification humaine en attente" in blocks["À vérifier"]
-    assert "⏸️ vérification humaine en attente" in blocks["🎴 Paquets"] and "✅" not in blocks["🎴 Paquets"]
+    assert problem and "sniper : vérification humaine en attente" in blocks["À vérifier"]
+    assert "⏸️ vérification humaine en attente" in blocks["🎯 Sniper"] and "✅" not in blocks["🎯 Sniper"]
     await db.close()
 
 

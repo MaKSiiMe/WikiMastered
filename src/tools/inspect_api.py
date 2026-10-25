@@ -123,6 +123,4 @@ async def inspect(ctx: Context, out_dir: str | None = None) -> None:
         if card_id:
             await probe("sales_summary", {"card_id": card_id}, SalesSummary, None, None)
             await probe("sales_history", {"card_id": card_id}, SalesHistory, SaleRow, "recent")
-    if ctx.client.endpoints.has("pack_status"):
-        await probe("pack_status", {}, None, None, None)
     print(f"Réponses brutes enregistrées dans {out}/ (contiennent des données de ton compte).")

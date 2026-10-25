@@ -17,25 +17,25 @@ from tests.test_integration import make_client, make_context
 
 
 @pytest.mark.asyncio
-async def test_broken_pack_route_does_not_pause_other_routes(tmp_path):
-    """L'ouverture de paquets renvoie 500 : seule sa route attend, le sniper (lectures, mises) continue."""
+async def test_broken_write_route_does_not_pause_other_routes(tmp_path):
+    """La vérification des succès renvoie 500 : seule sa route attend, le sniper (lectures, mises) continue."""
     calls = []
 
     def handler(request):
         calls.append(request.url.path)
-        if request.url.path == "/api/packs/open":
+        if request.url.path == "/api/achievements/check":
             return httpx.Response(500, json={"error": "boom"})
         return httpx.Response(200, json={"balance": 3})
 
     client, _ = make_client(tmp_path, handler, dry_run=False, backoff_base_seconds=60)
     api = WikiMastersAPI(client)
     with pytest.raises(UncertainMutation):
-        await api.open_pack()
-    assert client._failures == 0 and client.route_paused_for("open_pack") > 50
+        await api.achievements_check()
+    assert client._failures == 0 and client.route_paused_for("achievements_check") > 50
     assert await asyncio.wait_for(api.balance(), timeout=1) == 3  # pas de pause générale
     calls.clear()
     with pytest.raises(RateLimited):
-        await api.open_pack()  # route en pause : rien n'est envoyé
+        await api.achievements_check()  # route en pause : rien n'est envoyé
     assert calls == []
 
 

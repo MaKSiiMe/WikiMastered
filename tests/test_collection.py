@@ -64,31 +64,6 @@ async def test_duplicates_priced_within_quota(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_live_writes_open_packs_despite_dry_run(tmp_path):
-    from src.workers.pack_opener import PackOpener
-
-    sent = []
-
-    def handler(request):
-        sent.append(request.url.path)
-        return httpx.Response(200, json={"cards": [{"id": "c1", "wikipedia_title": "Ada", "rarity": "L"}],
-                                         "packs_remaining": 0})
-
-    client, notifier = make_client(tmp_path, handler, dry_run=True, live_writes=["open_pack"],
-                                   pack_between_opens_min_seconds=0, pack_between_opens_max_seconds=0)
-    assert client.settings.is_live("open_pack") and not client.settings.is_live("place_bid")
-    ctx = await make_context(tmp_path, client, notifier)
-    db, api = ctx.db, ctx.api
-    assert (await api.place_bid("x", 5)).dry_run  # les mises restent simulées
-    opener = PackOpener(ctx)
-    await opener.setup()
-    await opener._open_batch()
-    assert sent == ["/api/packs/open"]
-    assert len(await db.recent_pulls(__import__("datetime").datetime(2000, 1, 1))) == 1
-    await db.close()
-
-
-@pytest.mark.asyncio
 async def test_live_messages_have_no_dry_run_prefix():
     import json
 

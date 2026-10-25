@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -36,19 +35,6 @@ CREATE INDEX IF NOT EXISTS idx_price_history_card ON price_history (card_id, rar
 CREATE TABLE IF NOT EXISTS frozen_values (
     card_id TEXT NOT NULL, rarity TEXT NOT NULL, value REAL NOT NULL, frozen_at TEXT NOT NULL,
     PRIMARY KEY (card_id, rarity)
-);
-
-CREATE TABLE IF NOT EXISTS pulls (
-    id INTEGER PRIMARY KEY, opened_at TEXT NOT NULL, card_id TEXT, owned_card_id TEXT,
-    title TEXT, rarity TEXT, is_shiny INTEGER NOT NULL DEFAULT 0, pageviews INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS pack_opens (
-    id INTEGER PRIMARY KEY, opened_at TEXT NOT NULL, cards INTEGER NOT NULL DEFAULT 0
-);
--- Vérifications humaines demandées par le site à l'ouverture des paquets (fréquence, contexte).
-CREATE TABLE IF NOT EXISTS pack_checks (
-    id INTEGER PRIMARY KEY, requested_at TEXT NOT NULL, cleared_at TEXT, bot_started_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS bids (
@@ -86,28 +72,12 @@ CREATE TABLE IF NOT EXISTS observed_sales (
 );
 CREATE INDEX IF NOT EXISTS idx_observed_card ON observed_sales (card_id, ended_at);
 
--- Signaux de tendance (Wikipédia, Google Trends) : carte en vente au moment du signal,
--- pour mesurer ensuite si son prix a vraiment monté.
-CREATE TABLE IF NOT EXISTS trend_signals (
-    id INTEGER PRIMARY KEY, source TEXT NOT NULL, term TEXT NOT NULL, card_id TEXT NOT NULL, title TEXT,
-    auction_id TEXT NOT NULL, min_bid INTEGER NOT NULL, end_at TEXT NOT NULL, signal_at TEXT NOT NULL,
-    UNIQUE (source, auction_id)
-);
-CREATE TABLE IF NOT EXISTS trend_terms (
-    source TEXT NOT NULL, term TEXT NOT NULL, traffic INTEGER, first_seen TEXT NOT NULL, matched INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (source, term)
-);
-
 -- Ventes en cours des cartes de valeur de l'inventaire (VALUE_WATCH_MIN) : la carte passe-t-elle sur le marché ?
 CREATE TABLE IF NOT EXISTS value_sightings (
     auction_id TEXT PRIMARY KEY, card_id TEXT NOT NULL, title TEXT, rarity TEXT, is_shiny INTEGER NOT NULL DEFAULT 0,
     base_amount INTEGER, current_bid INTEGER, end_at TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sightings_card ON value_sightings (card_id, end_at);
-
-CREATE TABLE IF NOT EXISTS pageviews (
-    article TEXT NOT NULL, day TEXT NOT NULL, views INTEGER NOT NULL, PRIMARY KEY (article, day)
-);
 """
 
 
@@ -138,7 +108,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("bids", "seconds_left", "INTEGER"),
 ]
 # Vestiges d'anciennes versions, supprimés au démarrage d'une base existante.
-OBSOLETE = ["DROP TABLE IF EXISTS trend_alerts", "DROP INDEX IF EXISTS idx_auctions_title"]
+# Paquets (ouverts par l'extension depuis le 16/10) et tendances (arrêtées le 19/10) : retirés le 25/10.
+OBSOLETE = ["DROP TABLE IF EXISTS trend_alerts", "DROP INDEX IF EXISTS idx_auctions_title",
+            *(f"DROP TABLE IF EXISTS {t}" for t in ("pulls", "pack_opens", "pack_checks", "trend_signals", "trend_terms",
+                                                     "pageviews"))]
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
 WASH_PAIR_MIN = 2
 
@@ -292,36 +265,6 @@ class Database:
             [(card_id, r, avg, cnt, now) for r, (avg, cnt) in summary.items() if avg is not None],
         )
         await self.db.commit()
-
-    # ------------------------------------------------------------- tirages
-    async def record_pull(self, *, card_id: str, owned_card_id: str | None, title: str,
-                          rarity: str | None, is_shiny: bool, pageviews: int | None) -> None:
-        await self._exec(
-            "INSERT INTO pulls (opened_at, card_id, owned_card_id, title, rarity, is_shiny, pageviews) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (iso(utcnow()), card_id, owned_card_id, title, rarity, int(is_shiny), pageviews),
-        )
-
-    async def record_pack_open(self, cards: int) -> None:
-        await self._exec("INSERT INTO pack_opens (opened_at, cards) VALUES (?, ?)", (iso(utcnow()), cards))
-
-    async def record_pack_check(self, bot_started_at: datetime) -> None:
-        await self._exec("INSERT INTO pack_checks (requested_at, bot_started_at) VALUES (?, ?)",
-                         (iso(utcnow()), iso(bot_started_at)))
-
-    async def clear_pack_check(self) -> None:
-        await self._exec("UPDATE pack_checks SET cleared_at = ? WHERE cleared_at IS NULL", (iso(utcnow()),))
-
-    async def pack_checks(self) -> list[aiosqlite.Row]:
-        return await self._all("SELECT * FROM pack_checks ORDER BY requested_at")
-
-    async def packs_opened_between(self, start: str, end: str) -> int:
-        row = await self._one("SELECT COUNT(*) AS n FROM pack_opens WHERE opened_at >= ? AND opened_at < ?",
-                              (start, end))
-        return int(row["n"]) if row else 0
-
-    async def recent_pulls(self, since: datetime) -> list[aiosqlite.Row]:
-        return await self._all("SELECT * FROM pulls WHERE opened_at >= ? ORDER BY opened_at DESC", (iso(since),))
 
     # ------------------------------------------------------------- enchères
     async def record_bid(self, *, auction_id: str, card_id: str, title: str, rarity: str | None,
@@ -776,10 +719,6 @@ class Database:
 
         position = "reason NOT LIKE 'collection%'"
         return {
-            "boosters": await one("SELECT COUNT(*) FROM pack_opens WHERE opened_at >= ?"),
-            "cards": await one("SELECT COUNT(*) FROM pulls WHERE opened_at >= ?"),
-            "notable": await one("SELECT COUNT(*) FROM pulls WHERE opened_at >= ? AND (rarity IN ('UR', 'L') "
-                                 "OR is_shiny = 1)"),
             "observed": await one("SELECT COUNT(*) FROM observed_sales WHERE ended_at >= ?"),
             "bids_real": await one(f"SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 0 AND {position}"),
             "bids_sim": await one(f"SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 1 AND {position}"),
@@ -799,9 +738,6 @@ class Database:
             "unsold": await one("SELECT COUNT(*) FROM listings WHERE settled_at >= ? AND status = 'unsold'"),
             "sim_sold": await one("SELECT COUNT(*) FROM listings WHERE settled_at >= ? AND status = 'sim_sold'"),
             "sim_unsold": await one("SELECT COUNT(*) FROM listings WHERE settled_at >= ? AND status = 'sim_unsold'"),
-            "signals_google": await one("SELECT COUNT(*) FROM trend_signals WHERE signal_at >= ? AND source = 'google'"),
-            "signals_wiki": await one("SELECT COUNT(*) FROM trend_signals WHERE signal_at >= ? "
-                                      "AND source = 'wikipedia'"),
         }
 
     async def reset_simulation(self, *, apply: bool) -> dict[str, int]:
@@ -829,71 +765,6 @@ class Database:
             (card_id, rarity, int(shiny), iso(after), exclude, (me or "").lower()))
         return int(row["ask"]) if row and row["ask"] is not None else None
 
-    async def prune_auctions(self, before: datetime) -> None:
-        await self._exec("DELETE FROM auctions_seen WHERE end_at < ?", (iso(before),))
-
-    async def record_signal(self, *, source: str, term: str, card_id: str, title: str, auction_id: str,
-                            min_bid: int, end_at: datetime) -> bool:
-        """Enregistre un signal ; False s'il était déjà connu pour cette enchère."""
-        cur = await self.db.execute(
-            "INSERT OR IGNORE INTO trend_signals (source, term, card_id, title, auction_id, min_bid, end_at, signal_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (source, term, card_id, title, auction_id, min_bid, iso(end_at), iso(utcnow())),
-        )
-        await self.db.commit()
-        return cur.rowcount > 0
-
-    async def signals_since(self, since: datetime) -> list[aiosqlite.Row]:
-        return await self._all("SELECT * FROM trend_signals WHERE signal_at >= ? ORDER BY signal_at", (iso(since),))
-
-    async def term_is_new(self, source: str, term: str, traffic: int | None, now: datetime,
-                          every: float = 86400) -> bool:
-        """Vrai si le terme n'a pas été traité depuis `every` secondes (il est alors noté comme vu)."""
-        row = await self._one("SELECT first_seen FROM trend_terms WHERE source = ? AND term = ?", (source, term))
-        if row and (now - parse_iso(row["first_seen"])).total_seconds() < every:  # type: ignore[operator]
-            return False
-        await self._exec(
-            "INSERT INTO trend_terms (source, term, traffic, first_seen, matched) VALUES (?, ?, ?, ?, 0) "
-            "ON CONFLICT(source, term) DO UPDATE SET traffic = excluded.traffic, first_seen = excluded.first_seen, "
-            "matched = 0", (source, term, traffic, iso(now)))
-        return True
-
-    async def mark_term_matched(self, source: str, term: str) -> None:
-        await self._exec("UPDATE trend_terms SET matched = 1 WHERE source = ? AND term = ?", (source, term))
-
-    async def terms_stats(self, source: str, since: datetime) -> tuple[int, int]:
-        row = await self._one("SELECT COUNT(*) AS n, COALESCE(SUM(matched), 0) AS m FROM trend_terms "
-                              "WHERE source = ? AND first_seen >= ?", (source, iso(since)))
-        return (int(row["n"]), int(row["m"])) if row else (0, 0)
-
-    async def terms_since(self, source: str, since: datetime) -> list[aiosqlite.Row]:
-        return await self._all("SELECT term, first_seen, matched FROM trend_terms WHERE source = ? AND first_seen >= ?",
-                               (source, iso(since)))
-
-    async def observed_final(self, auction_id: str) -> int | None:
-        row = await self._one("SELECT price FROM observed_sales WHERE auction_id = ?", (auction_id,))
-        return int(row["price"]) if row else None
-
-    async def observed_prices_between(self, card_id: str, start: datetime, end: datetime,
-                                      exclude_auction: str) -> list[int]:
-        rows = await self._all("SELECT price FROM observed_sales WHERE card_id = ? AND ended_at > ? AND ended_at <= ? "
-                               "AND auction_id != ?", (card_id, iso(start), iso(end), exclude_auction))
-        return [r["price"] for r in rows]
-
-    async def pageviews_get(self, article: str, days: list[str]) -> dict[str, int]:
-        marks = ",".join("?" * len(days))
-        rows = await self._all(
-            f"SELECT day, views FROM pageviews WHERE article = ? AND day IN ({marks})", (article, *days)
-        )
-        return {r["day"]: r["views"] for r in rows}
-
-    async def pageviews_put(self, article: str, views: dict[str, int]) -> None:
-        await self.db.executemany(
-            "INSERT OR REPLACE INTO pageviews (article, day, views) VALUES (?, ?, ?)",
-            [(article, d, v) for d, v in views.items()],
-        )
-        await self.db.commit()
-
     # ----------------------------------------------------------- entretien
     async def purge(self, now: datetime) -> dict[str, int]:
         """Supprime les données qui ne servent plus, pour un fonctionnement sans entretien.
@@ -907,9 +778,6 @@ class Database:
             "price_history": ("observed_at < ?", before(60)),
             "price_cache": ("fetched_at < ?", before(30)),
             "observed_sales": ("ended_at < ?", before(120)),
-            "trend_terms": ("first_seen < ?", before(30)),
-            "trend_signals": ("signal_at < ?", before(90)),
-            "pageviews": ("day < ?", f"{now - timedelta(days=60):%Y%m%d}"),
             "value_sightings": ("end_at < ?", before(120)),
         }
         removed: dict[str, int] = {}
@@ -922,7 +790,6 @@ class Database:
     # -------------------------------------------------------------- bilan
     async def report(self, since: datetime) -> dict[str, Any]:
         s = iso(since)
-        pulls = await self._all("SELECT rarity, is_shiny FROM pulls WHERE opened_at >= ?", (s,))
         bids = await self._all(
             "SELECT status, amount, dry_run, reason FROM bids b WHERE placed_at >= ? AND id = "
             "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)", (s,)
@@ -936,13 +803,7 @@ class Database:
         _collection = lambda b: (b["reason"] or "").startswith("collection")  # noqa: E731
         dup = await self._one("SELECT COUNT(*) AS n, COALESCE(SUM(sale_price), 0) AS wb FROM listings "
                               "WHERE bid_id IS NULL AND status = 'sold' AND settled_at >= ?", (s,))
-        by_rarity = dict(Counter(p["rarity"] or "?" for p in pulls))
-        packs = await self._one("SELECT COUNT(*) AS n FROM pack_opens WHERE opened_at >= ?", (s,))
         return {
-            "boosters_ouverts": packs["n"] if packs else 0,
-            "cards_pulled": len(pulls),
-            "pulls_by_rarity": by_rarity,
-            "shiny_pulled": sum(p["is_shiny"] for p in pulls),
             # Bilan du 16/10 : « 585 mise(s) placée(s) » comptait les refus (vérification, mise trop basse), et
             # « 25 gagnée(s) » mêlait positions et cartes de collection.
             "bids_placed": sum(1 for b in bids if not b["dry_run"] and b["status"] != "rejected"),

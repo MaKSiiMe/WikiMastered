@@ -12,7 +12,7 @@ from src.config import Settings
 from src.core.client import user_id_from_cookie
 from src.core.database import Database
 from src.core.endpoints import Endpoints
-from src.core.models import Auction, CollectionPage, OwnedCard, PackOpenResult, SaleRow, min_next_bid
+from src.core.models import Auction, CollectionPage, OwnedCard, SaleRow, min_next_bid
 from src.core.pricing import Quote, combine, recent_estimates
 from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
@@ -23,8 +23,6 @@ from src.workers.auction_sniper import (
 from src.workers.inventory_manager import (
     achievement_guard, group_by_card, plan_listing_time, select_for_discard, select_for_sale,
 )
-from src.workers.pack_opener import PackState, seconds_until_stock
-from src.workers.wiki_trends import detect_spike, expected_rarity
 
 ROOT = Path(__file__).resolve().parents[1]
 ME = "11111111-1111-1111-1111-111111111111"
@@ -84,20 +82,7 @@ def test_invalid_rows_are_skipped():
     assert [r.id for r in page.rows()] == ["x"]
 
 
-def test_pack_pairs_shiny_copy():
-    pack = PackOpenResult.model_validate({
-        "cards": [{"id": "a", "wikipedia_title": "A", "rarity": "C"}, {"id": "a", "wikipedia_title": "A", "rarity": "C"}],
-        "packs_remaining": 3,
-        "owned_copies": [{"id": "o1", "card_id": "a", "is_shiny": False}, {"id": "o2", "card_id": "a", "is_shiny": True}],
-    })
-    assert [(c.id, copy.id, copy.is_shiny) for c, copy in pack.pulled()] == [("a", "o1", False), ("a", "o2", True)]
-
-
 # ---------------------------------------------------------------------- packs
-def test_pack_wait_from_last_regen():
-    state = PackState(remaining=0, last_regen_at=NOW - timedelta(minutes=4))
-    assert seconds_until_stock(state, 1, timedelta(minutes=10), NOW) == pytest.approx(360)
-    assert seconds_until_stock(PackState(), 1, timedelta(minutes=10), NOW) == 0
 
 
 # --------------------------------------------------------------------- sniper
@@ -326,13 +311,6 @@ def test_listing_ends_in_peak_window():
 
 
 # --------------------------------------------------------------------- trends
-def test_spike_detection_and_rarity():
-    s = settings(trends_spike_ratio=3, trends_min_daily_views=1000)
-    trend = detect_spike("Ada_Lovelace", 15000, [300] * 30, s)
-    assert trend and trend.ratio == pytest.approx(50)
-    assert expected_rarity(trend.projected_30d, {"L": 20000}) == "L"
-    assert detect_spike("X", 1500, [1000] * 30, s) is None
-    assert normalize_title("Élection_présidentielle") == normalize_title("election  presidentielle")
 
 
 # ------------------------------------------------------------------------ curl
@@ -360,15 +338,6 @@ def test_never_bid_in_the_last_ten_seconds():
     s = settings()
     assert snipe_params(s, night=True).window_seconds == snipe_params(s, night=False).window_seconds == 60
     assert s.sniper_min_seconds_left == 15  # 16/10 : fenêtre élargie à 60 s → 15 s
-
-
-def test_trend_terms_match_card_titles():
-    from src.workers.trend_common import title_matches
-    assert title_matches("François Berléand", "françois berléand")
-    assert title_matches("Squid Game", "squid game saison 3")
-    assert not title_matches("Décharge publique", "décharge")  # un seul mot : trop vague
-    assert not title_matches("Squid Game", "squid game saison 3", exact=True)
-    assert not title_matches("Game of Thrones", "squid game")
 
 
 def test_every_list_setting_accepts_csv_from_the_environment(monkeypatch):

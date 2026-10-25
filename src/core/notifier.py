@@ -30,8 +30,6 @@ class Topic(Enum):
     SNIPER = "🎯 Sniper"          # enchères, positions achetées
     COLLECTION = "📅 Collection"  # cartes de collection obtenues, étiquettes
     SALES = "💰 Ventes"           # mises en vente, reventes, défausses
-    PACKS = "🎴 Paquets"          # ouvertures de boosters
-    TRENDS = "📈 Tendances"       # signaux Wikipédia et Google Trends
     ACHIEVEMENTS = "🏆 Succès"    # récompenses de succès réclamées
     VALUE = "💎 Valeur"           # cartes de valeur repérées dans l'inventaire
     REPORT = "📊 Bilan"           # bilan du soir

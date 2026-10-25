@@ -6,8 +6,6 @@
     python -m src.main inventory scan|list|discard [--apply]
     python -m src.main value [--lookups 0]      # cartes de valeur de l'inventaire, derniers exemplaires compris
     python -m src.main report                   # envoie le bilan du jour sur Discord
-    python -m src.main trends [--days 7]        # les tendances auraient-elles rapporté ?
-    python -m src.main packs [--hours 24]       # paquets ouverts récemment
     python -m src.main collection               # collection à compléter (jours de l'année…)
     python -m src.main market [--pages 4] [--rarity UR]  # où sont les fins imminentes dans le marché
     python -m src.main profile                  # profil du joueur : solde, paquets, pity…
@@ -53,15 +51,11 @@ from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
 from src.workers.collection import CollectionWorker, progress_lines, summary_line, targets
 from src.workers.collection import refresh as refresh_collection
-from src.workers.google_trends import GoogleTrends
 from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
-from src.workers.pack_opener import PackOpener, checks_report
 from src.workers.profile_guard import ProfileGuard
-from src.workers.trend_report import day_line, trends_text
 from src.workers.value_scan import ValueScan
 from src.workers.value_scan import cli as value_cli
-from src.workers.wiki_trends import WikiTrends
 
 log = logging.getLogger("wikimastered")
 
@@ -109,34 +103,22 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
         stats["balance"] = await asyncio.wait_for(ctx.api.balance(), timeout=60)
     except Exception:  # noqa: BLE001 - le bilan part même sans solde
         stats["balance"] = "?"
-    pulls = stats.pop("pulls_by_rarity")
-    description, sections = report_sections(stats, pulls, live_bids=ctx.settings.is_live("place_bid"))
+    description, sections = report_sections(stats, live_bids=ctx.settings.is_live("place_bid"))
     extra = []
     if not ctx.settings.is_live("place_bid"):  # sniper simulé : on juge la simulation
         extra.append(validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales)))
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         extra.append(summary_line(await ctx.db.kv_get("collection"), targets(ctx)))
-    if ctx.settings.enable_google_trends or ctx.settings.enable_wiki_trends:
-        extra.append(await day_line(ctx.db, utcnow()))
     sections += [as_section(text) for text in extra]
-    if now_local().weekday() == 6:  # dimanche : mesure des tendances de la semaine (détail : commande trends)
-        text = await trends_text(ctx.db, 7, await min_profit(ctx), utcnow(), detailed=False)
-        sections.append(("Tendances de la semaine", text))
     if send:
         ctx.notifier.info(f"Bilan du {now_local():%d/%m}", description, topic=Topic.REPORT, sections=sections)
     return stats
 
 
-def report_sections(stats: dict, pulls: dict[str, int], *, live_bids: bool) -> tuple[str, list[tuple[str, str]]]:
+def report_sections(stats: dict, *, live_bids: bool) -> tuple[str, list[tuple[str, str]]]:
     """Bilan du soir : le solde en tête, puis un bloc par activité de la journée."""
     balance = stats["balance"]
     description = f"Solde : **{balance} WB**" if isinstance(balance, int) else "Solde : inconnu"
-    rarities = " · ".join(f"{r} {n}" for r, n in sorted(pulls.items(), key=lambda p: RARITY_RANK.get(p[0], -1)))
-    packs = f"{stats['boosters_ouverts']} booster(s), {stats['cards_pulled']} carte(s)"
-    if rarities:
-        packs += f"\n{rarities}"
-    if stats["shiny_pulled"]:
-        packs += f"\n✨ {stats['shiny_pulled']} shiny"
     # Positions simulées et mises de collection réelles (SIMULATE=sniper) : les deux comptes, sinon les cartes
     # gagnées (toujours réelles) semblaient venir des mises simulées.
     rejected = stats.get("bids_rejected", 0)
@@ -162,7 +144,7 @@ def report_sections(stats: dict, pulls: dict[str, int], *, live_bids: bool) -> t
         positions.append(f"{stats['positions_sold']} revendue(s), bénéfice {stats['profit']:+d} WB")
     if stats["profit_simulated"]:
         positions.append(f"Bénéfice simulé : {stats['profit_simulated']:+d} WB")
-    return description, [("Paquets", packs), ("Sniper", bids), ("Ventes", "\n".join(sales)),
+    return description, [("Sniper", bids), ("Ventes", "\n".join(sales)),
                          ("Positions", "\n".join(positions))]
 
 
@@ -172,17 +154,6 @@ def as_section(text: str) -> tuple[str, str]:
         head, _, rest = text[2:].partition("**")
         return head, rest.removeprefix(" :").strip() or "—"
     return "Divers", text
-
-
-async def min_profit(ctx: Context) -> int:
-    """Bénéfice exigé d'une position, d'après le solde actuel."""
-    s = ctx.settings
-    try:
-        balance = await asyncio.wait_for(ctx.api.balance(), timeout=60)
-    except Exception:  # noqa: BLE001
-        return s.portfolio_min_profit
-    budget = int(balance * s.portfolio_capital_ratio / max(1, s.portfolio_slots))
-    return max(s.portfolio_min_profit, int(budget * s.portfolio_min_profit_ratio))
 
 
 def validation_text(v: dict[str, int]) -> str:
@@ -421,16 +392,10 @@ async def supervise(name: str, start: Callable[[], Awaitable[None]], notifier) -
 async def run_bot(settings: Settings) -> None:
     async with build_context(settings) as ctx:
         workers: list[Worker] = []
-        if settings.enable_pack_opener:
-            workers.append(PackOpener(ctx))
         if settings.enable_sniper:
             workers.append(AuctionSniper(ctx))
         if settings.enable_inventory:
             workers.append(InventoryManager(ctx))
-        if settings.enable_wiki_trends:
-            workers.append(WikiTrends(ctx))
-        if settings.enable_google_trends:
-            workers.append(GoogleTrends(ctx))
         if settings.collection_sets or settings.collection_titles:
             workers.append(CollectionWorker(ctx))
         if settings.enable_achievements:
@@ -504,25 +469,6 @@ async def sniper_backtest(settings: Settings, days: float, capital: int, resale:
     print(backtest_text(cases, actual, settings, budget, days, resale))
 
 
-async def packs_status(ctx: Context, hours: int) -> None:
-    """Paquets ouverts ces dernières heures (lecture de la base, aucune requête)."""
-    rows = await ctx.db.recent_pulls(utcnow() - timedelta(hours=hours))
-    if not ctx.settings.is_live("open_pack"):
-        print("DRY_RUN : les paquets ne sont PAS ouverts. Ajoute LIVE_WRITES=open_pack pour les ouvrir quand même.")
-    print("Vérifications humaines :")
-    print("\n".join(await checks_report(ctx.db)))
-    if not rows:
-        print(f"Aucune carte tirée ces {hours} dernières heures.")
-        return
-    by_rarity = Counter(r["rarity"] or "?" for r in rows)
-    last = datetime.fromisoformat(rows[0]["opened_at"]).astimezone()
-    print(f"{len(rows)} carte(s) tirée(s) en {hours} h, dernière ouverture le {last:%d/%m à %H:%M}")
-    print("Par rareté : " + " ".join(f"{k}:{v}" for k, v in sorted(by_rarity.items())))
-    for r in rows[:15]:
-        when = datetime.fromisoformat(r["opened_at"]).astimezone()
-        print(f"  {when:%d/%m %H:%M}  {r['rarity'] or '?':>2}{' ✨' if r['is_shiny'] else '  '} {r['title']}")
-
-
 async def collection_status(ctx: Context) -> None:
     """Relit la collection à compléter et affiche possédées / manquantes."""
     s = ctx.settings
@@ -588,10 +534,6 @@ async def profile_status(ctx: Context) -> str:
     return profile_text(data) if status == 200 else f"HTTP {status} : {profile_text(data)}"
 
 
-async def trends_status(ctx: Context, days: int) -> str:
-    return await trends_text(ctx.db, days, await min_profit(ctx), utcnow())
-
-
 async def gifs_status(ctx: Context) -> str:
     return gif_text(await ctx.db.gif_stats())
 
@@ -633,10 +575,6 @@ def main(argv: list[str] | None = None) -> None:
     mk.add_argument("--pages", type=int, default=4)
     mk.add_argument("--sort", default="ending_soon")
     mk.add_argument("--rarity", default="", help="C, PC, R, SR, UR, L…")
-    pk = sub.add_parser("packs", help="paquets ouverts récemment (lecture seule)")
-    pk.add_argument("--hours", type=int, default=24)
-    tr = sub.add_parser("trends", help="mesure des signaux de tendance (lecture seule)")
-    tr.add_argument("--days", type=int, default=7)
     sim = sub.add_parser("reset-simulation", help="efface les mises et ventes simulées (sans --apply : compte)")
     sim.add_argument("--apply", action="store_true", help="efface vraiment")
     sub.add_parser("gifs", help="les cartes GIF se vendent-elles mieux ? (ventes observées, lecture seule)")
@@ -685,8 +623,6 @@ def main(argv: list[str] | None = None) -> None:
         "inspect": lambda ctx: inspect(ctx, args.out),
         "collection": collection_status,
         "market": lambda ctx: market_status(ctx, max(1, min(args.pages, 10)), args.sort, args.rarity.upper()),
-        "packs": lambda ctx: packs_status(ctx, args.hours),
-        "trends": lambda ctx: trends_status(ctx, args.days),
         "gifs": gifs_status,
         "profile": profile_status,
         "hours": lambda ctx: hours_status(ctx, args.rarity),

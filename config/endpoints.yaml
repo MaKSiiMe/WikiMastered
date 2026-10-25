@@ -74,11 +74,6 @@ endpoints:
     params: {active: "1"}
 
   # --- Écriture (bloquées tant que DRY_RUN=true, jamais rejouées) -------------------
-  open_pack:                    # [KZ bridge/packs.js, WR pack-cards.js] pas de corps
-    method: POST                # -> { cards, packs_remaining, packs_last_regen_at, owned_copies }
-    path: /api/packs/open       #    ou { rate_limited, retry_after } | { rate_limit_daily }
-                                #    | { human_verification_required }
-
   place_bid:                    # [WR market-api.js] -> { current_bid, bidder_balance }
     method: POST                #   erreur possible : { error, min }
     path: /api/marketplace/{auction_id}/bid
@@ -106,11 +101,3 @@ endpoints:
     method: POST                # -> { discarded_count, failed: [] }
     path: /api/user-cards/bulk-discard
     json: {card_ids: "{owned_card_ids}"}
-
-  # Statut des paquets SANS en ouvrir : aucune route REST documentée (le site lit la table
-  # Supabase `profiles` : packs_remaining, packs_last_regen_at, pack_human_verified_at).
-  # Si tu la récupères dans DevTools, déclare-la ici sous le nom `pack_status` ; le bot
-  # s'en servira automatiquement (champs attendus : packs_remaining, packs_last_regen_at).
-  # pack_status:
-  #   method: GET
-  #   path: ...
