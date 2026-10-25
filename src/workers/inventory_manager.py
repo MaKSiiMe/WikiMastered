@@ -115,10 +115,20 @@ def keep_order(row: OwnedCard) -> tuple:
     return (not row.starred, not row.is_shiny, -RARITY_RANK.get(row.rarity or "", -1), row.id)
 
 
-def newest_sellable(copies: list[OwnedCard]) -> str | None:
-    """Exemplaire à vendre : le plus récent hors favori (le site refuse de vendre un favori)."""
-    copies = sorted((c for c in copies if not c.starred), key=lambda r: r.obtained_at or _EPOCH, reverse=True)
-    return copies[0].id if copies else None
+def same_copies(copies: list[OwnedCard], rarity: str | None, shiny: bool) -> list[OwnedCard]:
+    """Exemplaires de la rareté et de la version (shiny ou non) d'une position : une carte existe en plusieurs
+    raretés, et un exemplaire plus récent d'une autre (tiré d'un paquet) ne doit pas être vendu à sa place."""
+    return [c for c in copies if (c.rarity or "?") == (rarity or "?") and c.is_shiny == shiny]
+
+
+def newest_sellable(copies: list[OwnedCard], protected: set[str] | frozenset[str] = frozenset(),
+                    since: datetime | None = None) -> str | None:
+    """Exemplaire à vendre : le plus récent hors favori (le site refuse de vendre un favori) et hors étiquette
+    protégée ; arrivé depuis `since` (la mise) s'il y en a un, pour ne pas vendre un exemplaire qu'on avait déjà."""
+    free = [c for c in copies if not c.starred and not (c.tag_names & protected)]
+    fresh = [c for c in free if since and c.obtained_at and c.obtained_at >= since]
+    pool = fresh or free
+    return max(pool, key=lambda r: r.obtained_at or _EPOCH).id if pool else None
 
 
 def group_by_card(rows: list[OwnedCard]) -> dict[str, list[OwnedCard]]:
@@ -638,7 +648,8 @@ class InventoryManager(Worker):
     async def _find_copy(self, row) -> str | None:
         """Exemplaire acheté : le plus récent de cette carte dans la collection, jamais un favori (le site refuse
         de le vendre : le 16/10, Place publique refusée 3 fois « en favori », puis revente abandonnée)."""
-        copies = await self._owned_copies(row["card_id"], row["title"])
+        copies = same_copies(await self._owned_copies(row["card_id"], row["title"]), row["rarity"],
+                             bool(row["is_shiny"]))
         if not copies:
             log = self.log.warning if row["id"] not in self._copy_retry else self.log.debug  # une fois par série
             log("position %s : exemplaire introuvable dans la collection (nouvel essai toutes les %d min)",
@@ -652,7 +663,11 @@ class InventoryManager(Worker):
                                       "Retire l'étoile pour que le bot la revende (il réessaie toutes les 10 min).")
             self.log.debug("position %s : seul exemplaire en favori (réessai)", row["title"])
             return None
-        return newest_sellable(copies)
+        return newest_sellable(copies, self._protected_tags(),
+                               datetime.fromisoformat(row["placed_at"]) - timedelta(minutes=1))
+
+    def _protected_tags(self) -> set[str]:
+        return {t.casefold() for t in self.settings.protected_tags}
 
     async def _owned_copies(self, card_id: str, title: str) -> list[OwnedCard]:
         """Exemplaires de cette carte pas déjà en vente : recherchés par titre sur toutes les pages, sinon parmi les
@@ -732,7 +747,10 @@ class InventoryManager(Worker):
                     # L'invendue revient sous un autre identifiant d'exemplaire : le 18/10, Liste des éclipses
                     # solaires et Les Feux de l'amour, refusées 2 fois en 5 min, étaient retrouvées 30 s après.
                     try:
-                        copy = newest_sellable(await self._owned_copies(row["card_id"], row["title"]))
+                        bid = await self.db.get_bid(row["bid_id"])
+                        copy = newest_sellable(same_copies(await self._owned_copies(row["card_id"], row["title"]),
+                                                           row["rarity"], bool(bid and bid["is_shiny"])),
+                                               self._protected_tags())
                     except ApiError:
                         copy = None
                     if copy and copy != row["owned_card_id"]:
