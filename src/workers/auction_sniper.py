@@ -636,8 +636,9 @@ class AuctionSniper(Worker):
             return False
         quote = await self._against_rivals(
             a, await self.ctx.prices.quote(a.catalog_id, a.rarity, shiny=a.shiny, fetch=False))
+        # Shiny : la cote du site n'entre pas dans l'estimation, rien à attendre d'elle.
         why = hopeless(a, params, quote, self.settings.price_min_sales, self.settings.sale_fee_pct,
-                       self._min_profit, await self.ctx.prices.is_cached(a.catalog_id))
+                       self._min_profit, a.shiny or await self.ctx.prices.is_cached(a.catalog_id))
         if why is None:
             return False
         self.log.debug("%s à %d WB : %s, pas relue", a.title, a.min_bid, why)

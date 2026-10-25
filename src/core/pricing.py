@@ -9,7 +9,8 @@ Sources, de la plus fiable à la moins fiable :
    aux comptes non PRO, donc rarement disponible.
 3. Moyenne ?scope=summary [KZ bridge/prices.js], sans nombre de ventes hors PRO.
 
-Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence).
+Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence), sauf pour un
+shiny : la moyenne du site ne les distingue pas (elle vaut ~10 % de leurs ventes), ventes shiny observées seules.
 Contre la manipulation des cotes (ventes factices entre comptes, relevé par la presse et JVFlux) :
 une vente plus de 3 fois au-dessus ou au-dessous de la médiane est écartée, et les ventes entre
 un vendeur et un acheteur qui ont déjà fait affaire ensemble ne comptent pas (core/database.py).
@@ -177,12 +178,18 @@ class PriceService:
         requête passe après toutes les autres."""
         raw = await self.db.observed_by_rarity(card_id, self.recent_n, shiny)
         observed, steady = trusted(raw), steadiness(raw)
-        try:
-            market = await self._market(card_id, max_age or self.default_ttl, wait, fetch, background)
-        except (RateLimited, ApiError):
-            if not observed:
-                raise
+        if shiny:
+            # La cote du site ne distingue que la rareté : celle d'un shiny est celle de la carte ordinaire. Le 25/10,
+            # elle valait en médiane 10 % des ventes shiny (Mark Wahlberg ✨ ~7800, cote 675) et, en cache, faisait
+            # refuser toutes les reventes shiny : ventes shiny observées seules, et aucune requête.
             market = {}
+        else:
+            try:
+                market = await self._market(card_id, max_age or self.default_ttl, wait, fetch, background)
+            except (RateLimited, ApiError):
+                if not observed:
+                    raise
+                market = {}
         keys = {r for r in market if r in RARITIES} | set(observed)
         quotes = {r: combine(*observed.get(r, ([], 0)), market.get(r, (None, None))[0], *steady.get(r, (None, None)))
                   for r in keys}
