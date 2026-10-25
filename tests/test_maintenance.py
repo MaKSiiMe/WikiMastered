@@ -32,6 +32,28 @@ async def test_purge_keeps_accounting_and_recent_market(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_purged_sales_keep_their_highest_price_for_discard(tmp_path):
+    """Ventes observées gardées 60 jours (~26 000 par jour le 24/10) ; une carte vendue cher il y a 90 jours n'est
+    toujours pas défaussable."""
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(UTC)
+    await db.db.executemany("INSERT INTO observed_sales (auction_id, card_id, price, ended_at) VALUES (?, 'c', ?, ?)",
+                            [("a90", 900, (now - timedelta(days=90)).isoformat()),
+                             ("a70", 300, (now - timedelta(days=70)).isoformat()),
+                             ("a2", 2, (now - timedelta(days=2)).isoformat())])
+    await db.db.commit()
+    await db.price_put("c", {"C": (2.0, 1)})
+    assert (await db.purge(now))["observed_sales"] == 2
+    assert (await db.known_values())["c"] == 900
+    await db.db.execute("INSERT INTO observed_sales (auction_id, card_id, price, ended_at) VALUES ('a65', 'c', 50, ?)",
+                        ((now - timedelta(days=65)).isoformat(),))
+    await db.purge(now)  # un prix plus bas ne remplace pas le plus haut gardé
+    assert (await db.known_values())["c"] == 900
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_obsolete_tables_dropped_on_existing_database(tmp_path):
     """Une base d'une ancienne version perd ses vestiges au démarrage ; le reste est gardé."""
     path = tmp_path / "t.db"

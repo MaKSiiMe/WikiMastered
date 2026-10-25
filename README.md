@@ -181,7 +181,7 @@ Pour corriger ou ajouter une route : `python -m src.tools.parse_curl --name plac
 
 ## Données
 
-Le volume `data/` contient `wikimastered.db` (SQLite : cotes, enchères, ventes, défausses, ventes observées), `logs/bot.log`, la session et le `heartbeat` du healthcheck Docker. Il survit aux redéploiements et reste hors Git. Après chaque bilan, le bot purge les cotes de plus de 60 jours, les ventes observées de plus de 120 jours et les vues Wikipédia de plus de 60 jours.
+Le volume `data/` contient `wikimastered.db` (SQLite : cotes, enchères, ventes, défausses, ventes observées), `logs/bot.log`, la session et le `heartbeat` du healthcheck Docker. Il survit aux redéploiements et reste hors Git. Après chaque bilan, le bot purge les cotes de plus de 60 jours et les ventes observées de plus de 60 jours (environ 26 000 par jour, la base finirait sinon vers 1,2 Go) ; le plus haut prix de chaque carte purgée est gardé, pour que la défausse n'oublie jamais qu'une carte s'est vendue cher.
 
 ## Développement
 

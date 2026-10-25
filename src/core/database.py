@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS observed_sales (
     is_shiny INTEGER NOT NULL DEFAULT 0, price INTEGER NOT NULL, ended_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_observed_card ON observed_sales (card_id, ended_at);
+-- Plus haut prix observé de chaque carte parmi les ventes purgées (OBSERVED_KEEP_DAYS) : la défausse ne doit pas
+-- oublier qu'une carte s'est déjà vendue cher.
+CREATE TABLE IF NOT EXISTS observed_max (card_id TEXT PRIMARY KEY, price INTEGER NOT NULL);
 
 -- Ventes en cours des cartes de valeur de l'inventaire (VALUE_WATCH_MIN) : la carte passe-t-elle sur le marché ?
 CREATE TABLE IF NOT EXISTS value_sightings (
@@ -112,6 +115,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
 OBSOLETE = ["DROP TABLE IF EXISTS trend_alerts", "DROP INDEX IF EXISTS idx_auctions_title",
             *(f"DROP TABLE IF EXISTS {t}" for t in ("pulls", "pack_opens", "pack_checks", "trend_signals", "trend_terms",
                                                      "pageviews"))]
+# Ventes observées gardées N jours (estimations, ventes factices, commandes hours et gifs).
+OBSERVED_KEEP_DAYS = 60
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
 WASH_PAIR_MIN = 2
 
@@ -232,7 +237,8 @@ class Database:
         for r in await self._all("SELECT card_id, MAX(average) AS v FROM price_cache GROUP BY card_id "
                                  "UNION ALL SELECT card_id, MAX(value) FROM frozen_values GROUP BY card_id"):
             out[r["card_id"]] = max((x for x in (out.get(r["card_id"]), r["v"]) if x is not None), default=None)
-        for r in await self._all("SELECT card_id, MAX(price) AS v FROM observed_sales GROUP BY card_id"):
+        for r in await self._all("SELECT card_id, MAX(price) AS v FROM observed_sales GROUP BY card_id "
+                                 "UNION ALL SELECT card_id, price FROM observed_max"):
             if r["card_id"] in out:
                 out[r["card_id"]] = max((x for x in (out[r["card_id"]], r["v"]) if x is not None), default=None)
         return out
@@ -763,15 +769,22 @@ class Database:
     async def purge(self, now: datetime) -> dict[str, int]:
         """Supprime les données qui ne servent plus, pour un fonctionnement sans entretien.
 
-        Enchères, ventes, tirages et défausses sont gardés (comptabilité). Les ventes observées
-        récentes suffisent à l'estimation (médiane des 5 dernières) : les plus vieilles sont datées."""
+        Enchères, ventes et défausses sont gardés (comptabilité). Les ventes observées récentes suffisent à
+        l'estimation (médiane des 5 dernières) : ~26 000 par jour le 24/10, 1,2 Go en 120 jours. Celles de plus de
+        OBSERVED_KEEP_DAYS partent, leur plus haut prix par carte est gardé (observed_max) pour la défausse."""
         def before(days: int) -> str | None:
             return iso(now - timedelta(days=days))
+
+        await self.db.execute(
+            "INSERT INTO observed_max (card_id, price) SELECT card_id, MAX(price) FROM observed_sales "
+            "WHERE ended_at < ? GROUP BY card_id "
+            "ON CONFLICT(card_id) DO UPDATE SET price = MAX(observed_max.price, excluded.price)",
+            (before(OBSERVED_KEEP_DAYS),))
 
         rules = {
             "price_history": ("observed_at < ?", before(60)),
             "price_cache": ("fetched_at < ?", before(30)),
-            "observed_sales": ("ended_at < ?", before(120)),
+            "observed_sales": ("ended_at < ?", before(OBSERVED_KEEP_DAYS)),
             "value_sightings": ("end_at < ?", before(120)),
         }
         removed: dict[str, int] = {}
