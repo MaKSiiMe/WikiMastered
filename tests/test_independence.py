@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from src import main
 from src.core.api import WikiMastersAPI
 from src.core.client import RateLimited, UncertainMutation
+from src.core.timeutils import PARIS
 from src.workers.base import Worker
 from tests.test_integration import make_client, make_context
 
@@ -113,3 +115,23 @@ async def test_crashed_task_is_restarted_while_others_keep_running(monkeypatch):
     await asyncio.gather(*tasks, return_exceptions=True)
     assert runs["n"] >= 3 and ticks["n"] > 10  # packs relancé, le sniper n'a jamais été interrompu
     assert alerts[0] == "packs : tâche arrêtée, relancée" and len(alerts) <= 2
+
+
+def test_peak_spacing_falls_back_after_site_limits(tmp_path):
+    """Pic de ventes : une requête par seconde ; le site limite le bot, retour à 1,5 s pendant le délai réglé."""
+    now = datetime.now(PARIS)
+    around = {"http_peak_start": (now - timedelta(hours=1)).time(), "http_peak_end": (now + timedelta(hours=1)).time()}
+    client, _ = make_client(tmp_path, lambda r: httpx.Response(200, json={}), http_min_spacing_seconds=1.5,
+                            http_peak_spacing_seconds=1.0, **around)
+    assert client.spacing() == 1.0
+    client._route_backoff("sales_summary", 0)  # refus isolé des cotes : le pic continue
+    assert client.spacing() == 1.0
+    client._route_backoff("sales_summary", 0)
+    assert client.spacing() == 1.5
+    client._peak_off_until = float("-inf")
+    client._backoff("market_page: ReadTimeout", limited=False)
+    assert client.spacing() == 1.5
+    later = {"http_peak_start": (now + timedelta(hours=1)).time(), "http_peak_end": (now + timedelta(hours=2)).time()}
+    off, _ = make_client(tmp_path, lambda r: httpx.Response(200, json={}), http_min_spacing_seconds=1.5,
+                         http_peak_spacing_seconds=1.0, **later)
+    assert off.spacing() == 1.5  # hors du pic

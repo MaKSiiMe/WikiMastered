@@ -33,11 +33,12 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
+from src.config import Settings
 from src.core.client import ApiError, RateLimited, WikiMastersClient
 from src.core.models import OwnedCard
 from src.core.notifier import Topic
 from src.core.pricing import ANY, Quote
-from src.core.timeutils import PARIS, now_local, utcnow
+from src.core.timeutils import PARIS, in_window, next_local, now_local, utcnow
 from src.workers.base import Context, Worker
 from src.workers.inventory_manager import excluded_copies, group_by_card, spare_copies
 
@@ -199,6 +200,16 @@ def line(v: Valuable, rivals: tuple[int, int | None] | None, auto_list: bool) ->
         count, cheapest = rivals
         text += f" · {count} en vente, dès {cheapest} WB" if count else " · aucune autre en vente"
     return text
+
+
+def next_watch(now: datetime, s: Settings) -> datetime:
+    """Prochaine surveillance du marché : toutes les VALUE_WATCH_NIGHT_MINUTES la nuit, toutes les VALUE_WATCH_MINUTES
+    sinon, et au plus tard au début de la nuit (moins de monde sur le site, le sniper a moins à relire)."""
+    if s.value_watch_night_minutes <= 0:
+        return now + timedelta(minutes=s.value_watch_minutes)
+    if in_window(now, s.night_start, s.night_end):
+        return now + timedelta(minutes=s.value_watch_night_minutes)
+    return min(now + timedelta(minutes=s.value_watch_minutes), next_local(s.night_start, now).astimezone(UTC))
 
 
 # ---------------------------------------------------------------------- worker
@@ -424,7 +435,7 @@ class ValueScan(Worker):
                     self.log.info("marché : %s (%s%s) en vente, départ %d WB, mise %s, fin %s", a.title, a.rarity,
                                   " ✨" if a.shiny else "", a.base_amount, a.current_bid or "aucune",
                                   f"{a.end_at.astimezone(PARIS):%d/%m %H:%M}")
-        self._watch_due = utcnow() + timedelta(minutes=s.value_watch_minutes)
+        self._watch_due = next_watch(utcnow(), s)
         week = await self.db.sightings_since(utcnow() - timedelta(days=7))
         cards = {r["card_id"] for r in week}
         self._watch_summary = (f"Marché des cartes à {s.value_watch_min} WB ou plus (7 j) : {len(week)} vente(s) "

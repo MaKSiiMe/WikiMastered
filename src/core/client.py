@@ -30,7 +30,7 @@ import httpx
 from src.config import Settings
 from src.core.endpoints import BuiltRequest, Endpoints
 from src.core.notifier import DiscordNotifier
-from src.core.timeutils import utcnow
+from src.core.timeutils import in_window, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -245,6 +245,7 @@ class WikiMastersClient:
         self._no_urgent.set()
         self._next_slot = 0.0
         self._pause_until = 0.0
+        self._peak_off_until = float("-inf")  # écart du pic suspendu jusqu'à (le site a limité le bot)
         self._failures = 0
         self._server_error_route: str | None = None  # route d'un 500 récent, sans succès depuis
         self._degraded_alerted = False
@@ -496,9 +497,30 @@ class WikiMastersClient:
         return resp.status_code, _json_or_none(resp)
 
     # ------------------------------------------------------------ espacement
+    def _peak(self) -> bool:
+        """Dans le pic de ventes (HTTP_PEAK_START-END), avec un écart plus court que l'écart normal."""
+        s = self.settings
+        return (0 < s.http_peak_spacing_seconds < s.http_min_spacing_seconds
+                and in_window(utcnow(), s.http_peak_start, s.http_peak_end))
+
+    def spacing(self) -> float:
+        """Écart minimal entre deux requêtes : celui du pic, sauf juste après une limitation du site."""
+        if self._peak() and time.monotonic() >= self._peak_off_until:
+            return self.settings.http_peak_spacing_seconds
+        return self.settings.http_min_spacing_seconds
+
+    def _peak_cooldown(self, reason: str) -> None:
+        """Le site limite le bot pendant le pic : retour à l'écart normal pendant HTTP_PEAK_COOLDOWN_MINUTES."""
+        if not self._peak():
+            return
+        now = time.monotonic()
+        if now >= self._peak_off_until:
+            log.warning("Pic : retour à une requête toutes les %g s pendant %g min (%s)",
+                        self.settings.http_min_spacing_seconds, self.settings.http_peak_cooldown_minutes, reason)
+        self._peak_off_until = now + self.settings.http_peak_cooldown_minutes * 60
+
     def _take_slot(self) -> None:
-        self._next_slot = (time.monotonic() + self.settings.http_min_spacing_seconds
-                           + random.uniform(0, self.settings.http_jitter_seconds))
+        self._next_slot = time.monotonic() + self.spacing() + random.uniform(0, self.settings.http_jitter_seconds)
 
     async def _acquire_background_slot(self) -> None:
         """Requête de fond (cotes de tout l'inventaire) : seulement quand personne n'attend et que le créneau
@@ -508,7 +530,7 @@ class WikiMastersClient:
         while True:
             await self._no_urgent.wait()
             async with self._slot_lock:
-                free_at = max(self._next_slot + self.settings.http_min_spacing_seconds, self._pause_until)
+                free_at = max(self._next_slot + self.spacing(), self._pause_until)
                 wait = free_at - time.monotonic()
                 if wait <= 0 and not self._waiting:
                     self._take_slot()
@@ -563,6 +585,7 @@ class WikiMastersClient:
         delay = max(delay, retry_after)
         self._pause_until = max(self._pause_until, time.monotonic() + delay)
         log.warning("Pause réseau %.0f s (%s, échec #%d)", delay, reason, self._failures)
+        self._peak_cooldown(reason)  # site limité ou en difficulté : pas de rythme accéléré à la reprise
         now = time.monotonic()
         if limited and now - self._last_rate_alert > 900:
             self._last_rate_alert = now
@@ -588,6 +611,8 @@ class WikiMastersClient:
         self._route_pause[name] = (time.monotonic() + delay, failures)
         self._route_refused.add(name)
         log.warning("Route %s limitée par le site : pause %.0f s (échec #%d)", name, delay, failures)
+        if failures >= 2:  # un refus isolé des cotes arrive aussi à l'écart normal (18/10 : toutes les ~80 min)
+            self._peak_cooldown(f"route {name} refusée {failures} fois de suite")
         now = time.monotonic()
         # Un refus isolé se règle seul en ~1 min (18/10 : sales_summary refusée une fois toutes les ~80 min, jamais
         # deux fois de suite) : logs seulement. Message à partir de N refus de suite, dans le salon d'activité.

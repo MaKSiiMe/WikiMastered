@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     # --- Réseau / anti-ban -----------------------------------------------------
     http_min_spacing_seconds: float = 1.5
     http_jitter_seconds: float = 0.8
+    # Pic de ventes (heures de Paris) : un écart plus court, pour relire plus de ventes à miser. Du 18 au 24/10, 1100 à
+    # 1430 L finissaient par heure de 09 h à 02 h, deux fois moins de 03 h à 08 h. Dès que le site limite le bot,
+    # retour à HTTP_MIN_SPACING_SECONDS pendant HTTP_PEAK_COOLDOWN_MINUTES. HTTP_PEAK_SPACING_SECONDS=0 : jamais.
+    http_peak_start: time = time(9, 0)
+    http_peak_end: time = time(2, 0)
+    http_peak_spacing_seconds: float = 1.0
+    http_peak_cooldown_minutes: float = 30.0
     http_timeout_seconds: float = 20.0
     http_get_max_attempts: int = 4
     backoff_base_seconds: float = 30.0
@@ -297,9 +304,11 @@ class Settings(BaseSettings):
     value_tag_name: str = "💎 {}+"
     # Les cartes cotées au moins VALUE_WATCH_MIN sont cherchées sur le marché toutes les VALUE_WATCH_MINUTES, en
     # requêtes de fond : leurs ventes en cours sont gardées (table value_sightings), pour savoir si elles passent
-    # vraiment sur le marché et à quel prix. 0 = pas de surveillance.
+    # vraiment sur le marché et à quel prix. 0 = pas de surveillance. La nuit (NIGHT_START-NIGHT_END), moins de monde
+    # sur le site et moins de ventes à relire pour le sniper : toutes les VALUE_WATCH_NIGHT_MINUTES (0 = comme le jour).
     value_watch_min: int = 500
-    value_watch_minutes: float = 60.0
+    value_watch_minutes: float = 120.0
+    value_watch_night_minutes: float = 30.0
     # Vente des cartes de valeur : une carte surveillée (VALUE_WATCH_MIN) cotée au moins VALUE_SELL_MIN est mise en
     # vente pour VALUE_SELL_MINUTES, une seule à la fois, à VALUE_SELL_SHARE de sa cote (jamais sous la plus haute
     # mise vue sur le marché), dernier exemplaire et exemplaire étiqueté compris. Une place de vente lui est gardée ;
@@ -413,6 +422,9 @@ class Settings(BaseSettings):
         label = f"RÉEL (simulé : {', '.join(self.simulate)})" if self.simulate else "RÉEL"
         if self.sniper_live_start is not None and self.sniper_live_end is not None:
             label += f", positions réelles de {self.sniper_live_start:%H:%M} à {self.sniper_live_end:%H:%M}"
+        if 0 < self.http_peak_spacing_seconds < self.http_min_spacing_seconds:
+            label += (f", une requête toutes les {self.http_peak_spacing_seconds:g} s de {self.http_peak_start:%H:%M} "
+                      f"à {self.http_peak_end:%H:%M} ({self.http_min_spacing_seconds:g} s sinon)")
         return label
 
     @property
