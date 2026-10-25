@@ -6,18 +6,15 @@ Il parle directement aux routes JSON du site, sans navigateur, et rend compte su
 | Worker | Fichier | Rôle | Étiquette Discord |
 |---|---|---|---|
 | Client | `src/core/client.py` | Session, espacement des requêtes, pauses sur 429/5xx, renouvellement de session | ⚙️ Système |
-| Paquets | `src/workers/pack_opener.py` | Ouvre les paquets gratuits à un rythme humain | 🎴 Paquets |
 | Sniper | `src/workers/auction_sniper.py` | Achète peu mais gros, uniquement pour revendre | 🎯 Sniper |
 | Inventaire | `src/workers/inventory_manager.py` | Revend les positions et les doublons, défausse protégée | 💰 Ventes |
 | Collection | `src/workers/collection.py` | Complète la collection des 366 jours, pose l'étiquette « date » | 📅 Collection |
-| Tendances | `src/workers/wiki_trends.py`, `google_trends.py` | Pics Wikipédia et recherches Google croisés avec le marché | 📈 Tendances |
 | Succès | `src/workers/achievements.py` | Réclame les récompenses des succès débloqués, chaque soir à 22:50 | 🏆 Succès |
 | Valeur | `src/workers/value_scan.py` | Toutes les 12 h, cote tout l'inventaire et signale les cartes de valeur, derniers exemplaires compris | 💎 Valeur |
 
 > **À lire avant de lancer**
 > - Automatiser un compte peut être contraire aux conditions d'utilisation de WikiMasters et mener à un bannissement. L'espacement des requêtes limite la charge sur le site ; il ne garantit rien.
-> - `DRY_RUN=true` par défaut : aucune enchère, vente, défausse ni ouverture n'est envoyée. Les actions sont journalisées et annoncées sur Discord avec le préfixe `[DRY RUN]`. Le passage en réel se fait worker par worker (voir [Réel ou simulé](#réel-ou-simulé)).
-> - Quand le site demande une **vérification humaine** pour les paquets, le bot s'arrête et te prévient. Il ne la contourne jamais : fais-la toi-même dans ton navigateur.
+> - `DRY_RUN=true` par défaut : aucune enchère, vente ni défausse n'est envoyée. Les actions sont journalisées et annoncées sur Discord avec le préfixe `[DRY RUN]`. Le passage en réel se fait worker par worker (voir [Réel ou simulé](#réel-ou-simulé)).
 
 ## Autonomie
 
@@ -28,11 +25,9 @@ Il parle directement aux routes JSON du site, sans navigateur, et rend compte su
 | Fonction | Preuve |
 |---|---|
 | Renouvellement de la session (avec `SUPABASE_ANON_KEY`) | « Session renouvelée » toutes les heures dans les logs |
-| Ouverture des paquets | Boosters ouverts toute la journée (hors vérification humaine, voir plus bas) |
 | Vente des doublons (`AUTO_LIST`) | Ventes programmées puis publiées (réponse réelle HTTP 201 relevée) |
 | Lecture de la collection | 38/366 jours lus toutes les 6 h |
 | Récap toutes les 4 h, bilan à 23:00, purge de la base | Messages Discord reçus, « Entretien de la base » dans les logs |
-| Signaux de tendance | Wikipédia et Google Trends enregistrés à chaque passage |
 | Mise à jour du bot | Chaque PR fusionnée sur `main` est déployée par Portainer en ~5 min |
 
 **En place, à confirmer sur les prochains jours :**
@@ -42,15 +37,13 @@ Il parle directement aux routes JSON du site, sans navigateur, et rend compte su
 | Repérage des ventes par le sniper et mises sur les jours manquants (réelles) | Lignes `collection : … en vente … (dans X min)` puis `… misée (collection)` ; ligne « Repérage » du récap sans « pas relue à temps » |
 | Succès réclamés chaque soir à 22:50 | Message « Succès réclamés », ou `data/inspect/writes/claim_achievement-1.json` (routes pas encore vérifiées) |
 | Cotes protégées (ventes aberrantes, factices, sans concurrence) | Rien à voir : elles rendent seulement les estimations plus prudentes |
-| Suivi des vérifications humaines | `python -m src.main packs` après quelques jours |
 | Meilleure heure de fin pour revendre | `python -m src.main hours` (ventes observées par heure de fin, UR et L ; `--rarity` pour d'autres) |
 | Étiquette « date » posée sur les jours obtenus | Message « Collection : étiquettes ajoutées » au prochain jour gagné |
 
 **Simulé, en attente de ta décision :** la revente du sniper (UR et L). Le bilan du soir contient un bloc « Validation de la simulation » ; passer en réel = retirer `sniper` de `SIMULATE`.
 
 **Ce qui demande ton intervention (alerte 🔴 sur Discord) :**
-- **Vérification humaine des paquets** : à faire toi-même dans ton navigateur, le bot ne la contourne jamais. Rien n'est perdu tant que tu la fais avant que le stock atteigne 10 paquets (~1 h 30). Un redémarrage du bot semble la déclencher.
-- **Vérification anti-bot des enchères** : les mises réelles sont refusées tant que tu ne l'as pas faite dans ton navigateur (mise à la main sur le marché, ou page Paquets si elle la demande). En attendant, le bot ne tente qu'une mise toutes les 5 min (`SNIPER_ANTIBOT_RETRY_SECONDS`, 0 = chaque mise tentée, utile quand une extension passe la vérification dans le navigateur) et te prévient dès qu'une mise repasse.
+- **Vérification anti-bot des enchères** : les mises réelles sont refusées tant que tu ne l'as pas faite dans ton navigateur (mise à la main sur le marché, ou page Paquets si elle la demande ; les paquets s'ouvrent dans ton navigateur, le bot ne les ouvre pas). En attendant, le bot ne tente qu'une mise toutes les 5 min (`SNIPER_ANTIBOT_RETRY_SECONDS`, 0 = chaque mise tentée, utile quand une extension passe la vérification dans le navigateur) et te prévient dès qu'une mise repasse.
 - **Sanction du site** : le bot relit ton profil toutes les 15 min. Au premier avertissement de triche (`cheat_strikes`), blocage d'activité ou sanction, il s'arrête net (plus aucune requête, même après un redémarrage) et t'alerte. Pour reprendre : `rm data/HALT` dans la console du conteneur, puis redémarre la stack.
 - **Session perdue** : seulement si le renouvellement est refusé (par exemple après « Déconnexion » sur le site avec la même session). Colle un nouveau cookie dans `data/session_cookie.txt`.
 
@@ -75,7 +68,6 @@ docker compose exec wikimastered python -m src.main check
 | `WM_COOKIE` | DevTools (F12) > *Réseau*, connecté sur wiki-masters.com > une requête `/api/wikibidous` > *En-têtes de requête* > `cookie`. Valeur complète ; elle contient `sb-…-auth-token` (parfois en `.0`, `.1`). |
 | `WM_USER_AGENT` | Même requête, en-tête `user-agent`. |
 | `DISCORD_WEBHOOK_URL` | Salon Discord > *Modifier le salon* > *Intégrations* > *Webhooks*. |
-| `WIKIMEDIA_USER_AGENT` | Ton contact (URL ou e-mail), exigé par l'API Wikimedia. |
 
 Conseillées : `SUPABASE_ANON_KEY` (le bot renouvelle lui-même sa session, voir [docs/PORTAINER.md](docs/PORTAINER.md)), `DISCORD_ALERT_WEBHOOK_URL` et `DISCORD_MENTION` (alertes critiques), `ACHIEVEMENT_MILESTONES` (sans eux, aucune défausse). Toutes les variables sont commentées dans [.env.example](.env.example).
 
@@ -86,11 +78,11 @@ Raccourci : dans DevTools, clic droit sur une requête `/api/…` > *Copier comm
 | Réglage | Effet |
 |---|---|
 | `DRY_RUN=true` | Tout est simulé. |
-| `DRY_RUN=true` + `LIVE_WRITES=packs` | Seules les écritures listées sont réelles. |
+| `DRY_RUN=true` + `LIVE_WRITES=ventes` | Seules les écritures listées sont réelles. |
 | `DRY_RUN=false` + `SIMULATE=sniper` | Tout est réel sauf les mises des positions du sniper. |
 | `DRY_RUN=false` | Tout est réel. |
 
-Groupes acceptés : `sniper`, `collection`, `packs`, `ventes`, `defausse`, `tags`, `succes`, `inventory` (= ventes + défausse). Tant que le sniper est simulé, le bilan du soir contient un bloc « Validation de la simulation » qui dit quand le passage en réel est envisageable. Une fois les mises réelles, `SNIPER_SHADOW=true` garde un sniper de test : il simule les achats que le sniper réel ne fait pas (au-dessus de `SNIPER_MAX_BID`, achats épuisés, plafond atteint, raretés `SNIPER_SHADOW_RARITIES`), sans plafond de mise ni de positions, pour continuer à mesurer la stratégie. `NOTIFY_SIMULATED=false` réserve Discord au réel. Chaque matin à 08:00 (`SNIPER_REPORT_TIME`), un récap liste toutes les enchères misées sur 24 h (`SNIPER_REPORT_HOURS`) : réelles, sniper de test et collection, avec la plus-value latente des cartes gagnées, le gain réalisé, et le gain non acquis des enchères perdues (« dans nos limites » quand le gagnant a payé moins que notre plafond).
+Groupes acceptés : `sniper`, `collection`, `ventes`, `defausse`, `tags`, `succes`, `inventory` (= ventes + défausse). Tant que le sniper est simulé, le bilan du soir contient un bloc « Validation de la simulation » qui dit quand le passage en réel est envisageable. Une fois les mises réelles, `SNIPER_SHADOW=true` garde un sniper de test : il simule les achats que le sniper réel ne fait pas (au-dessus de `SNIPER_MAX_BID`, plafond atteint, raretés `SNIPER_SHADOW_RARITIES`), sans plafond de mise ni de positions, pour continuer à mesurer la stratégie. `NOTIFY_SIMULATED=false` réserve Discord au réel. Chaque matin à 08:00 (`SNIPER_REPORT_TIME`), un récap liste toutes les enchères misées sur 24 h (`SNIPER_REPORT_HOURS`) : réelles, sniper de test et collection, avec la plus-value latente des cartes gagnées, le gain réalisé, et le gain non acquis des enchères perdues (« dans nos limites » quand le gagnant a payé moins que notre plafond).
 
 ## Discord
 
@@ -103,18 +95,17 @@ La couleur indique l'importance :
 | 🔵 Bleu | Information | Bot démarré, boosters ouverts, résumé des enchères, bilan du soir |
 | 🟢 Vert | Bonne nouvelle | Position achetée, revente réussie, tirage UR / L / Shiny, carte de collection obtenue |
 | 🟠 Orange | À surveiller | Position invendue, mise en vente refusée, erreurs répétées, bot arrêté |
-| 🔴 Rouge | Il faut agir | Session expirée, vérification humaine des paquets, enchère non confirmée |
+| 🔴 Rouge | Il faut agir | Session expirée, vérification anti-bot des enchères, enchère non confirmée |
 
-Les messages rouges partent dans `DISCORD_ALERT_WEBHOOK_URL` s'il est défini, avec la mention `DISCORD_MENTION`. Avec `DISCORD_ACTIVITY_WEBHOOK_URL` (un 2e salon), le salon principal (à laisser sonner) ne garde que l'essentiel : alertes, achats, mises en vente et ventes réelles, cartes de valeur de l'inventaire, bilan du soir et récap du sniper ; tout le reste va dans le salon d'activité (à mettre en sourdine) : paquets et tirages, cartes de collection gagnées, succès, digests d'enchères, récaps périodiques, tendances, simulé (`off` : logs seulement).
+Les messages rouges partent dans `DISCORD_ALERT_WEBHOOK_URL` s'il est défini, avec la mention `DISCORD_MENTION`. Avec `DISCORD_ACTIVITY_WEBHOOK_URL` (un 2e salon), le salon principal (à laisser sonner) ne garde que l'essentiel : alertes, achats, mises en vente et ventes réelles, cartes de valeur de l'inventaire, bilan du soir et récap du sniper ; tout le reste va dans le salon d'activité (à mettre en sourdine) : cartes de collection gagnées, succès, digests d'enchères, récaps périodiques, simulé (`off` : logs seulement).
 
 **Ce qui n'envoie pas de message à chaque fois :**
 - les enchères : un résumé toutes les `NOTIFY_DIGEST_MINUTES` (60) ; `NOTIFY_EACH_BID=true` envoie un message par enchère ;
 - les ventes de doublons : comptées dans le bilan du soir ;
-- les tendances : enregistrées et mesurées, sans message ; `TRENDS_NOTIFY=true` rétablit un message par passage.
 
 **Le récap** (🩺, toutes les `RECAP_INTERVAL_HOURS` heures, 4 par défaut, aux heures rondes) montre ce que chaque worker a fait depuis le précédent, s'il tourne encore et ses erreurs, et ce que le sniper a fait des enchères de sa fenêtre de mise (pas assez vue vendue, bénéfice trop faible, misée…). S'il trouve une anomalie (worker arrêté, positions au-dessus du plafond, marché plus lu, session en pause), il passe en orange avec un bloc « À vérifier » en tête.
 
-**Le bilan du soir** (`DAILY_REPORT_TIME`, 23:00) donne le solde puis un bloc par activité : Paquets, Sniper, Ventes, Positions, Validation de la simulation, Collection, Tendances du jour. Le dimanche, il ajoute « Tendances de la semaine ».
+**Le bilan du soir** (`DAILY_REPORT_TIME`, 23:00) donne le solde puis un bloc par activité : Sniper, Ventes, Positions, Validation de la simulation, Collection.
 
 Les tirages remarquables, positions achetées et cartes de collection obtenues montrent l'image de la carte (si le site la fournit) et un lien vers son article Wikipédia.
 
@@ -133,9 +124,7 @@ python -m src.main inventory report --lookups 300  # toute la collection cotée 
 python -m src.main inventory list --apply          # programme les ventes
 python -m src.main inventory discard --apply       # défausse, après vérification des paliers
 python -m src.main value [--lookups 100]           # cartes de valeur de l'inventaire, derniers exemplaires compris
-python -m src.main packs                           # vérifications humaines, paquets ouverts ces dernières 24 h
 python -m src.main collection                      # avancement des collections, cartes manquantes
-python -m src.main trends --days 7                 # les tendances auraient-elles rapporté ? (détail)
 python -m src.main hours [--rarity UR,L]           # à quelle heure de fin les enchères se vendent le mieux
 python -m src.main gifs                            # les cartes GIF se vendent-elles mieux ? (ventes observées)
 python -m src.main prices "Titre exact"            # ventes observées d'une carte, estimation du bot, ventes en cours
@@ -149,11 +138,9 @@ Dans Portainer : *Containers* > `wikimastered` > *Console*. Avec Docker Compose 
 
 **Réseau.** Une requête à la fois, espacées de 1,5 s plus un aléa. Sur 429 : pause globale exponentielle (jusqu'à 15 min, `Retry-After` respecté). Un 403 avec `Retry-After` (la route des cotes, par exemple) ne met en pause que sa route ; un refus isolé reste dans les logs, un message part au 3e refus de suite. Un 5xx ou un délai dépassé isolé (lecture comme écriture) ne met en pause que la route concernée ; des 5xx sur deux routes sans succès entre les deux (ou une page de passerelle) déclenchent la pause globale. Un 403 n'est une perte de session que si une sonde `/api/wikibidous` échoue aussi ; sinon c'est une route refusée (réservée au PRO, par exemple). Une écriture n'est **jamais rejouée** : si sa réponse est perdue, elle est marquée « incertaine », puis le bot relit le résultat sur le site et envoie « … vérifiée ».
 
-**Workers indépendants.** Chaque worker tourne à part : une erreur, même au démarrage, n'arrête que lui, et il réessaie seul. Une tâche qui s'arrête quand même est relancée (30 s, puis de plus en plus espacé, 10 min au plus) avec une alerte, sans toucher aux autres : si l'ouverture des paquets tombe en panne, le sniper continue. Seuls la perte de session, un 429 et une coupure réseau mettent tout le bot en pause, car ils touchent toutes les routes.
+**Workers indépendants.** Chaque worker tourne à part : une erreur, même au démarrage, n'arrête que lui, et il réessaie seul. Une tâche qui s'arrête quand même est relancée (30 s, puis de plus en plus espacé, 10 min au plus) avec une alerte, sans toucher aux autres : si la réclamation des succès tombe en panne, le sniper continue. Seuls la perte de session, un 429 et une coupure réseau mettent tout le bot en pause, car ils touchent toutes les routes.
 
 **Session.** Sur 401/403, tous les workers se figent et une alerte rouge part. Avec `SUPABASE_ANON_KEY`, le bot renouvelle lui-même sa session avant l'expiration du jeton, comme ton navigateur ; il lui faut alors **sa propre session** (le jeton de renouvellement ne sert qu'une fois). Sinon, un nouveau cookie collé dans `data/session_cookie.txt` est chargé en moins de 30 s, sans redémarrage. Le bot ne se connecte jamais tout seul : le formulaire du site est protégé par Cloudflare Turnstile.
-
-**Paquets.** Une session d'ouverture toutes les 15 à 90 min (au hasard), paquets espacés de 5 à 15 s : le site semble demander une vérification humaine quand les actions s'enchaînent trop vite. Le stock se recharge d'un paquet toutes les 10 min, jusqu'à 10 : rien n'est perdu. La limite quotidienne met en pause jusqu'au lendemain. Chaque vérification humaine est enregistrée ; `python -m src.main packs` montre combien de boosters et de temps les séparent, et combien suivent un démarrage du bot. Le récap affiche « ⏸️ » tant qu'une vérification attend.
 
 **Sniper.** Le prix d'une carte suit surtout les tendances (actu, pop culture, mèmes), pas sa rareté. Et le site limite à **5 ventes simultanées** (les mises, elles, sont illimitées). Le sniper raisonne donc en capital : chaque achat est une « position » qui attendra une de ces 5 places pour être revendue.
 - **Repérage** : environ 12 enchères finissent chaque seconde, et le tri « fin imminente » du site reste encombré d'enchères terminées : le sniper repère donc les ventes à l'avance. Il lit les nouvelles ventes des raretés revendues (`SNIPER_RESALE_RARITIES`, UR et L) toutes les 10 s, et cherche les jours manquants un par un (un toutes les 10 s). Une vente intéressante est suivie, puis relue sur sa page juste avant de miser, sauf si elle est perdue d'avance : sa mise minimale ne fait que monter, donc une revente déjà au-dessus du plafond ou sans bénéfice suffisant d'après les ventes observées et la cote en cache est écartée sans relecture, et la relecture sert à une autre. Toutes les requêtes du bot se partagent un créneau toutes les `HTTP_MIN_SPACING_SECONDS` (1,5 s) ; pendant le pic de ventes (`HTTP_PEAK_START`-`HTTP_PEAK_END`, 09:00-02:00 : du 18 au 24/10, 1100 à 1430 L finissaient par heure, deux fois moins de 03 h à 08 h), toutes les `HTTP_PEAK_SPACING_SECONDS` (1 s). Dès que le site limite le bot ou se met en panne (pause réseau, ou une route refusée deux fois de suite), le bot revient à l'écart normal pendant `HTTP_PEAK_COOLDOWN_MINUTES` (30 min).
@@ -164,7 +151,7 @@ Dans Portainer : *Containers* > `wikimastered` > *Console*. Avec Docker Compose 
 - **Tes enchères** : le bot ignore toute carte sur laquelle tu mises toi-même (`SNIPER_AVOID_MY_BIDS`) et ne revend jamais une carte gagnée à la main.
 - **Enchère introuvable** : le site renvoie parfois « Enchère introuvable » juste après la fin (le 18/10 au soir, site instable). Une mise qui était en tête est alors gagnée si la carte arrive dans ta collection ; sinon le bot la relit toutes les 5 min pendant 30 min avant de la compter perdue (« Mise à vérifier »). Au démarrage, il retrouve les mises comptées perdues ainsi ces 2 derniers jours dont la carte est arrivée.
 
-**Positions.** Une carte gagnée est remise en vente en priorité, publiée dès qu'elle est arrivée. Elle part pour 12 h (`POSITION_LIST_LONG_MINUTES`), plus vue, tant que moins de 5 positions sont détenues (`POSITION_LIST_LONG_BELOW`, carte comprise) ; au-delà, pour 6 h (`POSITION_LIST_DURATION_MINUTES`), pour faire tourner les 5 places de vente. La mise d'une position n'est pas le minimum : c'est le minimum + la moitié de l'écart jusqu'à notre plafond (`SNIPER_BID_PUSH=0.5`). Surenchérie, la mise suivante va droit au plafond, une seule fois. Une mise sous 40 % de l'estimation n'est pas tentée (`SNIPER_MIN_BID_SHARE`) : du 17 au 20/10, 0 gagnée sur 33, parties à ~2 fois notre mise, et chaque mise use une place du quota de la vérification anti-bot. Le sniper de test les simule quand même, pour continuer à les mesurer. `SNIPER_LIVE_START` / `SNIPER_LIVE_END` (ex. 23:00 / 09:00) limitent les mises réelles des positions à ces heures. En dehors, elles sont simulées pour comparaison, et la collection reste réelle. Le jour, le chasseur de l'extension achète alors les L depuis le navigateur, où la vérification anti-bot passe seule. Les rivaux surenchérissent d'un pas en 20-30 s, et chaque mise use le quota de la vérification anti-bot. Le récap de 08:00 et `sniper-report --summary` donnent les chiffres pour régler ce choix : mises par enchère, perdues dans nos limites, prix final face à notre mise, refus par cause, revente face à l'estimation. `POSITION_POST_NOW=false` revient à une publication entre `POSITION_POST_START` et `POSITION_POST_END` (11:00-12:00 par défaut, fin vers 23 h-minuit). `SNIPER_MAX_BUYS` limite le nombre total d'achats réels (0 = illimité) : atteint, le sniper ne rachète plus rien à revendre. C'est une enchère : le prix de départ est le prix d'achat + la moitié du bénéfice attendu à l'achat (`POSITION_LIST_PROFIT_SHARE`), au moins + 15 % (`POSITION_LIST_MARGIN`), commission comprise ; les joueurs le font monter. Les enchères montent peu (prix final / départ : médiane ×1,11 en UR, ×1,23 en L), d'où un départ assez haut. Invendue, elle repart à −10 % (deux fois, `POSITION_MAX_RELISTS`), puis au prix d'achat tant qu'une place de vente est libre : elle n'est gardée que si toutes les places sont prises. Jamais sous le prix d'achat. Au moment de la publier, le bot lit les autres ventes de la même carte et se place juste sous la moins chère. Si cette concurrente est sous le prix d'achat, la carte part quand même, au prix d'achat : une place vide ne rapporte rien, et les enchères montent (le 20/10, Diana Spencer, gardée hors vente toute la nuit face à des ventes à 605-807, s'est vendue 2000 à la main). Beaucoup de cartes partent au prix demandé : à l'achat aussi, la revente estimée ne dépasse jamais la vente concurrente la moins chère encore en cours une heure après. Le bot n'achète que si, parmi les 5 dernières ventes observées, au moins 3 ont été disputées (`SNIPER_MIN_CONTESTED_SALES`) et la plus haute ne vaut pas plus de 2 fois la plus basse (`SNIPER_MAX_PRICE_SPREAD`). En simulation, une revente aboutit si les ventes observées de la carte sur 3 jours atteignent le prix de départ, et se vend alors à leur médiane (le prix du marché).
+**Positions.** Une carte gagnée est remise en vente en priorité, publiée dès qu'elle est arrivée. Elle part pour 12 h (`POSITION_LIST_LONG_MINUTES`), plus vue, tant que moins de 5 positions sont détenues (`POSITION_LIST_LONG_BELOW`, carte comprise) ; au-delà, pour 6 h (`POSITION_LIST_DURATION_MINUTES`), pour faire tourner les 5 places de vente. La mise d'une position n'est pas le minimum : c'est le minimum + la moitié de l'écart jusqu'à notre plafond (`SNIPER_BID_PUSH=0.5`). Surenchérie, la mise suivante va droit au plafond, une seule fois. Une mise sous 40 % de l'estimation n'est pas tentée (`SNIPER_MIN_BID_SHARE`) : du 17 au 20/10, 0 gagnée sur 33, parties à ~2 fois notre mise, et chaque mise use une place du quota de la vérification anti-bot. Le sniper de test les simule quand même, pour continuer à les mesurer. Les rivaux surenchérissent d'un pas en 20-30 s, et chaque mise use le quota de la vérification anti-bot. Le récap de 08:00 et `sniper-report --summary` donnent les chiffres pour régler ce choix : mises par enchère, perdues dans nos limites, prix final face à notre mise, refus par cause, revente face à l'estimation. `POSITION_POST_NOW=false` revient à une publication entre `POSITION_POST_START` et `POSITION_POST_END` (11:00-12:00 par défaut, fin vers 23 h-minuit). C'est une enchère : le prix de départ est le prix d'achat + la moitié du bénéfice attendu à l'achat (`POSITION_LIST_PROFIT_SHARE`), au moins + 15 % (`POSITION_LIST_MARGIN`), commission comprise ; les joueurs le font monter. Les enchères montent peu (prix final / départ : médiane ×1,11 en UR, ×1,23 en L), d'où un départ assez haut. Invendue, elle repart à −10 % (deux fois, `POSITION_MAX_RELISTS`), puis au prix d'achat tant qu'une place de vente est libre : elle n'est gardée que si toutes les places sont prises. Jamais sous le prix d'achat. Au moment de la publier, le bot lit les autres ventes de la même carte et se place juste sous la moins chère. Si cette concurrente est sous le prix d'achat, la carte part quand même, au prix d'achat : une place vide ne rapporte rien, et les enchères montent (le 20/10, Diana Spencer, gardée hors vente toute la nuit face à des ventes à 605-807, s'est vendue 2000 à la main). Beaucoup de cartes partent au prix demandé : à l'achat aussi, la revente estimée ne dépasse jamais la vente concurrente la moins chère encore en cours une heure après. Le bot n'achète que si, parmi les 5 dernières ventes observées, au moins 3 ont été disputées (`SNIPER_MIN_CONTESTED_SALES`) et la plus haute ne vaut pas plus de 2 fois la plus basse (`SNIPER_MAX_PRICE_SPREAD`). En simulation, une revente aboutit si les ventes observées de la carte sur 3 jours atteignent le prix de départ, et se vend alors à leur médiane (le prix du marché).
 
 **Inventaire.** Avec `AUTO_LIST=true`, le bot vérifie toutes les 10 min s'il reste une place de vente (tes ventes manuelles comptent) et y met le doublon le mieux coté, à partir de `SELL_MIN_VALUE` (15 WB), pour 6 h. Les positions du sniper passent avant. Ne sont **jamais** vendus ni défaussés : le dernier exemplaire de chaque carte (sauf les raretés de `SELL_LAST_COPY_RARITIES`, par exemple `L` pour vendre une L sortie d'un paquet ; une autre rareté de la carte est alors gardée à sa place, et une carte achetée par le bot n'est jamais vendue ainsi), les favoris, les shiny, les exemplaires portant une étiquette de `PROTECTED_TAGS`, ceux engagés dans un échange ou déjà en vente. La défausse (`AUTO_DISCARD`) est bloquée près d'un palier de succès (`ACHIEVEMENT_MILESTONES`, `ACHIEVEMENT_MARGIN`) et ne fait jamais repasser la collection sous un palier atteint. Elle ne touche que les doublons, sauf pour les raretés de `DISCARD_LAST_COPY_RARITIES` (par exemple `C,PC`) : une carte que l'analyse de valeur a déjà cotée, sans aucune vente connue au-dessus de `DISCARD_MAX_VALUE`, part alors même en dernier exemplaire (1 WB chacune), au plus `DISCARD_MAX_PER_RUN` par passage, les mêmes protections s'appliquant. Une carte pas encore cotée attend la fin de l'analyse.
 
@@ -176,15 +163,12 @@ Dans Portainer : *Containers* > `wikimastered` > *Console*. Avec Docker Compose 
 
 **Succès.** Chaque soir à `ACHIEVEMENTS_TIME` (22:50), le bot demande au site de recalculer tes succès et réclame les récompenses débloquées, une par une.
 
-**Tendances.** Wikipédia : le top fr.wikipedia de la veille (publié avec un jour de retard), un pic étant ≥ 3 × la médiane des 30 jours précédents. Google : le flux RSS des recherches en hausse en France, lu toutes les 20 min. Les cartes en vente qui correspondent sont enregistrées comme signaux. Chaque dimanche, le bilan dit si les signaux de la semaine auraient rapporté : achat en surenchérissant sur le prix observé, revente à la médiane des ventes des 7 jours suivants, « gagnant » si le bénéfice atteint celui exigé d'une position. Avec au moins 10 signaux mesurés, il conclut « prometteur » ou « pas rentable ». `python -m src.main trends` donne le détail jour par jour.
-
 ## Routes du site
 
 Aucune route n'est inventée. Toutes viennent du code des extensions communautaires (relevé le 14/10/2026) et sont décrites dans [config/endpoints.yaml](config/endpoints.yaml) :
 
-- [qkerman/WikiMastersTools-kzfamily](https://github.com/qkerman/WikiMastersTools-kzfamily) : cotes, mise en vente, ouverture de paquets, cookie Supabase
+- [qkerman/WikiMastersTools-kzfamily](https://github.com/qkerman/WikiMastersTools-kzfamily) : cotes, mise en vente, cookie Supabase
 - [Lypningeuh/WikiRemastered](https://github.com/Lypningeuh/WikiRemastered) : marché, règle de mise minimale, schéma des enchères, défausse groupée
-- [ThePommespanzer/wikimasters-plus](https://github.com/ThePommespanzer/wikimasters-plus) : régénération des paquets
 - [3d3n-pyc/wikimasters-farm](https://github.com/3d3n-pyc/wikimasters-farm), [LockBlock-dev/wikimasters-bot](https://github.com/LockBlock-dev/wikimasters-bot) : succès, historique des mises d'une enchère (relevé le 15/10/2026)
 
 Relevés sur le vrai site (`python -m src.main market`, 15/10/2026) : environ 12 enchères finissent par seconde ; le tri `ending_soon` garde en tête les enchères terminées non clôturées (jusqu'à 3 min), même filtré par `rarity` ; `limit` au-delà de 50 est refusé (403).
@@ -193,12 +177,11 @@ Pour corriger ou ajouter une route : `python -m src.tools.parse_curl --name plac
 
 **Encore inconnu, donc configurable plutôt que deviné :**
 - les durées de vente acceptées par l'API au-delà de celles déjà utilisées (`LISTING_DURATION_OPTIONS` reprend le formulaire du site) ;
-- une route de statut des paquets : le stock est déduit des réponses d'ouverture (déclarable sous le nom `pack_status`) ;
 - les paliers de succès de collection, et s'ils comptent les exemplaires ou les cartes distinctes (`ACHIEVEMENT_COUNT_MODE`).
 
 ## Données
 
-Le volume `data/` contient `wikimastered.db` (SQLite : cotes, tirages, enchères, ventes, défausses, signaux), `logs/bot.log`, la session et le `heartbeat` du healthcheck Docker. Il survit aux redéploiements et reste hors Git. Après chaque bilan, le bot purge les cotes de plus de 60 jours, les ventes observées de plus de 120 jours et les vues Wikipédia de plus de 60 jours.
+Le volume `data/` contient `wikimastered.db` (SQLite : cotes, enchères, ventes, défausses, ventes observées), `logs/bot.log`, la session et le `heartbeat` du healthcheck Docker. Il survit aux redéploiements et reste hors Git. Après chaque bilan, le bot purge les cotes de plus de 60 jours et les ventes observées de plus de 60 jours (environ 26 000 par jour, la base finirait sinon vers 1,2 Go) ; le plus haut prix de chaque carte purgée est gardé, pour que la défausse n'oublie jamais qu'une carte s'est vendue cher.
 
 ## Développement
 
@@ -207,7 +190,7 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt pytest pyt
 .venv/bin/python -m pytest
 ```
 
-Les tests couvrent la logique de décision et le client face à un faux serveur (429, 401 puis reprise, 403, DRY_RUN, sniper, paquets, Discord). Aucun appel réseau réel.
+Les tests couvrent la logique de décision et le client face à un faux serveur (429, 401 puis reprise, 403, DRY_RUN, sniper, Discord). Aucun appel réseau réel.
 
 **Chemin d'une modification jusqu'au bot :**
 1. Une branche, une PR vers `main`.

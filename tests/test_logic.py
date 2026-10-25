@@ -12,7 +12,7 @@ from src.config import Settings
 from src.core.client import user_id_from_cookie
 from src.core.database import Database
 from src.core.endpoints import Endpoints
-from src.core.models import Auction, CollectionPage, OwnedCard, PackOpenResult, SaleRow, min_next_bid
+from src.core.models import Auction, CollectionPage, OwnedCard, SaleRow, min_next_bid
 from src.core.pricing import Quote, combine, recent_estimates
 from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
@@ -23,8 +23,6 @@ from src.workers.auction_sniper import (
 from src.workers.inventory_manager import (
     achievement_guard, group_by_card, plan_listing_time, select_for_discard, select_for_sale,
 )
-from src.workers.pack_opener import PackState, seconds_until_stock
-from src.workers.wiki_trends import detect_spike, expected_rarity
 
 ROOT = Path(__file__).resolve().parents[1]
 ME = "11111111-1111-1111-1111-111111111111"
@@ -84,29 +82,10 @@ def test_invalid_rows_are_skipped():
     assert [r.id for r in page.rows()] == ["x"]
 
 
-def test_pack_pairs_shiny_copy():
-    pack = PackOpenResult.model_validate({
-        "cards": [{"id": "a", "wikipedia_title": "A", "rarity": "C"}, {"id": "a", "wikipedia_title": "A", "rarity": "C"}],
-        "packs_remaining": 3,
-        "owned_copies": [{"id": "o1", "card_id": "a", "is_shiny": False}, {"id": "o2", "card_id": "a", "is_shiny": True}],
-    })
-    assert [(c.id, copy.id, copy.is_shiny) for c, copy in pack.pulled()] == [("a", "o1", False), ("a", "o2", True)]
-
-
 # ---------------------------------------------------------------------- packs
-def test_pack_wait_from_last_regen():
-    state = PackState(remaining=0, last_regen_at=NOW - timedelta(minutes=4))
-    assert seconds_until_stock(state, 1, timedelta(minutes=10), NOW) == pytest.approx(360)
-    assert seconds_until_stock(PackState(), 1, timedelta(minutes=10), NOW) == 0
 
 
 # --------------------------------------------------------------------- sniper
-def test_rarity_cap_rule_is_collection_only():
-    s = settings(sniper_rarity_caps={"SR": 15})
-    params = snipe_params(s, night=False)
-    decision = decide(auction(base_amount=12), params, None, 3)
-    assert decision.ceiling == 15 and decision.collection
-    assert decide(auction(base_amount=20), params, None, 3) is None
 
 
 def test_portfolio_decision_needs_real_profit():
@@ -165,7 +144,7 @@ def test_position_needs_contested_and_steady_recent_sales():
 
 def test_position_bid_pushed_toward_ceiling_collection_stays_at_minimum():
     # Le 17/10 : les rivaux surenchérissent d'un pas en 20-30 s ; une mise plus haute d'emblée use moins le quota.
-    s = settings(sniper_rarity_caps={"SR": 15})
+    s = settings()
     params = snipe_params(s, night=False)
     pf = portfolio_state(s, balance=3000, held_count=0, held_real_cost=0, held_sim_cost=0,
                          engaged_real=0, engaged_sim=0, bot_engaged_count=0)
@@ -175,7 +154,7 @@ def test_position_bid_pushed_toward_ceiling_collection_stays_at_minimum():
     assert "bénéfice ~167" in half.reason
     top = decide(auction(card=card, base_amount=200), params, Quote(400.0, None), 3, pf, push=1.0)
     assert top.amount == top.ceiling == 265
-    assert decide(auction(base_amount=12), params, None, 3, push=0.5).amount == 12  # collection : minimum
+    assert decide(auction(base_amount=12), params, None, 3, collection_cap=15, push=0.5).amount == 12  # minimum
 
 
 def test_positions_follow_free_sale_slots():
@@ -214,10 +193,10 @@ def test_portfolio_counts_engaged_capital():
 
 
 def test_night_mode_is_more_aggressive():
-    s = settings(sniper_rarity_caps={"UR": 40}, sniper_daily_budget=300, night_budget_bonus=200)
+    s = settings(sniper_daily_budget=300, night_budget_bonus=200)
     day, night = snipe_params(s, False), snipe_params(s, True)
     assert night.deal_ratio > day.deal_ratio and night.window_seconds == day.window_seconds  # même timing de mise
-    assert night.rarity_caps["UR"] > day.rarity_caps["UR"] and night.budget > day.budget
+    assert night.budget > day.budget
     assert snipe_params(settings(), True).budget == 0  # pas de budget quotidien par défaut
 
 
@@ -326,13 +305,6 @@ def test_listing_ends_in_peak_window():
 
 
 # --------------------------------------------------------------------- trends
-def test_spike_detection_and_rarity():
-    s = settings(trends_spike_ratio=3, trends_min_daily_views=1000)
-    trend = detect_spike("Ada_Lovelace", 15000, [300] * 30, s)
-    assert trend and trend.ratio == pytest.approx(50)
-    assert expected_rarity(trend.projected_30d, {"L": 20000}) == "L"
-    assert detect_spike("X", 1500, [1000] * 30, s) is None
-    assert normalize_title("Élection_présidentielle") == normalize_title("election  presidentielle")
 
 
 # ------------------------------------------------------------------------ curl
@@ -360,15 +332,6 @@ def test_never_bid_in_the_last_ten_seconds():
     s = settings()
     assert snipe_params(s, night=True).window_seconds == snipe_params(s, night=False).window_seconds == 60
     assert s.sniper_min_seconds_left == 15  # 16/10 : fenêtre élargie à 60 s → 15 s
-
-
-def test_trend_terms_match_card_titles():
-    from src.workers.trend_common import title_matches
-    assert title_matches("François Berléand", "françois berléand")
-    assert title_matches("Squid Game", "squid game saison 3")
-    assert not title_matches("Décharge publique", "décharge")  # un seul mot : trop vague
-    assert not title_matches("Squid Game", "squid game saison 3", exact=True)
-    assert not title_matches("Game of Thrones", "squid game")
 
 
 def test_every_list_setting_accepts_csv_from_the_environment(monkeypatch):

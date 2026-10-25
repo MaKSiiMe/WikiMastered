@@ -20,16 +20,36 @@ async def test_purge_keeps_accounting_and_recent_market(tmp_path):
                             [("old", old), ("new", recent)])
     await db.db.executemany("INSERT INTO price_history (card_id, rarity, average, observed_at) VALUES ('c', 'C', 1, ?)",
                             [(old,), (recent,)])
-    await db.db.executemany("INSERT INTO pageviews (article, day, views) VALUES ('A', ?, 1)",
-                            [(f"{now - timedelta(days=90):%Y%m%d}",), (f"{now - timedelta(days=3):%Y%m%d}",)])
     await db.record_bid(auction_id="a", card_id="c", title="t", rarity="C", is_shiny=False, amount=5,
                         reference_price=None, reason="r", night=False, dry_run=True, status="sim_lost",
                         end_at=now - timedelta(days=400))
     await db.db.commit()
     removed = await db.purge(now)
-    assert removed["observed_sales"] == 1 and removed["price_history"] == 1 and removed["pageviews"] == 1
+    assert removed["observed_sales"] == 1 and removed["price_history"] == 1
     assert await db.observed_prices("c", 5) == ([10], 1)
     assert len(await db._all("SELECT * FROM bids")) == 1  # comptabilité gardée
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_purged_sales_keep_their_highest_price_for_discard(tmp_path):
+    """Ventes observées gardées 60 jours (~26 000 par jour le 24/10) ; une carte vendue cher il y a 90 jours n'est
+    toujours pas défaussable."""
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(UTC)
+    await db.db.executemany("INSERT INTO observed_sales (auction_id, card_id, price, ended_at) VALUES (?, 'c', ?, ?)",
+                            [("a90", 900, (now - timedelta(days=90)).isoformat()),
+                             ("a70", 300, (now - timedelta(days=70)).isoformat()),
+                             ("a2", 2, (now - timedelta(days=2)).isoformat())])
+    await db.db.commit()
+    await db.price_put("c", {"C": (2.0, 1)})
+    assert (await db.purge(now))["observed_sales"] == 2
+    assert (await db.known_values())["c"] == 900
+    await db.db.execute("INSERT INTO observed_sales (auction_id, card_id, price, ended_at) VALUES ('a65', 'c', 50, ?)",
+                        ((now - timedelta(days=65)).isoformat(),))
+    await db.purge(now)  # un prix plus bas ne remplace pas le plus haut gardé
+    assert (await db.known_values())["c"] == 900
     await db.close()
 
 
@@ -39,6 +59,7 @@ async def test_obsolete_tables_dropped_on_existing_database(tmp_path):
     path = tmp_path / "t.db"
     old = sqlite3.connect(path)
     old.executescript("CREATE TABLE trend_alerts (auction_id TEXT PRIMARY KEY, article TEXT, alerted_at TEXT);"
+                      "CREATE TABLE pulls (id INTEGER PRIMARY KEY, opened_at TEXT NOT NULL);"
                       "CREATE TABLE auctions_seen (auction_id TEXT PRIMARY KEY, card_id TEXT, title TEXT, "
                       "norm_title TEXT, rarity TEXT, is_shiny INTEGER NOT NULL DEFAULT 0, current_bid INTEGER, "
                       "base_amount INTEGER, min_bid INTEGER, end_at TEXT, seen_at TEXT NOT NULL);"
@@ -48,7 +69,7 @@ async def test_obsolete_tables_dropped_on_existing_database(tmp_path):
     db = Database(path)
     await db.connect()
     names = {r["name"] for r in await db._all("SELECT name FROM sqlite_master")}
-    assert "trend_alerts" not in names and "idx_auctions_title" not in names
+    assert not names & {"trend_alerts", "idx_auctions_title", "pulls"}
     assert len(await db._all("SELECT * FROM auctions_seen")) == 1
     await db.close()
 

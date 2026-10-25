@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, time
+from datetime import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args, get_origin
@@ -16,7 +16,6 @@ from typing import Annotated, Any, Literal, get_args, get_origin
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from src.core.timeutils import in_window, utcnow
 
 RARITIES: tuple[str, ...] = ("C", "PC", "R", "SR", "UR", "L")
 RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
@@ -25,7 +24,6 @@ RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
 WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "sniper": ("place_bid",),            # mises des positions (achat pour revendre)
     "collection": ("collection_bid",),   # mises du mode collection (cartes gardées)
-    "packs": ("open_pack",), "paquets": ("open_pack",),
     "ventes": ("create_listing",), "inventory": ("create_listing", "bulk_discard"),
     "defausse": ("bulk_discard",), "tags": ("tag_card",),
     "succes": ("achievements_check", "claim_achievement"),
@@ -120,33 +118,13 @@ class Settings(BaseSettings):
     notify_simulated: bool = True
 
     # --- Workers ----------------------------------------------------------------
-    enable_pack_opener: bool = True
     enable_sniper: bool = True
     enable_inventory: bool = True
-    enable_wiki_trends: bool = True
-    enable_google_trends: bool = True
     enable_achievements: bool = True
     # Garde : profil relu toutes les N min ; une sanction du site arrête tout le bot (data/HALT).
     enable_profile_guard: bool = True
     profile_check_minutes: float = 15.0
     achievements_time: time = time(22, 50)  # succès réclamés une fois par jour, avant le bilan de 23:00
-
-    # --- Module B : paquets -----------------------------------------------------
-    pack_regen_minutes: float = 10.0
-    pack_max_stock: int = 10
-    pack_open_min_stock: int = 1
-    # Rythme humain, pour éviter les vérifications : une session d'ouverture toutes les 15 à 90 min
-    # (stock plafonné à 10, régénéré en 100 min : rien n'est perdu), paquets espacés de 5 à 15 s.
-    pack_interval_min_minutes: float = 15.0
-    pack_interval_max_minutes: float = 90.0
-    pack_between_opens_min_seconds: float = 5.0
-    pack_between_opens_max_seconds: float = 15.0
-    pack_notify_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
-    pack_notify_shiny: bool = True
-    # Ouverture échouée (vérification humaine, refus, limitation) : nouvel essai rapide, pour ne pas
-    # laisser le stock atteindre 10 (au-delà, les paquets sont perdus).
-    pack_retry_min_minutes: float = 5.0
-    pack_retry_max_minutes: float = 10.0
 
     # --- Cotes ------------------------------------------------------------------
     price_cache_ttl_minutes: float = 180.0
@@ -171,9 +149,6 @@ class Settings(BaseSettings):
     sniper_window_seconds: int = 60
     # Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais (marge de 5 s).
     sniper_min_seconds_left: int = 15
-    # Achat « collection » par rareté : désactivé (le prix suit les tendances, pas la rareté).
-    sniper_rarity_caps: dict[str, int] = Field(default_factory=dict)
-    sniper_shiny_cap: int = 0
     sniper_deal_ratio_max: float = 0.70
     # Position sautée si notre mise vaut moins de cette part de l'estimation (0 = jamais) : du 17 au 20/10,
     # 0 gagnée sur 33 réelles (5 sur 60 simulées), parties à ~2 fois notre mise ; une place du quota anti-bot perdue.
@@ -183,11 +158,6 @@ class Settings(BaseSettings):
     sniper_min_balance_reserve: int = 50
     sniper_prefetch_seconds: float = 8.0
     sniper_allow_rebid: bool = True
-    # Mises réelles des positions seulement entre ces heures (Paris) ; en dehors, simulées (comparaison), la
-    # collection reste réelle. Ex. 23:00-09:00 : le jour, le chasseur de l'extension achète les L depuis le
-    # navigateur, où la vérification anti-bot passe seule. Vide = toujours réelles.
-    sniper_live_start: time | None = None
-    sniper_live_end: time | None = None
     # Mise d'une position : la mise minimale + cette part de l'écart jusqu'à notre plafond ; surenchérie, la
     # mise suivante va droit au plafond. Le 17/10 : 2 L réelles gagnées sur 29, les rivaux surenchérissent d'un
     # pas (+10 %) en 20-30 s, et chaque mise use le quota de la vérification anti-bot (~9-10 mises). 0 = minimum.
@@ -198,11 +168,8 @@ class Settings(BaseSettings):
     # quand une extension passe la vérification dans le navigateur.
     sniper_antibot_retry_seconds: float = 300.0
     sniper_max_concurrent_bids: int = 0   # 0 = illimité (le site n'impose pas de limite aux mises)
-    # Achats réels de positions au plus, depuis toujours (0 = illimité) : gagnées + mises en cours. Atteint, le
-    # sniper ne rachète plus rien à revendre, même quand une revente libère une place (test du 16/10 : 5).
-    sniper_max_buys: int = 0
     # Sniper de test : avec des mises réelles, simule en plus les achats que le sniper réel ne fait pas (au-dessus
-    # de SNIPER_MAX_BID, achats réels épuisés, plafond de positions atteint, raretés SNIPER_SHADOW_RARITIES), pour
+    # de SNIPER_MAX_BID, plafond de positions atteint, raretés SNIPER_SHADOW_RARITIES), pour
     # continuer à mesurer la stratégie. Ni plafond de mise ni plafond de positions (le budget d'une position et le
     # solde simulé s'appliquent), et le sniper réel passe toujours en premier. Une rareté ajoutée ici coûte des
     # requêtes de repérage (moins de relectures pour le réel).
@@ -214,7 +181,6 @@ class Settings(BaseSettings):
     night_start: time = time(2, 0)
     night_end: time = time(7, 30)
     night_deal_ratio_max: float = 0.80
-    night_caps_multiplier: float = 1.3
     night_window_seconds: int = 60
     night_budget_bonus: int = 0
 
@@ -319,19 +285,6 @@ class Settings(BaseSettings):
     value_sell_minutes: int = 60
     value_sell_exclude: CsvList = Field(default_factory=list)
 
-    # --- Module E : tendances Wikipédia -----------------------------------------
-    trends_interval_minutes: float = 60.0
-    trends_top_n: int = 100
-    trends_spike_ratio: float = 3.0
-    trends_min_daily_views: int = 2000
-    trends_rarity_thresholds: dict[str, int] = Field(default_factory=lambda: {"L": 20000})
-    trends_search_limit: int = 15
-    trends_max_price: int = 0   # 0 = budget d'une position (solde × ratio / places)
-    trends_auto_buy: bool = False
-    # Cartes signalées par les tendances : seulement dans les logs et le bilan, sauf avec TRENDS_NOTIFY=true
-    # (un message Discord par passage : toutes les heures pour Wikipédia, toutes les 20 min pour Google).
-    trends_notify: bool = False
-    trends_auto_buy_max: int = 20
     # --- Module G : collection (cartes gardées, jamais revendues) ---------------------
     collection_sets: CsvList = Field(default_factory=list)    # « jours » = les 366 jours de l'année
     collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
@@ -343,14 +296,6 @@ class Settings(BaseSettings):
     collection_bids_per_check: int = 2
     collection_tag: str = "date"           # étiquette ajoutée à un exemplaire de chaque carte possédée ("" = non)
     collection_tag_max_per_run: int = 60   # étiquettes posées par passage (requêtes espacées)
-
-    # --- Module F : Google Trends (flux RSS public) ------------------------------
-    google_trends_url: str = "https://trends.google.com/trending/rss?geo={geo}"
-    google_trends_geo: str = "FR"
-    google_trends_interval_minutes: float = 20.0  # le flux ne couvre que la dernière heure environ
-    google_trends_min_traffic: int = 0
-
-    wikimedia_user_agent: str = "WikiMasteredBot/1.0 (self-hosted; configure WIKIMEDIA_USER_AGENT)"
 
     @field_validator("*", mode="before")
     @classmethod
@@ -364,34 +309,20 @@ class Settings(BaseSettings):
     @field_validator("*", mode="before")
     @classmethod
     def _pad_hours(cls, value: Any, info: ValidationInfo) -> Any:
-        """Une heure s'écrit aussi sans zéro initial : 3:00 vaut 03:00 (17/10 : SNIPER_LIVE_START=3:00 refusé).
-
-        Vide vaut « pas de réglage » quand l'heure est facultative : Portainer garde la variable vidée (18/10).
-        """
+        """Une heure s'écrit aussi sans zéro initial : 3:00 vaut 03:00 (17/10 : une heure à 3:00 refusée)."""
         field = cls.model_fields.get(info.field_name or "")
         if field is not None and time in (field.annotation, *get_args(field.annotation)) and isinstance(value, str):
             value = value.strip()
-            if not value and type(None) in get_args(field.annotation):
-                return None
             if re.fullmatch(r"\d:\d\d(:\d\d)?", value):
                 return f"0{value}"
         return value
 
-    @field_validator("pack_notify_rarities", "discard_rarities", "sniper_resale_rarities", "sniper_shadow_rarities",
+    @field_validator("discard_rarities", "sniper_resale_rarities", "sniper_shadow_rarities",
                      "sell_last_copy_rarities", "discard_last_copy_rarities")
     @classmethod
     def _check_rarities(cls, value: list[str]) -> list[str]:
         value = [v.upper() for v in value]
         unknown = [v for v in value if v not in RARITIES]
-        if unknown:
-            raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
-        return value
-
-    @field_validator("sniper_rarity_caps", "trends_rarity_thresholds")
-    @classmethod
-    def _check_rarity_keys(cls, value: dict[str, int]) -> dict[str, int]:
-        value = {k.upper(): v for k, v in value.items()}
-        unknown = [k for k in value if k not in RARITIES]
         if unknown:
             raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
         return value
@@ -407,21 +338,13 @@ class Settings(BaseSettings):
             live = endpoint in expand_writes(self.live_writes)
         else:
             live = endpoint not in expand_writes(self.simulate)
-        return live and (endpoint != "place_bid" or self.sniper_live_now())
-
-    def sniper_live_now(self, now: datetime | None = None) -> bool:
-        """Heures des mises réelles des positions (SNIPER_LIVE_START / END) ; sans réglage, toujours."""
-        if self.sniper_live_start is None or self.sniper_live_end is None:
-            return True
-        return in_window(now or utcnow(), self.sniper_live_start, self.sniper_live_end)
+        return live
 
     @property
     def mode_label(self) -> str:
         if self.dry_run:
             return f"DRY RUN (réel : {', '.join(self.live_writes)})" if self.live_writes else "DRY RUN (aucune écriture)"
         label = f"RÉEL (simulé : {', '.join(self.simulate)})" if self.simulate else "RÉEL"
-        if self.sniper_live_start is not None and self.sniper_live_end is not None:
-            label += f", positions réelles de {self.sniper_live_start:%H:%M} à {self.sniper_live_end:%H:%M}"
         if 0 < self.http_peak_spacing_seconds < self.http_min_spacing_seconds:
             label += (f", une requête toutes les {self.http_peak_spacing_seconds:g} s de {self.http_peak_start:%H:%M} "
                       f"à {self.http_peak_end:%H:%M} ({self.http_min_spacing_seconds:g} s sinon)")

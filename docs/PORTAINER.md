@@ -43,7 +43,6 @@ WM_COOKIE=<le cookie de la fenêtre privée>
 WM_USER_AGENT=<le user-agent>
 SUPABASE_ANON_KEY=<la valeur de apikey>
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
-WIKIMEDIA_USER_AGENT=WikiMasteredBot/1.0 (https://github.com/MaKSiiMe; ton-email)
 ```
 
 Facultatif :
@@ -56,7 +55,7 @@ COLLECTION_SETS=jours
 PROTECTED_TAGS=date
 ```
 
-À ne **pas** ajouter : `SNIPER_RARITY_CAPS` (achats par rareté, contraires à la stratégie : le prix suit les tendances) et un petit `SNIPER_DAILY_BUDGET` (une position coûte jusqu'à ~540 WB : un budget de 300 bloquerait presque tous les achats).
+À ne **pas** ajouter : un petit `SNIPER_DAILY_BUDGET` (une position coûte jusqu'à ~540 WB : un budget de 300 bloquerait presque tous les achats).
 
 Toutes les autres variables sont décrites dans [.env.example](../.env.example).
 
@@ -75,7 +74,7 @@ Toutes les autres variables sont décrites dans [.env.example](../.env.example).
 ## 5. Passer en réel, par étapes
 
 1. Observe un ou deux jours en simulation : résumés « Sniper : enchères simulées », boosters, bilan du soir. `python -m src.main inventory scan` montre ce que l'inventaire ferait.
-2. `DRY_RUN=false` et `SIMULATE=sniper` : paquets, ventes de doublons, collection et étiquettes deviennent réels ; seules les mises des positions du sniper restent simulées. Ajoute `AUTO_LIST=true` pour la vente automatique des doublons.
+2. `DRY_RUN=false` et `SIMULATE=sniper` : ventes de doublons, collection et étiquettes deviennent réels ; seules les mises des positions du sniper restent simulées. Ajoute `AUTO_LIST=true` pour la vente automatique des doublons.
 3. Retire `SIMULATE` quand le bloc « Validation de la simulation » du bilan dit que le passage en réel est envisageable : au moins 10 reventes simulées, et un bilan positif même en comptant les invendues comme perdues.
 
 Chaque changement : stack > *Environment variables* > **Update the stack**.

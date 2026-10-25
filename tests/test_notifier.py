@@ -11,7 +11,7 @@ def notifier(**kwargs) -> DiscordNotifier:
 
 def test_category_label():
     n = notifier()
-    assert n.embed(_Message(Level.INFO, "Boosters ouverts", "", topic=Topic.PACKS))["author"] == {"name": "🎴 Paquets"}
+    assert n.embed(_Message(Level.INFO, "Carte obtenue", "", topic=Topic.COLLECTION))["author"] == {"name": "📅 Collection"}
     assert n.embed(_Message(Level.INFO, "Bot démarré", ""))["author"] == {"name": "⚙️ Système"}
 
 
@@ -22,17 +22,17 @@ def test_topic_notifier_default_and_override():
         def send(self, level, title, description="", **kwargs):
             sent.append((title, kwargs.get("topic")))
 
-    packs = Spy("").for_topic(Topic.PACKS)
-    packs.info("a")
-    packs.warning("b", topic=Topic.SYSTEM)
-    assert sent == [("a", Topic.PACKS), ("b", Topic.SYSTEM)]
+    sales = Spy("").for_topic(Topic.SALES)
+    sales.info("a")
+    sales.warning("b", topic=Topic.SYSTEM)
+    assert sent == [("a", Topic.SALES), ("b", Topic.SYSTEM)]
 
 
 def test_embed_sections_footer_thumbnail():
     n = notifier(footer="Mode RÉEL")
-    embed = n.embed(_Message(Level.SUCCESS, "Titre", "texte", {"solde": 10}, sections=[("Paquets", "3 boosters")],
+    embed = n.embed(_Message(Level.SUCCESS, "Titre", "texte", {"solde": 10}, sections=[("Ventes", "3 vendues")],
                              thumbnail="https://img/x.png", url="https://fr.wikipedia.org/wiki/X"))
-    assert embed["fields"] == [{"name": "Paquets", "value": "3 boosters", "inline": False},
+    assert embed["fields"] == [{"name": "Ventes", "value": "3 vendues", "inline": False},
                                {"name": "solde", "value": "10", "inline": True}]
     assert embed["footer"] == {"text": "Mode RÉEL"}
     assert embed["thumbnail"] == {"url": "https://img/x.png"}
@@ -61,32 +61,31 @@ def test_dry_run_prefix():
 def test_report_sections():
     from src.main import as_section, report_sections
 
-    stats = {"balance": 3120, "boosters_ouverts": 6, "cards_pulled": 30, "shiny_pulled": 1, "bids_placed": 0,
+    stats = {"balance": 3120, "bids_placed": 0,
              "bids_simulated": 42, "auctions_won": 0, "spent_won": 0, "listings_posted": 2, "listings_scheduled": 1,
              "doublons_vendus": 4, "doublons_recette": 96, "discarded": 0, "positions_sold": 0, "profit": 0,
              "profit_simulated": 310, "positions_held": 3, "capital_in_positions": 820}
-    description, sections = report_sections(stats, {"UR": 1, "C": 20, "R": 9}, live_bids=False)
+    description, sections = report_sections(stats, live_bids=False)
     assert description == "Solde : **3120 WB**"
     blocks = dict(sections)
-    assert blocks["Paquets"] == "6 booster(s), 30 carte(s)\nC 20 · R 9 · UR 1\n✨ 1 shiny"  # ordre des raretés
     assert blocks["Sniper"] == "42 mise(s) simulée(s)"
     assert "4 doublon(s) vendu(s) pour 96 WB" in blocks["Ventes"]
     assert "Bénéfice simulé : +310 WB" in blocks["Positions"]
-    assert report_sections({**stats, "balance": "?"}, {}, live_bids=True)[0] == "Solde : inconnu"
+    assert report_sections({**stats, "balance": "?"}, live_bids=True)[0] == "Solde : inconnu"
     # Positions simulées, collection réelle (SIMULATE=sniper) : les deux comptes, les cartes gagnées sont réelles.
     mixed = {**stats, "bids_placed": 14, "bids_simulated": 76, "won_collection": 12, "spent_collection": 164}
-    assert dict(report_sections(mixed, {}, live_bids=False)[1])["Sniper"] == \
+    assert dict(report_sections(mixed, live_bids=False)[1])["Sniper"] == \
         "14 mise(s) placée(s), 76 mise(s) simulée(s)\nGagnées : 12 carte(s) de collection pour 164 WB"
     # Bilan du 16/10 : refus comptés comme placées, positions et collection mêlées, positions simulées comptées.
     live = {**stats, "bids_placed": 120, "bids_rejected": 465, "bids_simulated": 19, "auctions_won": 2,
             "spent_won": 474, "won_collection": 23, "spent_collection": 1091, "positions_held": 5,
             "capital_in_positions": 1338, "positions_held_sim": 5, "capital_simulated": 1273}
-    blocks = dict(report_sections(live, {}, live_bids=True)[1])
+    blocks = dict(report_sections(live, live_bids=True)[1])
     assert blocks["Sniper"] == ("120 mise(s) placée(s), 465 refusée(s) par le site, 19 mise(s) simulée(s)\n"
                                 "Gagnées : 2 position(s) pour 474 WB, 23 carte(s) de collection pour 1091 WB")
     assert blocks["Positions"].startswith("5 réelle(s) détenue(s), 1338 WB immobilisés\n"
                                           "5 simulée(s) (sniper de test, 1273 WB fictifs)")
-    assert dict(report_sections({**stats, "bids_simulated": 0}, {}, live_bids=True)[1])["Sniper"] == \
+    assert dict(report_sections({**stats, "bids_simulated": 0}, live_bids=True)[1])["Sniper"] == \
         "0 mise(s) placée(s)"
 
     assert as_section("**Collection** : 33/366 — il manque : 2 janvier") == ("Collection", "33/366 — il manque : 2 janvier")
@@ -96,13 +95,10 @@ def test_report_sections():
 
 def test_card_links():
     from src.core.models import Card
-    from src.workers.pack_opener import highlight_line
 
     assert Card(id="1", wikipedia_title="14 octobre").page_url == "https://fr.wikipedia.org/wiki/14_octobre"
     assert Card(id="1", wikipedia_title="X", wikipedia_url="https://en.wikipedia.org/wiki/X").page_url.startswith("https://en.")
     assert Card(id="1").page_url is None
-    assert highlight_line(Card(id="1", wikipedia_title="Céline Dion", rarity="UR"), True) == \
-        "**UR** ✨ Shiny — [Céline Dion](https://fr.wikipedia.org/wiki/C%C3%A9line_Dion)"
 
 
 def test_log_line_carries_fields_and_sections(caplog):
@@ -127,12 +123,11 @@ def test_two_channels_main_keeps_money_and_alerts():
     assert route(Level.WARNING, "Mise en vente refusée", topic=Topic.SALES) == MAIN
     assert route(Level.INFO, "Bilan du 16/10", topic=Topic.REPORT) == MAIN
     assert route(Level.CRITICAL, "Sniper : vérification anti-bot demandée") == ALERT
-    assert route(Level.INFO, "Boosters ouverts", topic=Topic.PACKS) == activity
+    assert route(Level.INFO, "Défausse terminée", topic=Topic.SALES) == activity
     assert route(Level.INFO, "Sniper : 5 enchères", topic=Topic.SNIPER) == activity
     assert route(Level.WARNING, "Récap des 4 dernières heures", topic=Topic.RECAP) == activity
     assert route(Level.SUCCESS, "Collection : carte obtenue !", topic=Topic.COLLECTION) == activity
-    assert route(Level.SUCCESS, "Boosters ouverts : tirage remarquable !", topic=Topic.PACKS) == activity
     assert route(Level.WARNING, "Serveurs WikiMasters instables", important=False) == activity
     # Sans salon d'activité : tout dans le principal, comme avant ; « off » : logs seulement.
-    assert notifier()._webhook_for(_Message(Level.INFO, "Boosters ouverts", "", topic=Topic.PACKS)) == MAIN
+    assert notifier()._webhook_for(_Message(Level.INFO, "Défausse terminée", "", topic=Topic.SALES)) == MAIN
     assert notifier(activity_webhook_url="off")._webhook_for(_Message(Level.INFO, "Boosters", "")) == ""

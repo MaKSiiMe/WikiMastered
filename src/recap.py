@@ -24,9 +24,7 @@ STALE_AFTER = timedelta(minutes=15)
 BLOCKS: list[tuple[str, tuple[str, ...]]] = [
     (Topic.SNIPER.value, ("sniper",)),
     (Topic.SALES.value, ("inventory",)),
-    (Topic.PACKS.value, ("packs",)),
     (Topic.COLLECTION.value, ("collection",)),
-    (Topic.TRENDS.value, ("trends", "gtrends")),
     (Topic.ACHIEVEMENTS.value, ("succes",)),
     (Topic.VALUE.value, ("valeur",)),
     ("🛡️ Garde", ("garde",)),
@@ -68,13 +66,9 @@ def activity(name: str, stats: dict[str, int]) -> list[str]:
             lines.append(f"Reventes simulées : {stats['sim_sold']} vendue(s), {stats['sim_unsold']} vente(s) sans "
                          "acheteur (remise en vente ou carte gardée)")
         return lines
-    if name == "packs":
-        return [f"{stats['boosters']} booster(s), {stats['cards']} carte(s), {stats['notable']} remarquable(s)"]
     if name == "collection":
         return [*stats["collection_progress"],
                 f"Sniper : {stats['won_collection']} gagnée(s) · mises {stats['bids_collection']}"]
-    if name == "trends":
-        return [f"Signaux : Wikipédia {stats['signals_wiki']}, Google {stats['signals_google']}"]
     return []
 
 
