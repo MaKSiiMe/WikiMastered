@@ -301,6 +301,13 @@ def in_snipe_window(auction: Auction, me: str | None, window: int, now: datetime
     )
 
 
+def is_older(seen: Auction, known: Auction) -> bool:
+    """Lecture plus ancienne que celle gardée : une fin ne recule pas, une mise ne baisse pas. La liste du marché peut
+    avoir une lecture de retard sur la fiche de l'enchère (25/10 : Tom Holland, surenchérie et prolongée, remontrée
+    deux fois en tête à l'ancienne fin, donc relue au lieu d'être rejouée)."""
+    return seen.end_at < known.end_at or (seen.current_bid or 0) < (known.current_bid or 0)
+
+
 def is_own(auction: Auction, me: str | None) -> bool:
     return me is not None and (auction.seller_id or "").lower() == me
 
@@ -539,7 +546,7 @@ class AuctionSniper(Worker):
         for a in auctions:
             known = self._targets.get(a.id)
             if known is not None:
-                if not known.recheck:
+                if not known.recheck and not is_older(a, known.auction):
                     self._targets[a.id] = Target(a, now, ceiling=known.ceiling)
             elif await self._worth_watching(a, params, now):
                 self._targets[a.id] = Target(a, now, ceiling=await self._observed_ceiling(a, params))

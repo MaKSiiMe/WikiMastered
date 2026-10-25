@@ -427,6 +427,62 @@ async def test_ended_auctions_become_observed_sales(tmp_path):
     await db.close()
 
 
+@pytest.mark.asyncio
+async def test_older_market_reads_do_not_overwrite_newer_ones(tmp_path):
+    """25/10 : Tom Holland, relue surenchérie et prolongée à 15:31:29, remontrée deux fois par la liste du marché en
+    tête à l'ancienne fin."""
+    from src.core.models import Auction
+    from src.workers.auction_sniper import is_older
+
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(UTC)
+
+    def row(end, bid, bidder):
+        return {"auction_id": "th", "card_id": "c", "title": "Tom Holland", "rarity": "L", "is_shiny": 0,
+                "current_bid": bid, "base_amount": 100, "min_bid": bid + 1, "end_at": end.isoformat(),
+                "seen_at": now.isoformat(), "bidder_id": bidder}
+
+    fresh = row(now + timedelta(seconds=53), 2985, "rival")
+    await db.upsert_auctions([fresh])
+    await db.upsert_auctions([row(now - timedelta(seconds=7), 2714, "moi")])  # lecture en retard
+    kept = await db._one("SELECT current_bid, bidder_id, end_at FROM auctions_seen")
+    assert (kept["current_bid"], kept["bidder_id"], kept["end_at"]) == (2985, "rival", fresh["end_at"])
+    await db.upsert_auctions([row(now + timedelta(seconds=90), 3300, "autre")])  # plus récente : prise
+    assert (await db._one("SELECT current_bid FROM auctions_seen"))["current_bid"] == 3300
+    await db.close()
+
+    def auction(end, bid):
+        return Auction.model_validate({"id": "th", "card_id": "c", "status": "active", "base_amount": 100,
+                                       "current_bid": bid, "end_at": end.isoformat(),
+                                       "card": {"id": "c", "wikipedia_title": "Tom Holland", "rarity": "L"}})
+    assert is_older(auction(now, 2714), auction(now + timedelta(seconds=53), 2985))
+    assert not is_older(auction(now + timedelta(seconds=53), 2985), auction(now, 2714))
+
+
+def test_position_copy_has_the_bought_rarity_and_version():
+    """Une carte existe en plusieurs raretés : un exemplaire plus récent d'une autre rareté ou shiny (tiré d'un paquet)
+    n'est jamais vendu à la place de la position, ni un exemplaire protégé, ni un exemplaire qu'on avait déjà."""
+    from src.core.models import OwnedCard
+    from src.workers.inventory_manager import newest_sellable, same_copies
+
+    placed = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+
+    def copy(oid, rarity, minutes, shiny=False, tags=()):
+        return OwnedCard.model_validate({"id": oid, "card_id": "c", "is_shiny": shiny,
+                                         "obtained_at": (placed + timedelta(minutes=minutes)).isoformat(),
+                                         "tags": [{"name": t} for t in tags],
+                                         "card": {"id": "c", "wikipedia_title": "Fellation", "rarity": rarity}})
+    copies = [copy("c-paquet", "C", 30), copy("l-shiny", "L", 20, shiny=True), copy("l-ancienne", "L", -14400),
+              copy("l-achetee", "L", 2), copy("l-date", "L", 40, tags=["date"])]
+    normal_l = same_copies(copies, "L", False)
+    assert [c.id for c in normal_l] == ["l-ancienne", "l-achetee", "l-date"]
+    assert newest_sellable(normal_l, {"date"}, placed) == "l-achetee"
+    assert newest_sellable(normal_l, {"date"}) == "l-achetee"
+    assert newest_sellable(same_copies(copies, "L", True), {"date"}, placed) == "l-shiny"
+    assert newest_sellable([copies[2]], {"date"}, placed) == "l-ancienne"  # seule de sa rareté : gardée en repli
+
+
 def test_position_floor_allows_a_small_loss_after_unsold_listings():
     from src.workers.inventory_manager import position_floor
     s = Settings(_env_file=None)
