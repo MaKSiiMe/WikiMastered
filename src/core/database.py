@@ -144,6 +144,13 @@ def _observed_filter(card_id: str, rarity: str | None, shiny: bool | None) -> tu
     return where + f" AND NOT {SUSPECT_SALE}", tuple(params)
 
 
+# Lecture d'une enchère au moins aussi récente que celle gardée : une fin ne recule pas, une mise ne baisse pas. Le
+# 25/10, après la relecture de Tom Holland surenchérie et prolongée, la liste du marché l'a montrée deux fois encore
+# en tête à l'ancienne fin.
+FRESHER = ("(julianday(excluded.end_at) >= julianday(auctions_seen.end_at) "
+           "AND COALESCE(excluded.current_bid, 0) >= COALESCE(auctions_seen.current_bid, 0))")
+
+
 def iso(dt: datetime | None) -> str | None:
     if dt is None:
         return None
@@ -549,6 +556,8 @@ class Database:
 
     # ------------------------------------------------------- marché observé
     async def upsert_auctions(self, rows: list[dict[str, Any]]) -> None:
+        """Enchères vues ; une lecture plus ancienne (fin plus tôt ou mise plus basse : la liste du marché peut avoir
+        une lecture de retard sur la fiche de l'enchère) ne remplace pas une plus récente."""
         if not rows:
             return
         rows = [{"seller_id": None, "bidder_id": None, "is_gif": 0, **r} for r in rows]
@@ -556,9 +565,9 @@ class Database:
             "INSERT INTO auctions_seen (auction_id, card_id, title, rarity, is_shiny, current_bid, "
             "base_amount, min_bid, end_at, seen_at, seller_id, bidder_id, is_gif) VALUES (:auction_id, :card_id, "
             ":title, :rarity, :is_shiny, :current_bid, :base_amount, :min_bid, :end_at, :seen_at, "
-            ":seller_id, :bidder_id, :is_gif) ON CONFLICT(auction_id) DO UPDATE SET current_bid = excluded.current_bid, "
-            "min_bid = excluded.min_bid, end_at = excluded.end_at, seen_at = excluded.seen_at, "
-            "bidder_id = excluded.bidder_id",
+            ":seller_id, :bidder_id, :is_gif) ON CONFLICT(auction_id) DO UPDATE SET "
+            + ", ".join(f"{col} = CASE WHEN {FRESHER} THEN excluded.{col} ELSE {col} END"
+                        for col in ("current_bid", "min_bid", "end_at", "seen_at", "bidder_id")),
             rows,
         )
         await self.db.commit()
