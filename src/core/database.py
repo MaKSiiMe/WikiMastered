@@ -386,12 +386,6 @@ class Database:
             out["sim_cost" if r["dry_run"] else "real_cost"] += r["cost"]
         return out
 
-    async def real_position_buys(self) -> int:
-        """Positions achetées pour de vrai depuis toujours (revendues ou non), hors collection."""
-        row = await self._one("SELECT COUNT(*) AS n FROM bids WHERE status = 'won' AND dry_run = 0 "
-                              "AND reason NOT LIKE 'collection%'")
-        return int(row["n"]) if row else 0
-
     async def bought_card_ids(self) -> set[str]:
         """Cartes achetées pour de vrai par le bot (positions et collection), revendues ou non."""
         rows = await self._all("SELECT DISTINCT card_id FROM bids WHERE status = 'won' AND dry_run = 0")

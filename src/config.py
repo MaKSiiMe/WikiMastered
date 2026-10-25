@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, time
+from datetime import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args, get_origin
@@ -16,7 +16,6 @@ from typing import Annotated, Any, Literal, get_args, get_origin
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from src.core.timeutils import in_window, utcnow
 
 RARITIES: tuple[str, ...] = ("C", "PC", "R", "SR", "UR", "L")
 RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
@@ -150,9 +149,6 @@ class Settings(BaseSettings):
     sniper_window_seconds: int = 60
     # Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais (marge de 5 s).
     sniper_min_seconds_left: int = 15
-    # Achat « collection » par rareté : désactivé (le prix suit les tendances, pas la rareté).
-    sniper_rarity_caps: dict[str, int] = Field(default_factory=dict)
-    sniper_shiny_cap: int = 0
     sniper_deal_ratio_max: float = 0.70
     # Position sautée si notre mise vaut moins de cette part de l'estimation (0 = jamais) : du 17 au 20/10,
     # 0 gagnée sur 33 réelles (5 sur 60 simulées), parties à ~2 fois notre mise ; une place du quota anti-bot perdue.
@@ -162,11 +158,6 @@ class Settings(BaseSettings):
     sniper_min_balance_reserve: int = 50
     sniper_prefetch_seconds: float = 8.0
     sniper_allow_rebid: bool = True
-    # Mises réelles des positions seulement entre ces heures (Paris) ; en dehors, simulées (comparaison), la
-    # collection reste réelle. Ex. 23:00-09:00 : le jour, le chasseur de l'extension achète les L depuis le
-    # navigateur, où la vérification anti-bot passe seule. Vide = toujours réelles.
-    sniper_live_start: time | None = None
-    sniper_live_end: time | None = None
     # Mise d'une position : la mise minimale + cette part de l'écart jusqu'à notre plafond ; surenchérie, la
     # mise suivante va droit au plafond. Le 17/10 : 2 L réelles gagnées sur 29, les rivaux surenchérissent d'un
     # pas (+10 %) en 20-30 s, et chaque mise use le quota de la vérification anti-bot (~9-10 mises). 0 = minimum.
@@ -177,11 +168,8 @@ class Settings(BaseSettings):
     # quand une extension passe la vérification dans le navigateur.
     sniper_antibot_retry_seconds: float = 300.0
     sniper_max_concurrent_bids: int = 0   # 0 = illimité (le site n'impose pas de limite aux mises)
-    # Achats réels de positions au plus, depuis toujours (0 = illimité) : gagnées + mises en cours. Atteint, le
-    # sniper ne rachète plus rien à revendre, même quand une revente libère une place (test du 16/10 : 5).
-    sniper_max_buys: int = 0
     # Sniper de test : avec des mises réelles, simule en plus les achats que le sniper réel ne fait pas (au-dessus
-    # de SNIPER_MAX_BID, achats réels épuisés, plafond de positions atteint, raretés SNIPER_SHADOW_RARITIES), pour
+    # de SNIPER_MAX_BID, plafond de positions atteint, raretés SNIPER_SHADOW_RARITIES), pour
     # continuer à mesurer la stratégie. Ni plafond de mise ni plafond de positions (le budget d'une position et le
     # solde simulé s'appliquent), et le sniper réel passe toujours en premier. Une rareté ajoutée ici coûte des
     # requêtes de repérage (moins de relectures pour le réel).
@@ -193,7 +181,6 @@ class Settings(BaseSettings):
     night_start: time = time(2, 0)
     night_end: time = time(7, 30)
     night_deal_ratio_max: float = 0.80
-    night_caps_multiplier: float = 1.3
     night_window_seconds: int = 60
     night_budget_bonus: int = 0
 
@@ -322,15 +309,10 @@ class Settings(BaseSettings):
     @field_validator("*", mode="before")
     @classmethod
     def _pad_hours(cls, value: Any, info: ValidationInfo) -> Any:
-        """Une heure s'écrit aussi sans zéro initial : 3:00 vaut 03:00 (17/10 : SNIPER_LIVE_START=3:00 refusé).
-
-        Vide vaut « pas de réglage » quand l'heure est facultative : Portainer garde la variable vidée (18/10).
-        """
+        """Une heure s'écrit aussi sans zéro initial : 3:00 vaut 03:00 (17/10 : une heure à 3:00 refusée)."""
         field = cls.model_fields.get(info.field_name or "")
         if field is not None and time in (field.annotation, *get_args(field.annotation)) and isinstance(value, str):
             value = value.strip()
-            if not value and type(None) in get_args(field.annotation):
-                return None
             if re.fullmatch(r"\d:\d\d(:\d\d)?", value):
                 return f"0{value}"
         return value
@@ -341,15 +323,6 @@ class Settings(BaseSettings):
     def _check_rarities(cls, value: list[str]) -> list[str]:
         value = [v.upper() for v in value]
         unknown = [v for v in value if v not in RARITIES]
-        if unknown:
-            raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
-        return value
-
-    @field_validator("sniper_rarity_caps")
-    @classmethod
-    def _check_rarity_keys(cls, value: dict[str, int]) -> dict[str, int]:
-        value = {k.upper(): v for k, v in value.items()}
-        unknown = [k for k in value if k not in RARITIES]
         if unknown:
             raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
         return value
@@ -365,21 +338,13 @@ class Settings(BaseSettings):
             live = endpoint in expand_writes(self.live_writes)
         else:
             live = endpoint not in expand_writes(self.simulate)
-        return live and (endpoint != "place_bid" or self.sniper_live_now())
-
-    def sniper_live_now(self, now: datetime | None = None) -> bool:
-        """Heures des mises réelles des positions (SNIPER_LIVE_START / END) ; sans réglage, toujours."""
-        if self.sniper_live_start is None or self.sniper_live_end is None:
-            return True
-        return in_window(now or utcnow(), self.sniper_live_start, self.sniper_live_end)
+        return live
 
     @property
     def mode_label(self) -> str:
         if self.dry_run:
             return f"DRY RUN (réel : {', '.join(self.live_writes)})" if self.live_writes else "DRY RUN (aucune écriture)"
         label = f"RÉEL (simulé : {', '.join(self.simulate)})" if self.simulate else "RÉEL"
-        if self.sniper_live_start is not None and self.sniper_live_end is not None:
-            label += f", positions réelles de {self.sniper_live_start:%H:%M} à {self.sniper_live_end:%H:%M}"
         if 0 < self.http_peak_spacing_seconds < self.http_min_spacing_seconds:
             label += (f", une requête toutes les {self.http_peak_spacing_seconds:g} s de {self.http_peak_start:%H:%M} "
                       f"à {self.http_peak_end:%H:%M} ({self.http_min_spacing_seconds:g} s sinon)")

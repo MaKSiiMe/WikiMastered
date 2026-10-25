@@ -86,12 +86,6 @@ def test_invalid_rows_are_skipped():
 
 
 # --------------------------------------------------------------------- sniper
-def test_rarity_cap_rule_is_collection_only():
-    s = settings(sniper_rarity_caps={"SR": 15})
-    params = snipe_params(s, night=False)
-    decision = decide(auction(base_amount=12), params, None, 3)
-    assert decision.ceiling == 15 and decision.collection
-    assert decide(auction(base_amount=20), params, None, 3) is None
 
 
 def test_portfolio_decision_needs_real_profit():
@@ -150,7 +144,7 @@ def test_position_needs_contested_and_steady_recent_sales():
 
 def test_position_bid_pushed_toward_ceiling_collection_stays_at_minimum():
     # Le 17/10 : les rivaux surenchérissent d'un pas en 20-30 s ; une mise plus haute d'emblée use moins le quota.
-    s = settings(sniper_rarity_caps={"SR": 15})
+    s = settings()
     params = snipe_params(s, night=False)
     pf = portfolio_state(s, balance=3000, held_count=0, held_real_cost=0, held_sim_cost=0,
                          engaged_real=0, engaged_sim=0, bot_engaged_count=0)
@@ -160,7 +154,7 @@ def test_position_bid_pushed_toward_ceiling_collection_stays_at_minimum():
     assert "bénéfice ~167" in half.reason
     top = decide(auction(card=card, base_amount=200), params, Quote(400.0, None), 3, pf, push=1.0)
     assert top.amount == top.ceiling == 265
-    assert decide(auction(base_amount=12), params, None, 3, push=0.5).amount == 12  # collection : minimum
+    assert decide(auction(base_amount=12), params, None, 3, collection_cap=15, push=0.5).amount == 12  # minimum
 
 
 def test_positions_follow_free_sale_slots():
@@ -199,10 +193,10 @@ def test_portfolio_counts_engaged_capital():
 
 
 def test_night_mode_is_more_aggressive():
-    s = settings(sniper_rarity_caps={"UR": 40}, sniper_daily_budget=300, night_budget_bonus=200)
+    s = settings(sniper_daily_budget=300, night_budget_bonus=200)
     day, night = snipe_params(s, False), snipe_params(s, True)
     assert night.deal_ratio > day.deal_ratio and night.window_seconds == day.window_seconds  # même timing de mise
-    assert night.rarity_caps["UR"] > day.rarity_caps["UR"] and night.budget > day.budget
+    assert night.budget > day.budget
     assert snipe_params(settings(), True).budget == 0  # pas de budget quotidien par défaut
 
 

@@ -178,7 +178,7 @@ async def test_sniper_respects_concurrent_bid_limit(tmp_path):
     def auction(i: int, base: int) -> dict:
         return {
             "id": f"33333333-3333-3333-3333-{i:012d}",
-            "card": {"id": f"44444444-4444-4444-4444-{i:012d}", "wikipedia_title": f"Carte {i}", "rarity": "SR"},
+            "card": {"id": f"44444444-4444-4444-4444-{i:012d}", "wikipedia_title": f"{i + 1} mars", "rarity": "SR"},
             "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active", "end_at": end,
             "base_amount": base, "current_bid": None, "current_bidder_id": None,
         }
@@ -201,10 +201,12 @@ async def test_sniper_respects_concurrent_bid_limit(tmp_path):
             return httpx.Response(200, json={"auctions": market, "hasMore": False})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, sniper_rarity_caps={"SR": 15}, portfolio_max_positions=10,
+    client, notifier = make_client(tmp_path, handler, collection_sets=["jours"], collection_max_price=15,
+                                   portfolio_max_positions=10,
                                    sniper_max_concurrent_bids=5)  # limite volontaire (le site n'en a pas)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
+    await db.kv_set("collection", {"owned": [], "missing": [f"{i + 1} mars" for i in range(7)], "total": 366})
     sniper = AuctionSniper(ctx)
     await sniper.setup()
     await sniper.step()

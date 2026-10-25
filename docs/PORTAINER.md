@@ -55,7 +55,7 @@ COLLECTION_SETS=jours
 PROTECTED_TAGS=date
 ```
 
-À ne **pas** ajouter : `SNIPER_RARITY_CAPS` (achats par rareté, contraires à la stratégie : le prix suit les tendances) et un petit `SNIPER_DAILY_BUDGET` (une position coûte jusqu'à ~540 WB : un budget de 300 bloquerait presque tous les achats).
+À ne **pas** ajouter : un petit `SNIPER_DAILY_BUDGET` (une position coûte jusqu'à ~540 WB : un budget de 300 bloquerait presque tous les achats).
 
 Toutes les autres variables sont décrites dans [.env.example](../.env.example).
 

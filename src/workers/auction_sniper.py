@@ -103,8 +103,6 @@ class Target:
 @dataclass(frozen=True)
 class SnipeParams:
     window_seconds: int
-    rarity_caps: dict[str, int]
-    shiny_cap: int
     deal_ratio: float
     max_bid: int   # 0 = pas de plafond absolu
     budget: int    # 0 = pas de budget quotidien
@@ -115,11 +113,8 @@ class SnipeParams:
 
 
 def snipe_params(s: Settings, night: bool) -> SnipeParams:
-    mult = s.night_caps_multiplier if night else 1.0
     return SnipeParams(
         window_seconds=s.night_window_seconds if night else s.sniper_window_seconds,
-        rarity_caps={r: int(v * mult) for r, v in s.sniper_rarity_caps.items()},
-        shiny_cap=int(s.sniper_shiny_cap * mult),
         deal_ratio=s.night_deal_ratio_max if night else s.sniper_deal_ratio_max,
         max_bid=s.sniper_max_bid,
         budget=(s.sniper_daily_budget + (s.night_budget_bonus if night else 0)) if s.sniper_daily_budget else 0,
@@ -200,15 +195,6 @@ class Decision:
         return self.reason.startswith(COLLECTION_PREFIX)
 
 
-def rarity_ceiling(auction: Auction, params: SnipeParams) -> int | None:
-    caps = []
-    if auction.rarity in params.rarity_caps:
-        caps.append(params.rarity_caps[auction.rarity])
-    if auction.shiny and params.shiny_cap > 0:
-        caps.append(params.shiny_cap)
-    return max(caps) if caps else None
-
-
 def pushed(minimum: int, ceiling: int, share: float) -> int:
     """Mise minimale + `share` de l'écart jusqu'au plafond (0 : le minimum, 1 : le plafond)."""
     return min(ceiling, minimum + math.ceil(max(0, ceiling - minimum) * max(0.0, share)))
@@ -227,17 +213,13 @@ def too_cheap(amount: int, limit: int, quote: Quote, params: SnipeParams, push: 
 def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales: int,
            portfolio: Portfolio | None = None, fee: float = 0.0, collection_cap: int | None = None,
            resale: bool = True, push: float = 0.0) -> Decision | None:
-    """Position à revendre (estimation, budget, bénéfice) ou achat « collection » (carte manquante, rareté).
+    """Position à revendre (estimation, budget, bénéfice) ou achat « collection » (carte manquante).
     Une position est misée au-dessus du minimum (`push`, voir SNIPER_BID_PUSH) ; la collection, au minimum."""
     amount = auction.min_bid
     options: list[Decision] = []
     if collection_cap is not None and amount <= collection_cap:
         options.append(Decision(amount, collection_cap, f"{COLLECTION_PREFIX} : carte manquante ≤ {collection_cap}",
                                 quote.average if quote else None))
-    cap = rarity_ceiling(auction, params)
-    if cap is not None and amount <= cap:
-        label = f"{COLLECTION_PREFIX} : {auction.rarity}{' shiny' if auction.shiny else ''} ≤ {cap}"
-        options.append(Decision(amount, cap, label, quote.average if quote else None))
     if resale and quote is not None and quote.reliable(min_sales) and not unsteady(quote, params):
         net = quote.average * (1 - fee)  # type: ignore[operator]
         limit = math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
@@ -376,7 +358,6 @@ class AuctionSniper(Worker):
         self._antibot_missed = 0  # mises non placées depuis le début du blocage
         self._collection_since_check = 0  # mises réelles de collection depuis la dernière vérification
         self._bids_since_check = 0  # mises réelles acceptées depuis la dernière vérification (ou CHECK_QUOTA_BIDS)
-        self._buys_left: int | None = None  # achats réels encore permis (SNIPER_MAX_BUYS), None = illimité
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
         # Jours manquants d'après la dernière lecture (avant de retirer ceux que le bot a gagnés), et
@@ -395,10 +376,6 @@ class AuctionSniper(Worker):
     async def _check_config(self) -> None:
         """Signale au démarrage les réglages qui contredisent la stratégie orientée capital."""
         s = self.settings
-        if s.sniper_rarity_caps or s.sniper_shiny_cap:
-            self.notifier.warning("Sniper : achats par rareté actifs",
-                                  "SNIPER_RARITY_CAPS / SNIPER_SHINY_CAP achètent des cartes gardées, jamais "
-                                  "revendues. Retire ces variables si tu ne le veux pas.")
         if s.sniper_daily_budget:
             budget = (await self.portfolio(utcnow())).position_budget
             if s.sniper_daily_budget < budget:
@@ -463,9 +440,6 @@ class AuctionSniper(Worker):
         return self._delay(params, utcnow())
 
     # ------------------------------------------------------------ repérage
-    def _watched_rarities(self, params: SnipeParams) -> list[str]:
-        return list(dict.fromkeys([*self._resale_rarities, *params.rarity_caps]))
-
     @property
     def _shadow_on(self) -> bool:
         """Sniper de test actif : mises de positions réelles, et simulation en plus."""
@@ -480,7 +454,7 @@ class AuctionSniper(Worker):
     def _lateness(self, params: SnipeParams, now: datetime) -> list[tuple[float, float, tuple[str, str]]]:
         """(retard en s, période visée, source) de chaque source de repérage : nouvelles ventes et ventes
         terminées de chaque rareté suivie, jours manquants de la collection."""
-        sources = [((kind, rarity), every) for rarity in self._watched_rarities(params)
+        sources = [((kind, rarity), every) for rarity in self._resale_rarities
                    for kind, every in (("recent", self.settings.sniper_discovery_seconds),
                                        ("ended", self.settings.sniper_observe_seconds))]
         if self._collection_missing:
@@ -573,11 +547,8 @@ class AuctionSniper(Worker):
             return False
         if collection_key(a.title) in self._collection_missing:
             return a.min_bid <= self.settings.collection_max_price
-        cap = rarity_ceiling(a, params)
-        if cap is not None and a.min_bid <= cap:
-            return True
-        if a.rarity not in self._resale_rarities or (self._buys_left == 0 and not self._shadow_on):
-            return False  # achats réels épuisés, sans sniper de test : les relectures servent à la collection
+        if a.rarity not in self._resale_rarities:
+            return False
         ceiling = await self._observed_ceiling(a, params)
         return ceiling is not None and a.min_bid <= ceiling
 
@@ -662,9 +633,6 @@ class AuctionSniper(Worker):
         target.judged = True
         a = target.auction
         if a.rarity not in self._resale_rarities or self._wanted(a):
-            return False
-        cap = rarity_ceiling(a, params)
-        if cap is not None and a.min_bid <= cap:
             return False
         quote = await self._against_rivals(
             a, await self.ctx.prices.quote(a.catalog_id, a.rarity, shiny=a.shiny, fetch=False))
@@ -865,12 +833,6 @@ class AuctionSniper(Worker):
         live = self.settings.is_live("place_bid")
         held_count = held["real_count"] if live else held["count"]
         engaged_count = pending["real_positions"] if live else pending["positions"]
-        self._buys_left = None
-        if live and self.settings.sniper_max_buys > 0:
-            # Achats permis épuisés : plus aucune nouvelle position, même quand une revente libère une place.
-            bought = await self.db.real_position_buys() + pending["real_positions"]
-            self._buys_left = max(0, self.settings.sniper_max_buys - bought)
-            cap = min(cap, held_count + engaged_count + self._buys_left)
         state = portfolio_state(
             self.settings, balance=await self._current_balance(), held_count=held_count,
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
@@ -1085,8 +1047,8 @@ class AuctionSniper(Worker):
     def _check_quota_spent(self, decision: Decision) -> bool:
         """Mise de collection à ne pas faire : sa part des mises permises par la vérification est prise.
         Le 17/10, chaque vérification a laissé passer 9 ou 10 mises, puis le site l'a redemandée.
-        Rien n'est gardé quand les mises des L sont simulées (hors SNIPER_LIVE_START-END) : le 18/10 après 12:00,
-        la collection laissait passer des jours à 10 WB pour un quota que personne n'utilisait."""
+        Rien n'est gardé quand les mises des L sont simulées : le 18/10 après 12:00, la collection laissait passer
+        des jours à 10 WB pour un quota que personne n'utilisait."""
         cap = self.settings.collection_bids_per_check
         return (decision.collection and cap > 0 and self.settings.is_live("collection_bid")
                 and self.settings.is_live("place_bid") and self._collection_since_check >= cap)

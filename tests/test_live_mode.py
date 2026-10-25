@@ -23,17 +23,6 @@ def test_simulate_and_live_writes_groups():
         "RÉEL, une requête toutes les 1 s de 09:00 à 02:00 (1.5 s sinon)"
 
 
-def test_positions_live_only_during_sniper_live_hours():
-    # 17/10 : le jour, le chasseur de l'extension achète les L depuis le navigateur ; le bot les simule.
-    s = Settings(_env_file=None, dry_run=False, sniper_live_start="23:00", sniper_live_end="09:00",
-                 http_peak_spacing_seconds=0)
-    day, night = datetime(2026, 10, 17, 12, tzinfo=UTC), datetime(2026, 10, 17, 23, tzinfo=UTC)
-    assert not s.sniper_live_now(day) and s.sniper_live_now(night)  # 14:00 et 01:00 à Paris
-    assert s.mode_label == "RÉEL, positions réelles de 23:00 à 09:00"
-    assert s.is_live("place_bid") == s.sniper_live_now() and s.is_live("collection_bid")
-    assert Settings(_env_file=None, dry_run=False).sniper_live_now(day)  # sans réglage : toujours réelles
-
-
 @pytest.mark.asyncio
 async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
     now = datetime.now(UTC)
@@ -181,14 +170,8 @@ async def test_simulated_positions_never_block_real_collection_bids(tmp_path, ca
 
 
 def test_hours_without_leading_zero():
-    """17/10 : SNIPER_LIVE_START=3:00 dans Portainer arrêtait le bot au démarrage."""
-    s = Settings(_env_file=None, sniper_live_start="3:00", sniper_live_end=" 9:30", night_start="2:00")
-    assert (s.sniper_live_start, s.sniper_live_end, s.night_start) == (time(3, 0), time(9, 30), time(2, 0))
-    assert Settings(_env_file=None, sniper_live_start="23:00").sniper_live_start == time(23, 0)
+    """17/10 : une heure à 3:00 dans Portainer arrêtait le bot au démarrage."""
+    s = Settings(_env_file=None, night_start="2:00", night_end=" 7:30", http_peak_start="23:00")
+    assert (s.night_start, s.night_end, s.http_peak_start) == (time(2, 0), time(7, 30), time(23, 0))
 
 
-def test_empty_hours_mean_always_live():
-    """18/10 : SNIPER_LIVE_START / END vidés dans Portainer refusaient le démarrage au lieu de valoir « toujours »."""
-    s = Settings(_env_file=None, dry_run=False, sniper_live_start="", sniper_live_end=" ", http_peak_spacing_seconds=0)
-    assert (s.sniper_live_start, s.sniper_live_end) == (None, None)
-    assert s.sniper_live_now() and s.mode_label == "RÉEL"
