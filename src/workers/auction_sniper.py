@@ -92,6 +92,7 @@ class Target:
     recheck: bool = False
     last_look: bool = False  # mise en tête relue avant la fin (une fois par mise)
     ceiling: int | None = None  # plafond d'après les ventes observées au repérage (None : collection, inconnu)
+    judged: bool = False  # déjà passée par `hopeless` dans sa fenêtre de mise (rejugée après chaque lecture)
 
     @property
     def room(self) -> float:
@@ -287,6 +288,23 @@ def refusal(auction: Auction, params: SnipeParams, quote: Quote | None, min_sale
     return "autre"
 
 
+def hopeless(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales: int, fee: float,
+             min_profit: int, quoted: bool) -> str | None:
+    """Revente refusée à coup sûr, sans relire l'enchère : sa mise minimale ne fait que monter, et la cote du site
+    (`quoted` : déjà en cache) ne peut que baisser l'estimation. Le 24/10, 1332 des 1351 relectures de 20 h à minuit
+    finissaient sur un de ces refus pendant que 1305 ventes passaient sans relecture. Jamais « mise trop basse »
+    (SNIPER_MIN_BID_SHARE) : une mise relue plus haute peut la lever."""
+    if quote is None or not quote.reliable(min_sales):
+        return "pas assez vue vendue" if quoted else None
+    if why := unsteady(quote, params):
+        return why
+    if auction.min_bid > math.floor(quote.average * params.deal_ratio):  # type: ignore[operator]
+        return f"mise > {params.deal_ratio:.0%} de l'estimation"
+    if auction.min_bid > math.floor(quote.average * (1 - fee) - min_profit):  # type: ignore[operator]
+        return "bénéfice attendu trop faible"
+    return None
+
+
 def in_snipe_window(auction: Auction, me: str | None, window: int, now: datetime, min_left: int = 0) -> bool:
     """Fenêtre de mise : entre `window` et `min_left` secondes avant la fin (au-dessous, le site prolonge)."""
     left = auction.seconds_left(now)
@@ -320,6 +338,7 @@ class AuctionSniper(Worker):
         self._ticks = 0
         self._budget_warned_day: str | None = None
         self._next_prefetch = utcnow()
+        self._min_profit = self.settings.portfolio_min_profit  # bénéfice minimum du dernier portefeuille lu
         # Ventes suivies (repérées à l'avance) : auction_id -> cible.
         self._targets: dict[str, Target] = {}
         # Dernière lecture de chaque source de repérage, et ids de la dernière page « recent » par rareté
@@ -403,13 +422,14 @@ class AuctionSniper(Worker):
         # Une requête par passage, par priorité : carte de collection dans sa fenêtre de mise ou cible misée à
         # relire à sa fin ; repérage très en retard ; revente dans sa fenêtre ; cote à l'avance ; repérage.
         self._prune(now)
+        await self._drop_hopeless(params, now)
         target = self._next_due(params, now)
         if target is not None and (target.recheck or self._wanted(target.auction)):
-            await self._read_target(target, now)
+            await self._read_target(target, params, now)
         elif guard:
             await self.portfolio(now)  # solde et places de vente en cache pour la mise qui vient
         elif target is not None and not self._discovery_late(params, now):
-            await self._read_target(target, now)
+            await self._read_target(target, params, now)
         elif self._discovery_late(params, now) or not await self._prefetch(now):
             await self._discover(params, now)
 
@@ -620,10 +640,42 @@ class AuctionSniper(Worker):
                 and 0 < (left := t.auction.seconds_left(now)) - params.window_seconds <= COLLECTION_GUARD_SECONDS]
         return min(soon) if soon else None
 
-    async def _read_target(self, target: Target, now: datetime) -> None:
+    async def _read_target(self, target: Target, params: SnipeParams, now: datetime) -> None:
         if not target.recheck:
             await self._prepare(target, now)
+            # La cote vient peut-être d'arriver : une revente perdue d'avance n'use pas la relecture.
+            target.judged = False
+            if await self._is_hopeless(target, params):
+                return
         await self._refresh_target(target)
+
+    async def _drop_hopeless(self, params: SnipeParams, now: datetime) -> None:
+        """Retire les reventes entrées dans leur fenêtre de mise et refusées à coup sûr : les relectures (une requête
+        toutes les HTTP_MIN_SPACING_SECONDS, tous workers confondus) vont aux autres."""
+        low = self.settings.sniper_min_seconds_left
+        for t in list(self._targets.values()):
+            if not t.judged and not t.recheck and low < t.auction.seconds_left(now) <= params.window_seconds:
+                await self._is_hopeless(t, params)
+
+    async def _is_hopeless(self, target: Target, params: SnipeParams) -> bool:
+        """Juge la cible une fois (sans requête) ; perdue d'avance, elle est retirée avec son refus pour le récap."""
+        target.judged = True
+        a = target.auction
+        if a.rarity not in self._resale_rarities or self._wanted(a):
+            return False
+        cap = rarity_ceiling(a, params)
+        if cap is not None and a.min_bid <= cap:
+            return False
+        quote = await self._against_rivals(
+            a, await self.ctx.prices.quote(a.catalog_id, a.rarity, shiny=a.shiny, fetch=False))
+        why = hopeless(a, params, quote, self.settings.price_min_sales, self.settings.sale_fee_pct,
+                       self._min_profit, await self.ctx.prices.is_cached(a.catalog_id))
+        if why is None:
+            return False
+        self.log.debug("%s à %d WB : %s, pas relue", a.title, a.min_bid, why)
+        self._targets.pop(a.id, None)
+        self._outcome(a, why)
+        return True
 
     async def _prepare(self, target: Target, now: datetime) -> None:
         """Avant la relecture d'une cible : solde, places de vente et cote mis en cache, pour miser juste
@@ -819,12 +871,15 @@ class AuctionSniper(Worker):
             bought = await self.db.real_position_buys() + pending["real_positions"]
             self._buys_left = max(0, self.settings.sniper_max_buys - bought)
             cap = min(cap, held_count + engaged_count + self._buys_left)
-        return portfolio_state(
+        state = portfolio_state(
             self.settings, balance=await self._current_balance(), held_count=held_count,
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
             engaged_real=engaged_real, engaged_sim=pending["sim_cost"], bot_engaged_count=engaged_count,
             max_positions=cap, sale_room=room,
         )
+        # Même capital pour le sniper de test : son bénéfice minimum est le même.
+        self._min_profit = state.min_profit
+        return state
 
     async def shadow_portfolio(self) -> Portfolio:
         """Positions du sniper de test : simulées seulement, sans plafond."""

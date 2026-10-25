@@ -10,7 +10,7 @@ import pytest
 from src.config import Settings
 from src.core.models import Auction
 from src.core.pricing import Quote
-from src.workers.auction_sniper import AuctionSniper, Target, decide, snipe_params
+from src.workers.auction_sniper import AuctionSniper, Target, decide, hopeless, snipe_params
 from src.workers.collection import collection_key
 from tests.test_integration import make_client, make_context, seed_observed
 
@@ -297,4 +297,45 @@ async def test_late_discovery_goes_before_resale_rereads(tmp_path):
     calls.clear()
     await sniper.step()
     assert calls.count("GET /api/marketplace") == 1 and "GET /api/marketplace/u1" not in calls
+    await db.close()
+
+
+def test_hopeless_resale_needs_no_reread():
+    """Mise minimale déjà au-dessus du plafond, ou bénéfice trop faible : refusée quelle que soit la relecture."""
+    params = snipe_params(Settings(_env_file=None), night=False)  # 70 % de l'estimation
+    steady = Quote(1000, 5, 5, 1.2)
+
+    def judge(base, quote=steady, quoted=True, min_profit=30):
+        return hopeless(Auction.model_validate(sale("x", "Ada", "L", 30, base=base)), params, quote, 2, 0.0,
+                        min_profit, quoted)
+
+    assert judge(701) == "mise > 70% de l'estimation"
+    assert judge(650, min_profit=400) == "bénéfice attendu trop faible"
+    assert judge(650) is None
+    assert judge(10) is None  # « mise trop basse » : une mise relue plus haute peut la lever
+    assert judge(500, Quote(1000, 5, 5, 3.0)) == "ventes trop dispersées"
+    assert judge(500, Quote(1000, 1, 5, 1.2)) == "pas assez vue vendue"
+    assert judge(500, Quote(1000, 1, 5, 1.2), quoted=False) is None  # la cote du site peut encore la fiabiliser
+
+
+@pytest.mark.asyncio
+async def test_hopeless_target_is_dropped_without_reread(tmp_path):
+    """24/10 : 1332 des 1351 relectures finissaient refusées pendant que 1305 ventes passaient sans relecture."""
+    now = datetime.now(UTC)
+    market = {"dear": sale("dear", "Gims", "L", 18, base=900), "blind": sale("blind", "Ada", "L", 16)}
+    calls = []
+    client, notifier = make_client(tmp_path, _bare_handler(calls, market), sniper_resale_rarities=["L"])
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    await seed_observed(db, "card-dear", [1000, 1000, 1000], rarity="L")
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    sniper._last_read = {(k, "L"): now for k in ("recent", "ended")}
+    for aid, data in market.items():
+        sniper._targets[aid] = Target(Auction.model_validate(data), now - timedelta(seconds=30))
+    calls.clear()
+    await sniper.step()
+    assert "dear" not in sniper._targets and sniper._outcomes["dear"] != "pas relue à temps"
+    assert "GET /api/marketplace/dear" not in calls
+    assert "GET /api/marketplace/blind" in calls  # sans ventes observées ni cote : relue comme avant
     await db.close()
