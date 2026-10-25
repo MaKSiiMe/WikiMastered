@@ -147,6 +147,34 @@ async def test_reset_simulation_keeps_real_data(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_shiny_quote_ignores_the_site_average(tmp_path):
+    """La cote du site ne distingue pas les shiny (Mark Wahlberg ✨ ~7800, cote 675) : elle ne plafonne que la
+    carte ordinaire, et un shiny ne la demande même pas."""
+    from src.core.pricing import PriceService
+
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(UTC).isoformat()
+    rows = [("a1", 0, 600), ("a2", 0, 700), ("a3", 1, 7797), ("a4", 1, 8000), ("a5", 1, 6119)]
+    await db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
+        "VALUES (?, 'x', 't', 'L', ?, ?, ?)", [(a, s, p, now) for a, s, p in rows])
+    await db.db.commit()
+    prices = PriceService(None, db, 30)  # type: ignore[arg-type]
+    asked = []
+
+    async def market(*args, **_kwargs):
+        asked.append(args)
+        return {"L": (675.0, None)}
+
+    prices._market = market  # type: ignore[method-assign]
+    assert (await prices.quote("x", "L")).average == 650.0
+    assert (await prices.quote("x", "L", shiny=True)).average == 7797.0
+    assert len(asked) == 1  # la carte ordinaire seulement
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_suspect_sales_do_not_count_in_quotes(tmp_path):
     db = Database(tmp_path / "t.db")
     await db.connect()
