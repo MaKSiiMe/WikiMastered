@@ -16,7 +16,6 @@ from urllib.parse import quote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from src.config import RARITY_RANK
 from src.core.timeutils import utcnow
 
 log = logging.getLogger(__name__)
@@ -145,10 +144,6 @@ class Auction(_Model):
         return self.snapshot_rarity or self.card.rarity
 
     @property
-    def rarity_rank(self) -> int:
-        return RARITY_RANK.get(self.rarity or "", -1)
-
-    @property
     def shiny(self) -> bool:
         return self.is_shiny or self.card.is_shiny
 
@@ -216,12 +211,6 @@ class Balance(_Model):
 class BidResult(_Model):
     current_bid: int
     bidder_balance: int
-
-
-class OwnedCopy(_Model):
-    id: str | None = None
-    card_id: str | None = None
-    is_shiny: bool = False
 
 
 class DiscardResult(_Model):
