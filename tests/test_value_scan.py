@@ -469,7 +469,7 @@ async def test_value_cards_sold_one_at_a_time_on_a_reserved_slot(tmp_path):
     await inv.post_due_listings()
     assert len(posted) == 1 and '"card_id":"o3"' in posted[0].replace(" ", "")
     row = await db._one("SELECT * FROM listings WHERE reason LIKE 'valeur%'")
-    assert (row["status"], row["base_amount"], row["duration_minutes"]) == ("posted", 14008, 360)
+    assert (row["status"], row["base_amount"], row["duration_minutes"]) == ("posted", 14008, 60)
     assert ("INFO", "Carte de valeur mise en vente") in notifier.sent
     slots["selling"] = 5
 

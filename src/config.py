@@ -307,7 +307,7 @@ class Settings(BaseSettings):
     # ni un titre de VALUE_SELL_EXCLUDE. 0 = jamais.
     value_sell_min: int = 1000
     value_sell_share: float = 0.6
-    value_sell_minutes: int = 360
+    value_sell_minutes: int = 60
     value_sell_exclude: CsvList = Field(default_factory=list)
 
     # --- Module E : tendances Wikipédia -----------------------------------------
