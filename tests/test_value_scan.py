@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -11,8 +12,8 @@ import pytest
 from src.config import Settings
 from src.core.models import OwnedCard
 from src.core.pricing import Quote
-from src.workers.value_scan import (ValueScan, find_valuable, frozen_value, plan_value_tags, remembered, tier_of,
-                                   to_quote, to_report)
+from src.workers.value_scan import (ValueScan, find_valuable, frozen_value, next_watch, plan_value_tags, remembered,
+                                   tier_of, to_quote, to_report)
 from tests.test_integration import make_client, make_context
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
@@ -379,7 +380,7 @@ async def test_valuable_cards_are_watched_on_the_market(tmp_path):
     assert searched == ["Volley albanais"]
     rows = await ctx.db.sightings_since(datetime.now(UTC) - timedelta(days=1))
     assert [(r["auction_id"], r["rarity"], r["current_bid"]) for r in rows] == [("a1", "C", None), ("a2", "PC", None)]
-    assert worker._watch_due - datetime.now(UTC) > timedelta(minutes=55)
+    assert worker._watch_due - datetime.now(UTC) > timedelta(minutes=25)  # 30 min la nuit, 2 h le jour
     assert worker.recap()[-1] == "Marché des cartes à 500 WB ou plus (7 j) : 2 vente(s) repérée(s) pour 1/1 carte(s)"
 
     # Relevée plus tard : la mise est mise à jour, la vente n'est pas comptée deux fois.
@@ -490,3 +491,14 @@ async def test_value_cards_sold_one_at_a_time_on_a_reserved_slot(tmp_path):
     nxt = await db._one("SELECT * FROM listings WHERE reason LIKE 'valeur%' AND status = 'scheduled'")
     assert (nxt["title"], nxt["base_amount"]) == ("Sareee", 900)
     await db.close()
+
+
+def test_market_watch_runs_more_often_at_night():
+    """Toutes les 30 min la nuit (02:00-07:30), toutes les 2 h sinon, et au plus tard au début de la nuit."""
+    s = Settings(_env_file=None)
+    paris = ZoneInfo("Europe/Paris")
+    at = lambda h, m: datetime(2026, 10, 27, h, m, tzinfo=paris)  # noqa: E731
+    assert next_watch(at(3, 0), s) == at(3, 30)
+    assert next_watch(at(15, 0), s) == at(17, 0)
+    assert next_watch(at(1, 15), s) == at(2, 0)
+    assert next_watch(at(15, 0), Settings(_env_file=None, value_watch_night_minutes=0)) == at(17, 0)
