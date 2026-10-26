@@ -118,7 +118,8 @@ async def test_crashed_task_is_restarted_while_others_keep_running(monkeypatch):
 
 
 def test_peak_spacing_falls_back_after_site_limits(tmp_path):
-    """Pic de ventes : une requête par seconde ; le site limite le bot, retour à 1,5 s pendant le délai réglé."""
+    """Pic de ventes : une requête par seconde ; le site limite le bot, retour à 1,5 s pendant le délai réglé.
+    Une panne (500, délai dépassé) ne ralentit pas le pic."""
     now = datetime.now(PARIS)
     around = {"http_peak_start": (now - timedelta(hours=1)).time(), "http_peak_end": (now + timedelta(hours=1)).time()}
     client, _ = make_client(tmp_path, lambda r: httpx.Response(200, json={}), http_min_spacing_seconds=1.5,
@@ -129,7 +130,9 @@ def test_peak_spacing_falls_back_after_site_limits(tmp_path):
     client._route_backoff("sales_summary", 0)
     assert client.spacing() == 1.5
     client._peak_off_until = float("-inf")
-    client._backoff("market_page: ReadTimeout", limited=False)
+    client._backoff("market_page: ReadTimeout", limited=False)  # site en difficulté, pas une limite : le pic continue
+    assert client.spacing() == 1.0
+    client._backoff("market_page: HTTP 429", limited=True)
     assert client.spacing() == 1.5
     later = {"http_peak_start": (now + timedelta(hours=1)).time(), "http_peak_end": (now + timedelta(hours=2)).time()}
     off, _ = make_client(tmp_path, lambda r: httpx.Response(200, json={}), http_min_spacing_seconds=1.5,

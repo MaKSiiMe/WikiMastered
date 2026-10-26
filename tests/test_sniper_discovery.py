@@ -339,3 +339,52 @@ async def test_hopeless_target_is_dropped_without_reread(tmp_path):
     assert "GET /api/marketplace/dear" not in calls
     assert "GET /api/marketplace/blind" in calls  # sans ventes observées ni cote : relue comme avant
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_ended_feed_reads_next_page_when_targets_lie_beyond(tmp_path):
+    """25/10 au soir : la page 1 des fins imminentes s'arrête avant la fin de la fenêtre de mise ; la page 2 relit
+    d'un coup les cibles restantes, au lieu d'une requête par cible. Une page 2 identique à la 1 arrête tout."""
+    now = datetime.now(UTC)
+    page1 = [sale(f"p{i}", f"P{i}", "L", -5 + i * 0.1) for i in range(50)]  # finies ou presque
+    page2 = [sale(f"t{i}", f"T{i}", "L", 15 + i) for i in range(3)]
+    pages, calls = {"1": page1, "2": page2}, []
+
+    def handler(request):
+        params = request.url.params
+        if request.url.path == "/api/marketplace" and params.get("sort") == "ending_soon":
+            calls.append(params["page"])
+            return httpx.Response(200, json={"auctions": pages[params["page"]], "hasMore": True})
+        return httpx.Response(200, json={"bidding": [], "balance": 0})
+
+    client, notifier = make_client(tmp_path, handler, sniper_resale_rarities=["L"])
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    params = snipe_params(client.settings, night=False)
+    for data in page2:
+        sniper._targets[data["id"]] = Target(Auction.model_validate(data), now - timedelta(seconds=30), ceiling=900)
+    sniper._last_read = {("recent", "L"): now, ("ended", "L"): now - timedelta(seconds=60)}
+    await sniper._discover(params, now)
+    assert calls == ["1"] and sniper._ended_page == {"L": 2}
+    await sniper._discover(params, datetime.now(UTC))
+    assert calls == ["1", "2"] and not sniper._ended_page
+    assert all(datetime.now(UTC) - sniper._targets[d["id"]].seen_at < timedelta(seconds=3) for d in page2)
+    assert "fins imminentes : 1 page(s) 2+ lue(s), 3 vente(s) de la fenêtre de mise relue(s)" in sniper.recap()[0]
+
+    # Le site ignore le numéro de page : la page 2 répète la 1, plus jamais de page 2.
+    pages["2"] = page1
+    for data in page2:
+        sniper._targets[data["id"]].seen_at = now - timedelta(seconds=30)
+    sniper._last_read[("ended", "L")] = _EPOCH_TEST
+    await sniper._discover(params, datetime.now(UTC))
+    await sniper._discover(params, datetime.now(UTC))
+    assert calls[-2:] == ["1", "2"] and sniper._deep_off
+    sniper._last_read[("ended", "L")] = _EPOCH_TEST
+    await sniper._discover(params, datetime.now(UTC))
+    assert calls[-1] == "1" and not sniper._ended_page
+    await db.close()
+
+
+_EPOCH_TEST = datetime.min.replace(tzinfo=UTC)

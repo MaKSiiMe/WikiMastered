@@ -86,6 +86,12 @@ _EPOCH = datetime.min.replace(tzinfo=UTC)
 # relecture suivante (fins imminentes, toutes les ~4 s) doit avoir vu la nouvelle fin. Avec 30 s, sur les enchères
 # où le bot a misé du 16 au 25/10, 453 prix sur 1120 étaient notés trop bas (prix final réel ×1,74 en moyenne).
 HARVEST_DELAY = timedelta(seconds=120)
+# Fins imminentes : une page de 50 relit d'un coup toutes les cibles qu'elle contient, une relecture une seule. Le
+# 25/10 entre 20 h et minuit, 458 ventes sur 2110 n'étaient pas relues à temps : quand la page 1 (encombrée de ventes
+# finies pas encore closes) s'arrête avant la fin de la fenêtre de mise et qu'au moins N cibles de la fenêtre restent
+# au-delà, la page suivante est lue au passage d'après, jusqu'à la page ENDED_MAX_PAGES.
+ENDED_MAX_PAGES = 3
+ENDED_DEEPER_MIN_TARGETS = 2
 
 
 @dataclass
@@ -346,6 +352,12 @@ class AuctionSniper(Worker):
         # Ventes jamais relues dans leur fenêtre de mise : id -> (plafond estimé, fin), jugées à leur fin.
         self._unread: dict[str, tuple[int, datetime]] = {}
         self._unread_winnable = 0
+        # Fins imminentes : page à lire au prochain passage (par rareté), ids de la dernière page lue, et depuis le
+        # dernier récap, pages 2+ lues et cibles de la fenêtre de mise qu'elles ont relues.
+        self._ended_page: dict[str, int] = {}
+        self._ended_ids: dict[str, set[str]] = {}
+        self._deep_off = False  # le site renvoie la même page quel que soit le numéro : plus de pages 2+
+        self._deep_reads = self._deep_refreshed = 0
         # Mises réelles en tête : auction_id -> (bid_id, montant)
         self._leading: dict[str, tuple[int, int]] = {}
         for row in await self.db.placed_bids():
@@ -493,13 +505,41 @@ class AuctionSniper(Worker):
             await self._ingest(auctions, params, now)
         elif kind == "ended":
             # Ventes terminées pas encore clôturées : leur dernier prix devient une vente observée.
-            auctions, _ = await self.api.market_page(sort="ending_soon", rarity=rarity, limit=MARKET_LIMIT)
+            page = self._ended_page.pop(rarity, 1)
+            auctions, more = await self.api.market_page(sort="ending_soon", rarity=rarity, limit=MARKET_LIMIT,
+                                                        page=page)
             await self._remember(auctions, now)
             self._judge_unread(auctions, now)
             await self._ingest(auctions, params, now)
+            ids = {a.id for a in auctions}
+            if page > 1:
+                if ids and ids <= self._ended_ids.get(rarity, set()):
+                    self._deep_off = True
+                    self.log.warning("fins imminentes : la page %d répète la précédente, pages suivantes "
+                                     "abandonnées", page)
+                    return
+                self._deep_reads += 1
+                self._deep_refreshed += sum(1 for a in auctions if self._in_window(a.id, params, now))
+            self._ended_ids[rarity] = ids
+            if more and page < ENDED_MAX_PAGES and not self._deep_off and auctions \
+                    and self._beyond(max(a.end_at for a in auctions), params, now) >= ENDED_DEEPER_MIN_TARGETS:
+                self._ended_page[rarity] = page + 1
+                self._last_read[(kind, rarity)] = _EPOCH  # la page suivante passe au prochain passage
         else:
             auctions, _ = await self.api.market_page(sort="ending_soon", q=self._next_day(), limit=MARKET_LIMIT)
             await self._ingest(auctions, params, now)
+
+    def _in_window(self, aid: str, params: SnipeParams, now: datetime) -> bool:
+        """Cible de revente ou de collection pas encore misée, dans sa fenêtre de mise."""
+        t = self._targets.get(aid)
+        return t is not None and not t.recheck and \
+            self.settings.sniper_min_seconds_left < t.auction.seconds_left(now) <= params.window_seconds
+
+    def _beyond(self, last_end: datetime, params: SnipeParams, now: datetime) -> int:
+        """Cibles de la fenêtre de mise qui finissent après la dernière vente d'une page des fins imminentes, et que
+        cette page n'a donc pas relues."""
+        return sum(1 for aid, t in self._targets.items()
+                   if t.auction.end_at > last_end and now - t.seen_at > FRESH and self._in_window(aid, params, now))
 
     def _judge_unread(self, auctions: list[Auction], now: datetime) -> None:
         """Ventes terminées jamais relues : gagnables si notre plafond estimé couvrait la mise qui battait le prix
@@ -1101,7 +1141,10 @@ class AuctionSniper(Worker):
             found += f", {self._gaps} trou(s) dans les nouvelles ventes"
         if self._unread_winnable:
             found += f", {self._unread_winnable} vente(s) gagnable(s) jamais relue(s) (plafond estimé ≥ prix final)"
-        self._gaps = self._days_found = self._unread_winnable = 0
+        if self._deep_reads:
+            found += f", fins imminentes : {self._deep_reads} page(s) 2+ lue(s), {self._deep_refreshed} vente(s) " \
+                     "de la fenêtre de mise relue(s) par elles"
+        self._gaps = self._days_found = self._unread_winnable = self._deep_reads = self._deep_refreshed = 0
         if not outcomes:
             return [found, "Aucune enchère dans la fenêtre de mise."]
         ranked = Counter(outcomes.values()).most_common()

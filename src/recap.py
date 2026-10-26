@@ -23,10 +23,9 @@ STALE_AFTER = timedelta(minutes=15)
 # Blocs du récap, dans l'ordre : (titre, workers concernés)
 BLOCKS: list[tuple[str, tuple[str, ...]]] = [
     (Topic.SNIPER.value, ("sniper",)),
-    (Topic.SALES.value, ("inventory",)),
+    (Topic.SALES.value, ("inventory", "cotes")),
     (Topic.COLLECTION.value, ("collection",)),
     (Topic.ACHIEVEMENTS.value, ("succes",)),
-    (Topic.VALUE.value, ("valeur",)),
     ("🛡️ Garde", ("garde",)),
 ]
 

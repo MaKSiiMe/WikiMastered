@@ -433,6 +433,37 @@ async def test_relist_follows_the_copy_back_under_a_new_id(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_unsold_resale_is_relisted_under_the_returned_copy(tmp_path):
+    """25-26/10 : chaque remise en vente partait sous l'ancien identifiant, refusée « vous ne possédez pas cette
+    carte », puis reprise 1 min plus tard. L'exemplaire revenu est cherché avant la remise en vente."""
+    def handler(request):
+        path = request.url.path
+        if path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": [owned("back", "mw", "Mark Wahlberg")]})
+        if path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 4, "maxConcurrentAuctions": 5})
+        return httpx.Response(200, json={"auction": {
+            "id": "auc", "card": {"id": "mw", "wikipedia_title": "Mark Wahlberg", "rarity": "L"},
+            "status": "settled_unsold", "end_at": datetime.now(UTC).isoformat(), "base_amount": 5700}})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    bid = await db.record_bid(auction_id="a", card_id="mw", title="Mark Wahlberg", rarity="L", is_shiny=False,
+                              amount=5000, reference_price=7000, reason="revente ~7000 WB", night=False,
+                              dry_run=False, status="won", end_at=now)
+    lid = await db.schedule_listing(owned_card_id="sold-copy", card_id="mw", title="Mark Wahlberg", rarity="L",
+                                    base_amount=5700, duration_minutes=720, post_at=now - timedelta(hours=12),
+                                    target_end=now - timedelta(minutes=5), reason="position", bid_id=bid)
+    await db.update_listing(lid, status="posted", auction_id="auc")
+    await InventoryManager(ctx).settle_listings()
+    row = await db._one("SELECT owned_card_id, relist_count FROM listings ORDER BY id DESC LIMIT 1")
+    assert (row["owned_card_id"], row["relist_count"]) == ("back", 1)
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_failed_relist_resumes_at_its_reduced_price(tmp_path):
     """Remise en vente refusée pour de bon : la position repart à son prix réduit, pas au prix de départ."""
     def handler(request):
@@ -479,4 +510,65 @@ async def test_report_separates_rejected_bids_collection_and_simulated_positions
     assert (report["won_collection"], report["spent_collection"]) == (1, 15)
     assert (report["positions_held"], report["capital_in_positions"]) == (1, 270)
     assert (report["positions_held_sim"], report["capital_simulated"]) == (1, 600)
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tagged_purchase_becomes_a_position_at_the_price_paid(tmp_path):
+    """26/10 : le 11 septembre (L) acheté 7400 à la main ; étiqueté « revente », le bot la revend comme ses positions,
+    au prix final relu sur le site. Hors des chiffres du sniper ; repris une seule fois."""
+    from tests.test_integration import ME
+
+    arrived = datetime.now(UTC) - timedelta(hours=20)
+    copy = {**owned("911", "c911", "Attentats du 11 septembre 2001"), "obtained_at": arrived.isoformat(),
+            "tags": [{"name": "Revente"}]}
+    other = {**owned("x", "cx", "Pack"), "tags": [{"name": "revente"}]}  # carte d'un paquet : aucun achat
+    # Arrivée il y a 1 min : sa vente n'est peut-être pas encore notée, elle attend (pas d'avertissement).
+    fresh = {**owned("y", "cy", "Neuve"), "obtained_at": datetime.now(UTC).isoformat(), "tags": [{"name": "revente"}]}
+
+    def handler(request):
+        path = request.url.path
+        if path == "/api/my-collection":
+            page = [copy, other, fresh] if request.url.params["page"] == "0" else []
+            return httpx.Response(200, json={"collection": page})
+        if path == "/api/marketplace/a911":
+            return httpx.Response(200, json={"auction": {
+                "id": "a911", "card": {"id": "c911", "wikipedia_title": "Attentats", "rarity": "L"},
+                "status": "settled_sold", "end_at": arrived.isoformat(), "base_amount": 7400,
+                "final_price": 7450, "winner_id": ME}})
+        return httpx.Response(404, json={})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    await seed_observed(db, "c911", [8000, 8200, 8100], rarity="L")
+    rows = [("a911", 7400, arrived - timedelta(minutes=1), ME.upper()),           # ton achat (vu 7400)
+            ("old", 6000, arrived - timedelta(days=3), ME),                       # trop ancien
+            ("rival", 8000, arrived - timedelta(minutes=5), "someone-else")]      # acheté par un autre
+    await db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at, buyer_id) "
+        "VALUES (?, 'c911', 'Attentats', 'L', ?, ?, ?)", [(a, p, t.isoformat(), b) for a, p, t, b in rows])
+    await db.db.commit()
+    inv = InventoryManager(ctx)
+    assert await inv.adopt_manual(await inv._recent_copies()) == 1
+    bid = (await db.positions_to_list())[0]
+    assert (bid["auction_id"], bid["amount"], bid["status"], bid["reason"]) == ("a911", 7450, "won", "achat manuel")
+    assert bid["reference_price"] > 7450  # estimation des ventes observées : revente au-dessus du prix payé
+    assert ("SUCCESS", "Achat à revendre pris en charge") in notifier.sent
+    assert [t for _, t in notifier.sent].count("Achat à revendre : prix introuvable") == 1
+
+    # Repris une fois : ni nouvelle position, ni nouvel avertissement.
+    assert await inv.adopt_manual(await inv._recent_copies()) == 0
+    assert len(await db.positions_to_list()) == 1
+    assert [t for _, t in notifier.sent].count("Achat à revendre : prix introuvable") == 1
+    # Une position comme les autres, mais hors des chiffres du sniper.
+    since = datetime.now(UTC) - timedelta(days=3)
+    assert (await db.positions_summary())["real_cost"] == 7450
+    assert not await db.bids_since(since) and await db.committed_since(since) == 0
+    stats = await db.recap_stats(since)
+    assert stats["bids_real"] == stats["won"] == 0 and stats["held_real"] == 1
+    # Revendue comme une position du bot : l'exemplaire étiqueté, au-dessus du prix payé.
+    await inv.manage_positions()
+    row = await db._one("SELECT owned_card_id, base_amount, reason FROM listings")
+    assert row["owned_card_id"] == "911" and row["base_amount"] > 7450 and row["reason"] == "position (achetée 7450)"
     await db.close()

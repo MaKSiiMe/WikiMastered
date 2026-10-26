@@ -4,7 +4,6 @@
     python -m src.main check                    # vérifie la session et affiche le solde
     python -m src.main inspect                  # capture et compare les vraies réponses JSON
     python -m src.main inventory scan|list|discard [--apply]
-    python -m src.main value [--lookups 0]      # cartes de valeur de l'inventaire, derniers exemplaires compris
     python -m src.main report                   # envoie le bilan du jour sur Discord
     python -m src.main collection               # collection à compléter (jours de l'année…)
     python -m src.main market [--pages 4] [--rarity UR]  # où sont les fins imminentes dans le marché
@@ -55,7 +54,6 @@ from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
 from src.workers.profile_guard import ProfileGuard
 from src.workers.value_scan import ValueScan
-from src.workers.value_scan import cli as value_cli
 
 log = logging.getLogger("wikimastered")
 
@@ -595,9 +593,6 @@ def main(argv: list[str] | None = None) -> None:
     pr = sub.add_parser("prices", help="ventes observées d'une carte, estimation du bot et ventes en cours "
                                        "(lecture seule)")
     pr.add_argument("title", help="titre exact de la carte, entre guillemets")
-    val = sub.add_parser("value", help="cartes de valeur de l'inventaire, derniers exemplaires compris (lecture seule)")
-    val.add_argument("--lookups", type=int, default=0,
-                     help="cotes demandées au site en plus du cache (route limitée ; défaut 0)")
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
     inv.add_argument("action", choices=["scan", "report", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
@@ -629,7 +624,6 @@ def main(argv: list[str] | None = None) -> None:
         "sniper-report": lambda ctx: sniper_report_status(ctx, args.hours, args.summary, args.breakdown),
         "prices": lambda ctx: prices_status(ctx, args.title),
         "inventory": lambda ctx: inventory_cli(ctx, args.action, args.apply, args.lookups),
-        "value": lambda ctx: value_cli(ctx, max(0, args.lookups)),
     }
     in_context(settings, commands[command])
 

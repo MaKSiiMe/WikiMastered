@@ -8,12 +8,11 @@
   Invendue, elle repart à −10 % (POSITION_MAX_RELISTS fois), puis au prix d'achat tant qu'une place de vente
   est libre ; jamais sous le prix d'achat.
   Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
-- Cartes de valeur (VALUE_SELL_MIN) : une à la fois, sur une place de vente gardée pour elles, à VALUE_SELL_SHARE
-  de la cote pour VALUE_SELL_MINUTES. Invendue, la carte revient et la suivante prend la place : jamais essayées
-  d'abord, les mieux cotées en tête, puis l'essai le plus ancien.
+- Tes achats (MANUAL_RESALE_TAG) : un exemplaire portant cette étiquette devient une position, revendue comme celles
+  du sniper, au prix payé (ta vente observée de la carte, relue sur le site).
 - Défausse : doublons sans valeur, seulement si aucun palier de succès de taille de
   collection n'est proche (ACHIEVEMENT_MILESTONES), par lots de 50 [WR discard.js]. Les raretés de
-  DISCARD_LAST_COPY_RARITIES partent même en dernier exemplaire, si l'analyse de valeur a coté la carte sans
+  DISCARD_LAST_COPY_RARITIES partent même en dernier exemplaire, si le passage de cotes (module I) a coté la carte sans
   aucune vente au-dessus de DISCARD_MAX_VALUE ; DISCARD_MAX_PER_RUN exemplaires par passage au plus.
 - Jamais touchés : favoris, shiny, exemplaires en échange ou déjà en vente.
 
@@ -58,11 +57,16 @@ RIVAL_MIN_OVERLAP = timedelta(hours=1)
 COPY_SEARCH_PAGES = 5  # pages de la recherche par titre lues pour retrouver un exemplaire
 _EPOCH = datetime.min.replace(tzinfo=UTC)
 SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une revente simulée
-VALUE_KV = "value_scan"      # état de l'analyse de valeur (workers/value_scan.py) : cartes surveillées
-VALUE_REASON = "valeur"      # motif des ventes de cartes de valeur
-VALUE_COPY_RETRY = timedelta(hours=6)  # carte de valeur sans exemplaire vendable : recherchée de nouveau après N
-VALUE_SIGHTINGS = timedelta(days=7)    # mises vues sur le marché qui servent de plancher au prix de départ
-VALUE_TRIES_PER_CHECK = 3    # cartes de valeur cherchées dans la collection par vérification, au plus
+# Tes achats étiquetés : les derniers exemplaires obtenus (N pages de 50) relus toutes les MANUAL_CHECK ; toute la
+# collection à chaque passage de la défausse (INVENTORY_INTERVAL_MINUTES).
+MANUAL_CHECK = timedelta(minutes=15)
+MANUAL_PAGES = 2
+MANUAL_KV = "manual_resale"  # exemplaires déjà repris, et ceux dont l'achat est introuvable (prévenu une fois)
+# Ton achat d'un exemplaire : fini au plus N avant son arrivée dans la collection (ou juste après, horloges).
+MANUAL_BOUGHT_BEFORE = timedelta(days=2)
+MANUAL_BOUGHT_AFTER = timedelta(minutes=30)
+# Exemplaire arrivé depuis moins de N : sa vente n'est peut-être pas encore notée (HARVEST_DELAY du sniper), il attend.
+MANUAL_SETTLE = timedelta(minutes=10)
 
 
 # ---------------------------------------------------------------- logique pure
@@ -90,18 +94,6 @@ class SaleCandidate:
     owned: OwnedCard
     average: float
     price: int
-
-
-@dataclass(frozen=True)
-class ValueSale:
-    card_id: str
-    rarity: str
-    title: str
-    value: float
-
-    @property
-    def key(self) -> str:
-        return f"{self.card_id}|{self.rarity}"
 
 
 @dataclass(frozen=True)
@@ -173,36 +165,9 @@ def select_for_sale(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[s
     return out
 
 
-def value_sale_queue(watch: dict[str, str], values: dict[str, float], listed: dict[str, datetime], s: Settings,
-                     bought: frozenset[str] | set[str] = frozenset()) -> list[ValueSale]:
-    """Cartes de valeur à mettre en vente (`watch` : carte|rareté -> titre, surveillées par l'analyse de valeur ;
-    `values` : leur cote ; `listed` : leur dernière mise en vente) : cotées au moins VALUE_SELL_MIN, hors
-    VALUE_SELL_EXCLUDE et cartes achetées par le bot. Jamais mises en vente d'abord, les mieux cotées en tête, puis
-    la mise en vente la plus ancienne."""
-    excluded = {t.strip().casefold() for t in s.value_sell_exclude}
-    out = []
-    for key, title in watch.items():
-        card_id, rarity = key.split("|", 1)
-        value = values.get(key)
-        if value is None or value < s.value_sell_min or title.strip().casefold() in excluded or card_id in bought:
-            continue
-        out.append(ValueSale(card_id, rarity, title, value))
-    out.sort(key=lambda v: (v.key in listed, listed.get(v.key, _EPOCH), -v.value, v.title))
-    return out
-
-
-def value_sale_price(value: float, share: float, best_bid: int | None) -> int:
-    """Prix de départ d'une carte de valeur : `share` de sa cote, jamais sous la plus haute mise vue sur le marché."""
-    return max(1, round(value * share), best_bid or 0)
-
-
-def is_value_sale(row) -> bool:
-    return (row["reason"] or "").startswith(VALUE_REASON)
-
-
 def worthless(card_id: str, known: dict[str, float | None], s: Settings,
               bought: frozenset[str] | set[str] = frozenset()) -> bool:
-    """Carte défaussable même en dernier exemplaire : cotée par l'analyse de valeur (`known`, voir
+    """Carte défaussable même en dernier exemplaire : cotée par le module I (`known`, voir
     Database.known_values), sans aucune vente connue au-dessus de DISCARD_MAX_VALUE, et pas achetée par le bot."""
     if not s.discard_last_copy_rarities or card_id not in known or card_id in bought:
         return False
@@ -351,13 +316,11 @@ class InventoryManager(Worker):
         super().__init__(ctx)
         self._starred_warned: set[int] = set()  # positions dont l'exemplaire est en favori (prévenu une fois)
         self._copy_retry: dict[int, tuple[int, datetime]] = {}  # position -> (essais manqués, prochain essai)
-        self._value_waiting = False  # une carte de valeur attend une place : elle lui est gardée
-        self._value_retry: dict[str, datetime] = {}  # carte|rareté sans exemplaire vendable -> prochain essai
 
     async def setup(self) -> None:
         self._next_scan = utcnow() + timedelta(minutes=2)
         self._next_sale_check = utcnow() + timedelta(minutes=2)
-        self._next_value_check = utcnow() + timedelta(minutes=2)
+        self._next_manual = utcnow() + timedelta(minutes=2)
         # Doublons à vendre, du mieux coté au moins coté : relus au plus toutes les INVENTORY_INTERVAL_MINUTES
         # (lire la collection coûte ~175 requêtes), consommés à chaque place libérée.
         self._sale_queue: list[SaleCandidate] = []
@@ -379,9 +342,9 @@ class InventoryManager(Worker):
         await self.settle_listings()
         s = self.settings
         now = utcnow()
-        if s.value_sell_min > 0 and now >= self._next_value_check:
-            self._next_value_check = now + timedelta(minutes=s.sell_check_minutes)
-            await self.sell_value_card()
+        if s.manual_resale_tag.strip() and now >= self._next_manual:
+            self._next_manual = now + MANUAL_CHECK
+            await self.adopt_manual(await self._recent_copies())
         if s.auto_list and now >= self._next_sale_check:
             self._next_sale_check = now + timedelta(minutes=s.sell_check_minutes)
             await self.fill_free_slots()
@@ -404,74 +367,6 @@ class InventoryManager(Worker):
             self.log.info("%d doublon(s) à vendre (cote ≥ %d WB)", len(self._sale_queue), s.sell_min_value)
         batch, self._sale_queue = self._sale_queue[:free], self._sale_queue[free:]
         return await self.schedule_sales(batch, slots=free)
-
-    # ------------------------------------------------------ cartes de valeur
-    async def value_queue(self) -> list[ValueSale]:
-        """Cartes de valeur à mettre en vente, d'après les cartes surveillées par l'analyse de valeur et leur cote en
-        cache (aucune requête)."""
-        s = self.settings
-        watch: dict[str, str] = (await self.db.kv_get(VALUE_KV) or {}).get("watch", {})
-        values: dict[str, float] = {}
-        for key in watch:
-            card_id, rarity = key.split("|", 1)
-            quotes = await self.ctx.prices.quotes(card_id, max_age=timedelta(days=s.value_scan_unsold_days),
-                                                  fetch=False)
-            q = quotes.get(rarity) or quotes.get(ANY)
-            if q and q.average is not None:
-                values[key] = q.average
-        return value_sale_queue(watch, values, await self.db.last_listed(VALUE_REASON), s,
-                                await self.db.bought_card_ids())
-
-    async def sell_value_card(self) -> bool:
-        """Met en vente la prochaine carte de valeur, si aucune n'est déjà en vente. Tant qu'une carte attend, une
-        place de vente lui est gardée : les reventes et les doublons se partagent les autres. Renvoie True si une
-        vente est programmée."""
-        s = self.settings
-        self._value_waiting = False
-        if await self.db.open_listings_count(VALUE_REASON):
-            return False
-        now = utcnow()
-        queue = [v for v in await self.value_queue() if self._value_retry.get(v.key, _EPOCH) <= now]
-        if not queue:
-            return False
-        self._value_waiting = True
-        selling, maximum = await self.slot_usage()
-        if selling >= maximum:
-            return False
-        for v in queue[:VALUE_TRIES_PER_CHECK]:
-            try:
-                copy = await self._value_copy(v)
-            except ApiError as exc:
-                self.log.debug("carte de valeur %s : collection illisible (%s)", v.title, exc)
-                return False
-            if copy is None:
-                self._value_retry[v.key] = now + VALUE_COPY_RETRY
-                self.log.info("carte de valeur %s (%s) : aucun exemplaire vendable (favori, shiny, protégé ou "
-                              "absent), nouvel essai dans %d h", v.title, v.rarity, VALUE_COPY_RETRY.seconds // 3600)
-                continue
-            best = await self.db.best_sighting_bid(v.card_id, v.rarity, now - VALUE_SIGHTINGS)
-            price = value_sale_price(v.value, s.value_sell_share, best)
-            minutes = min(s.listing_duration_options or [s.value_sell_minutes],
-                          key=lambda d: abs(d - s.value_sell_minutes))
-            await self.db.schedule_listing(owned_card_id=copy, card_id=v.card_id, title=v.title, rarity=v.rarity,
-                                           base_amount=price, duration_minutes=minutes, post_at=now,
-                                           target_end=now + timedelta(minutes=minutes),
-                                           reason=f"{VALUE_REASON} (cote {v.value:.0f})")
-            self.log.info("carte de valeur programmée : %s (%s) %d WB, cote %.0f%s, %d min", v.title, v.rarity, price,
-                          v.value, f", mise vue {best}" if best else "", minutes)
-            return True
-        self._value_waiting = False
-        return False
-
-    async def _value_copy(self, v: ValueSale) -> str | None:
-        """Exemplaire à vendre : même rareté, ni favori, ni shiny, ni protégé (étiquette PROTECTED_TAGS, échange)."""
-        copies = [c for c in await self._owned_copies(v.card_id, v.title)
-                  if (c.rarity or "?") == v.rarity and not c.starred and not c.is_shiny]
-        if not copies:
-            return None
-        excluded = await excluded_copies(self.ctx, copies)
-        free = sorted(c.id for c in copies if c.id not in excluded)
-        return free[0] if free else None
 
     # ------------------------------------------------------------ analyse
     async def snapshot(self, lookups: int | None = None
@@ -511,6 +406,8 @@ class InventoryManager(Worker):
     async def run_cycle(self, *, list_cards: bool, discard: bool) -> dict:
         groups, excluded, quotes, total = await self.snapshot()
         report: dict = {}
+        if self.settings.manual_resale_tag.strip():
+            report["manual"] = await self.adopt_manual([c for copies in groups.values() for c in copies])
         if list_cards:
             report["listed"] = await self.schedule_sales(select_for_sale(groups, quotes, excluded, self.settings,
                                                                          await self.db.bought_card_ids()))
@@ -538,7 +435,7 @@ class InventoryManager(Worker):
         selling, maximum = await self.slot_usage()
         real_only = self.listing_live
         positions = [r for r in await self.db.positions_to_list() if not (real_only and r["dry_run"])]
-        reserved = await self.db.pending_listings_count(real_only) + len(positions) + int(self._value_waiting)
+        reserved = await self.db.pending_listings_count(real_only) + len(positions)
         return max(0, maximum - selling - reserved)
 
     async def position_minutes(self) -> int:
@@ -645,6 +542,83 @@ class InventoryManager(Worker):
                                  reason=f"position (achetée {row['amount']})", bid_id=row["id"],
                                  relist_count=relist["relist_count"] if relist else 0)
 
+    # ------------------------------------------------------------ tes achats
+    async def _recent_copies(self) -> list[OwnedCard]:
+        rows: list[OwnedCard] = []
+        try:
+            for number in range(MANUAL_PAGES):
+                rows += (await self.api.collection_page(number, sort="added")).rows()
+        except ApiError as exc:
+            self.log.debug("derniers exemplaires illisibles (%s)", exc)
+        return rows
+
+    async def adopt_manual(self, rows: list[OwnedCard]) -> int:
+        """Tes achats étiquetés MANUAL_RESALE_TAG deviennent des positions, au prix payé : ta dernière vente observée
+        de la carte (même rareté, shiny ou non) finie avant l'arrivée de l'exemplaire, relue sur le site. Un exemplaire
+        n'est repris qu'une fois, jamais quand une position de la même carte attend déjà. Achat introuvable : prévenu
+        une fois, la carte n'est pas vendue. Renvoie le nombre d'achats repris."""
+        s = self.settings
+        tag, me = s.manual_resale_tag.strip().casefold(), (self.api.user_id or "").lower()
+        tagged = [c for c in rows if tag in c.tag_names]
+        if not tagged or not me:
+            return 0
+        state = await self.db.kv_get(MANUAL_KV) or {}
+        adopted_ids, missing_ids = set(state.get("adopted", [])), set(state.get("missing", []))
+        adopted = 0
+        for c in tagged:
+            if c.id in adopted_ids or (c.obtained_at and utcnow() - c.obtained_at < MANUAL_SETTLE) \
+                    or await self.db.holds_position(c.catalog_id, c.rarity, c.is_shiny):
+                continue
+            label = f"{c.title} ({c.rarity}{' ✨' if c.is_shiny else ''})"
+            arrived = c.obtained_at or utcnow()
+            buy = await self.db.my_purchase(c.catalog_id, c.rarity, c.is_shiny, me, arrived - MANUAL_BOUGHT_BEFORE,
+                                            arrived + MANUAL_BOUGHT_AFTER)
+            price = await self._paid(buy, me) if buy else None
+            if price is None:
+                if c.id not in missing_ids:
+                    missing_ids.add(c.id)
+                    self.notifier.warning(
+                        "Achat à revendre : prix introuvable",
+                        f"{label} porte l'étiquette « {s.manual_resale_tag} », mais je ne trouve pas ton achat dans "
+                        "les ventes que le bot a suivies (achat de plus de 2 jours avant l'arrivée, carte d'un paquet, "
+                        "vente pas vue). Je ne la vends pas : mets-la en vente toi-même.")
+                continue
+            quote = None
+            try:
+                quote = (await self.ctx.prices.quote(c.catalog_id, c.rarity, shiny=c.is_shiny, wait=False)).average
+            except (RateLimited, ApiError) as exc:
+                self.log.debug("%s : cote indisponible (%s)", c.title, exc)
+            await self.db.record_manual_position(
+                auction_id=buy["auction_id"], card_id=c.catalog_id, title=c.title, rarity=c.rarity,
+                is_shiny=c.is_shiny, amount=price, reference_price=quote,
+                bought_at=datetime.fromisoformat(buy["ended_at"]))
+            adopted_ids.add(c.id)
+            missing_ids.discard(c.id)
+            adopted += 1
+            target = f", revente visée ~{quote:.0f} WB" if quote else ""
+            self.notifier.success("Achat à revendre pris en charge",
+                                  f"{label} : achetée {price} WB{target}. Le bot la revend comme ses positions "
+                                  "(départ au-dessus du prix d'achat, remises à -10 %, plancher).", important=True)
+        await self.db.kv_set(MANUAL_KV, {"adopted": sorted(adopted_ids), "missing": sorted(missing_ids)})
+        return adopted
+
+    async def _paid(self, buy, me: str) -> int | None:
+        """Prix payé : le prix final relu sur le site (la vente observée peut dater de quelques secondes avant la
+        fin), sinon le dernier prix vu. En cours, invendue ou gagnée par quelqu'un d'autre : None (ce n'est pas ton
+        achat)."""
+        try:
+            auction = await self.api.auction(buy["auction_id"])
+        except ApiError as exc:
+            self.log.debug("enchère %s illisible (%s) : prix observé gardé", buy["auction_id"], exc)
+            return buy["price"]
+        winner = (auction.winner_id or auction.current_bidder_id or "").lower()
+        if auction.status in ("active", "settled_unsold") or (winner and winner != me):
+            return None
+        final = auction.final_price or auction.current_bid or buy["price"]
+        if final != buy["price"]:
+            await self.db.correct_observed_sale(buy["auction_id"], final, winner or None)
+        return final
+
     async def _find_copy(self, row) -> str | None:
         """Exemplaire acheté : le plus récent de cette carte dans la collection, jamais un favori (le site refuse
         de le vendre : le 16/10, Place publique refusée 3 fois « en favori », puis revente abandonnée)."""
@@ -692,17 +666,13 @@ class InventoryManager(Worker):
         if not due:
             return
         selling, maximum = await self.slot_usage()
-        # La carte de valeur passe d'abord, sur sa place gardée ; les autres ventes ne la prennent pas.
-        reserve = int(self._value_waiting)
-        for row in sorted(due, key=lambda r: not is_value_sale(r)):
+        for row in due:
             simulated = bool(row["dry_run"]) or row["owned_card_id"].startswith("sim-")
             if not (simulated and self.listing_live):  # une revente simulée n'occupe pas une vraie place
-                if selling >= maximum - (0 if is_value_sale(row) else reserve):
+                if selling >= maximum:
                     await self._postpone(row)
                     continue
                 selling += 1
-                if is_value_sale(row):
-                    reserve = 0  # elle occupe maintenant sa place
             price = row["base_amount"]
             if row["bid_id"] and not simulated:
                 price = await self._undercut(row)
@@ -735,9 +705,6 @@ class InventoryManager(Worker):
                                              target_end=target_end, auction_id=auction_id)
                 if row["bid_id"]:
                     self.notifier.info("Carte mise en vente", label, durée=f"{minutes} min", important=True)
-                elif is_value_sale(row):
-                    self.notifier.info("Carte de valeur mise en vente", f"{label} ({row['reason']})",
-                                       durée=f"{minutes} min", important=True)
                 else:
                     self.log.info("doublon mis en vente : %s (%d min)", label, minutes)
             else:
@@ -843,12 +810,11 @@ class InventoryManager(Worker):
                 self.notifier.info("Mise en vente vérifiée", f"{label} : pas créée.{again}")
 
     async def _postpone(self, row) -> None:
-        """Plus de place de vente. Revente d'une position publiée tout de suite (POSITION_POST_NOW) ou carte de
-        valeur : nouvel essai dans SELL_CHECK_MINUTES, dès qu'une place se libère (le 16/10, Place publique était
-        reportée de 24 h).
+        """Plus de place de vente. Revente d'une position publiée tout de suite (POSITION_POST_NOW) : nouvel essai
+        dans SELL_CHECK_MINUTES, dès qu'une place se libère (le 16/10, Place publique était reportée de 24 h).
         Sinon : même horaire, le jour suivant."""
         s = self.settings
-        if (row["bid_id"] is not None and s.position_post_now) or is_value_sale(row):
+        if row["bid_id"] is not None and s.position_post_now:
             retry = utcnow() + timedelta(minutes=s.sell_check_minutes)
             await self.db.update_listing(row["id"], post_at=retry,
                                          target_end=retry + timedelta(minutes=row["duration_minutes"] or 0))
@@ -897,14 +863,8 @@ class InventoryManager(Worker):
                     await self.db.close_position(bid["id"], price)
                     self.notifier.success("Revente réussie", f"{label} : achetée {bid['amount']}, vendue {price} WB "
                                           f"({price - bid['amount']:+d})", important=True)
-                elif is_value_sale(row):
-                    self.notifier.success("Carte de valeur vendue", f"{label} : départ {row['base_amount']}, vendue "
-                                          f"{price} WB ({row['reason']})", important=True)
                 continue
             await self.db.update_listing(row["id"], status="unsold", settled_at=utcnow())
-            if is_value_sale(row):
-                self.notifier.info("Carte de valeur invendue", f"{label} à {row['base_amount']} WB ({row['reason']}) : "
-                                   "carte gardée, la suivante prend sa place.")
             await self._unsold(row, bid, label)
 
     async def _simulated_sale(self, row, bid) -> int | None:
@@ -944,9 +904,24 @@ class InventoryManager(Worker):
             # Déjà au prix d'achat : message discret, la carte peut tourner plusieurs fois.
             self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
                                f"(achetée {bid['amount']}).", important=row["base_amount"] > floor)
-        await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
-                             rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
-                             bid_id=bid["id"], relist_count=row["relist_count"] + 1)
+        await self._schedule(owned_id=await self._returned_copy(row, bid), card_id=row["card_id"],
+                             title=row["title"], rarity=row["rarity"], price=price,
+                             reason=f"position (achetée {bid['amount']})", bid_id=bid["id"],
+                             relist_count=row["relist_count"] + 1)
+
+    async def _returned_copy(self, row, bid) -> str:
+        """Exemplaire d'une revente invendue : le site le rend sous un nouvel identifiant (les 25-26/10, chaque remise
+        en vente était d'abord refusée « vous ne possédez pas cette carte », puis reprise 1 min plus tard). Pas encore
+        revenu, ou collection illisible : l'ancien identifiant, que la publication sait reprendre."""
+        if bid["dry_run"] or row["owned_card_id"].startswith("sim-"):
+            return row["owned_card_id"]
+        try:
+            copies = same_copies(await self._owned_copies(row["card_id"], row["title"]), row["rarity"],
+                                 bool(bid["is_shiny"]))
+        except ApiError as exc:
+            self.log.debug("%s : collection illisible (%s), ancien exemplaire gardé", row["title"], exc)
+            return row["owned_card_id"]
+        return newest_sellable(copies, self._protected_tags()) or row["owned_card_id"]
 
     async def _slot_for_relist(self, bid_id: int) -> bool:
         """Place de vente libre pour cette position, une fois servies les ventes programmées et les autres positions
@@ -958,8 +933,7 @@ class InventoryManager(Worker):
         real_only = self.listing_live
         others = [r for r in await self.db.positions_to_list()
                   if r["id"] != bid_id and not (real_only and r["dry_run"])]
-        return (selling + await self.db.pending_listings_count(real_only) + len(others) + int(self._value_waiting)
-                < maximum)
+        return selling + await self.db.pending_listings_count(real_only) + len(others) < maximum
 
     # ------------------------------------------------------------ défausse
     async def discard_candidates(self, groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]],
