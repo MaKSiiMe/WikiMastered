@@ -291,6 +291,17 @@ def plan_position_time(now: datetime, start: time, end: time, minutes: int, dura
     return post_at, minutes, post_at + timedelta(minutes=minutes)
 
 
+def position_duration(now: datetime, short: int, long: int, *, prefer_long: bool, avoid_hours: list[int]) -> int:
+    """Durée choisie (`long` si `prefer_long`, sinon `short`), sauf si elle finit à une heure de `avoid_hours` (heure de
+    `now`, Paris) et l'autre non. 26/10 : une L gagnée à 13-16 h finissait en 6 h à 19-22 h, le pire créneau."""
+    first, other = (long, short) if prefer_long else (short, long)
+
+    def bad(minutes: int) -> bool:
+        return (now + timedelta(minutes=minutes)).hour in avoid_hours
+
+    return other if bad(first) and not bad(other) else first
+
+
 def plan_listing_time(now: datetime, start: time, end: time, durations: list[int], min_duration: int,
                       rng: random.Random | None = None, preferred: int = 360) -> tuple[datetime, int, datetime]:
     """(heure de publication, durée en minutes, fin visée) pour finir dans la fenêtre [start, end].
@@ -467,16 +478,18 @@ class InventoryManager(Worker):
         reserved = await self.db.pending_listings_count(real_only) + len(positions)
         return max(0, maximum - selling - reserved)
 
-    async def position_minutes(self) -> int:
-        """Durée de revente d'une position : longue (12 h, plus vue) tant que moins de POSITION_LIST_LONG_BELOW
-        positions sont détenues, carte en cours de programmation comprise ; sinon courte (6 h), pour faire tourner
-        les 5 places de vente. Ventes réelles : seules les positions réelles comptent."""
+    async def position_minutes(self, now: datetime | None = None) -> int:
+        """Durée de revente d'une position publiée à `now` : longue (12 h, plus vue) tant que moins de
+        POSITION_LIST_LONG_BELOW positions sont détenues, carte en cours de programmation comprise ; sinon courte
+        (6 h), pour faire tourner les 5 places de vente. Ventes réelles : seules les positions réelles comptent.
+        L'autre durée est prise si celle-ci finit dans POSITION_AVOID_END_HOURS et l'autre non."""
         s = self.settings
+        prefer_long = False
         if s.position_list_long_below > 0:
             held = await self.db.positions_summary()
-            if (held["real_count"] if self.listing_live else held["count"]) < s.position_list_long_below:
-                return s.position_list_long_minutes
-        return s.position_list_duration_minutes
+            prefer_long = (held["real_count"] if self.listing_live else held["count"]) < s.position_list_long_below
+        return position_duration(now or now_local(), s.position_list_duration_minutes, s.position_list_long_minutes,
+                                 prefer_long=prefer_long, avoid_hours=s.position_avoid_end_hours)
 
     def _plan(self, now: datetime, *, position: bool, at_peak: bool,
               position_minutes: int | None = None) -> tuple[datetime, int, datetime]:
@@ -718,7 +731,13 @@ class InventoryManager(Worker):
                 if price != row["base_amount"]:
                     await self.db.update_listing(row["id"], base_amount=price)
             minutes = row["duration_minutes"]
-            if not self.settings.listing_duration_options and row["target_end"]:
+            if row["bid_id"] and not is_fire_sale(row) and self.settings.position_post_now \
+                    and self.settings.listing_duration_options:
+                # Durée revue à la publication : une position qui a attendu une place (Bordeaux, gagnée à 18:05 le
+                # 26/10, programmée pour 12 h) ne finit plus à l'heure prévue à l'achat.
+                wanted = await self.position_minutes()
+                minutes = min(self.settings.listing_duration_options, key=lambda d: abs(d - wanted))
+            elif not self.settings.listing_duration_options and row["target_end"]:
                 # Publication en retard (bot arrêté...) : on vise toujours la même heure de fin.
                 left = (datetime.fromisoformat(row["target_end"]) - utcnow()).total_seconds() // 60
                 minutes = int(max(self.settings.listing_min_duration_minutes, left))
