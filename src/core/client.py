@@ -585,7 +585,10 @@ class WikiMastersClient:
         delay = max(delay, retry_after)
         self._pause_until = max(self._pause_until, time.monotonic() + delay)
         log.warning("Pause réseau %.0f s (%s, échec #%d)", delay, reason, self._failures)
-        self._peak_cooldown(reason)  # site limité ou en difficulté : pas de rythme accéléré à la reprise
+        # Seule une vraie limite (429) ralentit le pic : le 25/10 au soir, des 500 et délais dépassés d'un site
+        # surchargé (pas une limite contre le bot) l'ont fait tourner à 1,5 s pendant 2 h sur 4.
+        if limited:
+            self._peak_cooldown(reason)
         now = time.monotonic()
         if limited and now - self._last_rate_alert > 900:
             self._last_rate_alert = now

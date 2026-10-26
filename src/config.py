@@ -87,8 +87,9 @@ class Settings(BaseSettings):
     http_min_spacing_seconds: float = 1.5
     http_jitter_seconds: float = 0.8
     # Pic de ventes (heures de Paris) : un écart plus court, pour relire plus de ventes à miser. Du 18 au 24/10, 1100 à
-    # 1430 L finissaient par heure de 09 h à 02 h, deux fois moins de 03 h à 08 h. Dès que le site limite le bot,
-    # retour à HTTP_MIN_SPACING_SECONDS pendant HTTP_PEAK_COOLDOWN_MINUTES. HTTP_PEAK_SPACING_SECONDS=0 : jamais.
+    # 1430 L finissaient par heure de 09 h à 02 h, deux fois moins de 03 h à 08 h. Dès que le site limite le bot (429,
+    # ou une route refusée deux fois de suite), retour à HTTP_MIN_SPACING_SECONDS pendant HTTP_PEAK_COOLDOWN_MINUTES ;
+    # une panne du site (500, délai dépassé) ne ralentit pas. HTTP_PEAK_SPACING_SECONDS=0 : jamais.
     http_peak_start: time = time(9, 0)
     http_peak_end: time = time(2, 0)
     http_peak_spacing_seconds: float = 1.0
