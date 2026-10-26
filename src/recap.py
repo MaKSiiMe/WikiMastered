@@ -33,6 +33,8 @@ BLOCKS: list[tuple[str, tuple[str, ...]]] = [
 def health(worker: Worker, now: datetime, session_ok: bool) -> tuple[str, str | None]:
     """(ligne d'état, anomalie éventuelle) ; remet à zéro les erreurs comptées depuis le dernier récap."""
     errors, worker.recent_errors = worker.recent_errors, 0
+    if paused := getattr(worker, "paused", None):
+        return f"⏸️ {paused}", None  # voulue (/pause) : pas une anomalie
     blocked = getattr(worker, "blocked", None)
     if blocked:
         return f"⏸️ {blocked}", f"{worker.name} : {blocked}"

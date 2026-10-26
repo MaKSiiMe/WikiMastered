@@ -6,24 +6,29 @@ ne fait que répondre, et seulement à DISCORD_OWNER_ID.
 
 - Lecture : /bilan, /roi, /solde, /positions, /ventes, /prix, /collection, /sniper.
 - Actions : /snipe (confirmée par un bouton), /snipes, /annuler. Voir src/snipes.py.
+- Pilotage : /etat (avec boutons), /pause, /reprise (src/pauses.py), /verif-faite. Une vérification anti-bot
+  demandée par le site arrive aussi en message privé, avec un bouton « C'est fait ».
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
-from datetime import datetime
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta
 from types import ModuleType
 
 import discord
 from discord import app_commands
 
-from src import snipes
+from src import pauses, snipes
 from src.core import timeutils
 from src.core.timeutils import utcnow
+from src.recap import STALE_AFTER
 from src.roi import roi_discord, wb
 from src.workers.auction_sniper import AuctionSniper
-from src.workers.base import Context
+from src.workers.base import Context, Worker
 from src.workers.collection import progress_lines, targets
 
 log = logging.getLogger("wikimastered.discord")
@@ -31,7 +36,13 @@ log = logging.getLogger("wikimastered.discord")
 TEXT_LIMIT = 3900  # description d'un embed : 4096 au plus, avec le bloc de code
 CONFIRM_SECONDS = 120
 RARITIES = ["C", "PC", "R", "SR", "UR", "L"]
-COLOR = 0x5865F2
+COLOR, GREEN, ORANGE, RED, GREY = 0x5865F2, 0x57F287, 0xFEE75C, 0xED4245, 0x99AAB5
+# /pause et /reprise : ce qui est mis en pause (None : tous les workers, sauf la garde des sanctions).
+PAUSE_TARGETS = {"sniper": ["sniper"], "ventes": ["inventory"], "tout": None}
+PAUSE_MINUTES = [("30 min", 30), ("1 h", 60), ("2 h", 120), ("6 h", 360), ("jusqu'à /reprise", 0)]
+VERIFY_ID = "wm:verif-faite"  # bouton du message privé, encore actif après un redémarrage du bot
+WATCH_SECONDS = 15  # vérification anti-bot demandée : vue au plus tard après ce délai
+BUTTON_SECONDS = 600
 
 
 def paris(value: str | datetime | None) -> str:
@@ -57,6 +68,105 @@ async def reply(interaction: discord.Interaction, title: str, text: str, *, code
         await interaction.followup.send(embed=embed, **extra)
     else:
         await interaction.response.send_message(embed=embed, **extra)
+
+
+def ago(delta: timedelta) -> str:
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600} h {seconds % 3600 // 60:02d}"
+
+
+def worker_line(w: Worker, now: datetime, session_ok: bool) -> str:
+    """État d'un worker, sans remettre à zéro les compteurs du récap."""
+    if w.paused:
+        return f"⏸️ {w.paused}"
+    if w.blocked:
+        return f"🛑 {w.blocked}"
+    if w.last_ok is None:
+        return "⏳ pas encore passé" + (f" · ⚠️ {w.last_error[:80]}" if w.errors_in_a_row else "")
+    stale = session_ok and w.next_due is not None and now - w.next_due > STALE_AFTER
+    line = f"{'❌ arrêté ?' if stale else '✅'} dernier passage il y a {ago(now - w.last_ok)}"
+    if w.errors_in_a_row:
+        line += f" · ⚠️ {w.errors_in_a_row} erreur(s) de suite : {w.last_error[:80]}"
+    return line
+
+
+def state_embed(ctx: Context, workers: list[Worker], started_at: datetime) -> discord.Embed:
+    """/etat : mode, session, vérification anti-bot, routes en pause, puis chaque worker."""
+    now = utcnow()
+    client = ctx.client
+    lines = [f"Mode **{ctx.settings.mode_label}** · démarré le {paris(started_at)} (il y a {ago(now - started_at)})"]
+    color = GREEN
+    if client.halted:
+        lines.append(f"🛑 **Arrêté par la garde** : {client.halted}\nPour reprendre : `rm data/HALT` dans la console, "
+                     "puis redémarre la stack.")
+        color = RED
+    if client.session_ok:
+        lines.append(f"✅ Session : {client.session_status()}")
+    else:
+        lines.append("❌ **Session en pause** : les workers attendent un nouveau cookie.")
+        color = RED
+    sniper = next((w for w in workers if isinstance(w, AuctionSniper)), None)
+    if sniper is not None and sniper.antibot_since:
+        lines.append(f"🛑 **Vérification anti-bot** demandée depuis {paris(sniper.antibot_since)} · "
+                     f"{sniper.antibot_missed} mise(s) non placée(s). Fais-la dans ton navigateur, puis "
+                     "« Vérification faite ».")
+        color = RED if color == RED else ORANGE
+    if routes := client.paused_routes():
+        lines.append("⏳ Routes du site en pause : " + ", ".join(f"{name} ({ago(timedelta(seconds=left))})"
+                                                               for name, left in sorted(routes.items())))
+    states = [f"**{w.name}** : {worker_line(w, now, client.session_ok)}" for w in workers]
+    if color == GREEN and any(w.paused or w.errors_in_a_row for w in workers):
+        color = ORANGE
+    embed = discord.Embed(title="État du bot", description="\n".join(lines), color=color)
+    for i, value in enumerate(fields(states)):
+        embed.add_field(name="Workers" if i == 0 else "\u200b", value=value, inline=False)
+    return embed
+
+
+def antibot_embed(since: datetime, missed: int) -> discord.Embed:
+    return discord.Embed(title="🛑 Vérification anti-bot demandée", color=RED, description=(
+        f"Le site refuse les mises depuis {paris(since)}" + (f" ({missed} non placée(s))" if missed else "") +
+        ".\nFais-la dans ton navigateur (mise à la main sur le marché, ou page Paquets si elle la demande), "
+        "puis appuie sur **C'est fait** : la prochaine mise part tout de suite pour la tester."))
+
+
+Action = Callable[[discord.Interaction], Awaitable[None]]
+
+
+class Buttons(discord.ui.View):
+    """Boutons d'un message, pour le seul propriétaire : (libellé, style, action)."""
+
+    def __init__(self, owner_id: int, buttons: list[tuple[str, discord.ButtonStyle, Action]],
+                 timeout: float | None = BUTTON_SECONDS):
+        super().__init__(timeout=timeout)
+        self.owner_id = owner_id
+        for label, style, action in buttons:
+            button: discord.ui.Button = discord.ui.Button(label=label, style=style)
+            button.callback = action  # type: ignore[method-assign]
+            self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.owner_id
+
+
+class VerifyButton(discord.ui.View):
+    """Bouton « C'est fait » du message privé anti-bot : identifiant fixe, encore actif après un redémarrage."""
+
+    def __init__(self, owner_id: int, action: Action):
+        super().__init__(timeout=None)
+        self.owner_id = owner_id
+        self.action = action
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.owner_id
+
+    @discord.ui.button(label="C'est fait", emoji="✅", style=discord.ButtonStyle.success, custom_id=VERIFY_ID)
+    async def done(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self.action(interaction)
 
 
 def fields(lines: list[str], limit: int = 1024) -> list[str]:
@@ -157,24 +267,142 @@ class OwnerTree(app_commands.CommandTree):
             await interaction.response.send_message(text)
 
 
-def build_client(ctx: Context, sniper: AuctionSniper | None, cli: ModuleType) -> discord.Client:
+def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
+                 started_at: datetime | None = None) -> discord.Client:
     """`cli` : le module src.main (bilan, ROI, prix… comme les commandes de la console), passé par lui-même :
     lancé par `python -m src.main`, il n'est pas importable sous ce nom sans être rechargé."""
     s = ctx.settings
+    started = started_at or utcnow()
+    sniper = next((w for w in workers if isinstance(w, AuctionSniper)), None)
     intents = discord.Intents.none()
     intents.guilds = True
     client = discord.Client(intents=intents)
     tree = client.tree = OwnerTree(client, s.discord_owner_id)  # type: ignore[attr-defined]
     guild = discord.Object(id=s.discord_guild_id) if s.discord_guild_id > 0 else None
 
+    # ------------------------------------------------------------ pilotage (boutons et commandes)
+    def verify() -> str:
+        if sniper is None:
+            return "Sniper désactivé : aucune vérification à tester."
+        if sniper.verification_done():
+            return "👍 Noté : la prochaine mise teste la vérification. Je te préviens dès qu'une mise passe."
+        return "Aucune vérification en attente : les mises passent."
+
+    async def verify_pressed(interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(verify())
+
+    def pause_label(name: str) -> str:
+        worker = next((w for w in workers if w.name == name), None)
+        return (worker.paused if worker else None) or ""
+
+    def state_view() -> Buttons:
+        buttons: list[tuple[str, discord.ButtonStyle, Action]] = []
+        if sniper is not None and sniper.antibot_since:
+            buttons.append(("✅ Vérification faite", discord.ButtonStyle.success, verify_and_refresh))
+        if sniper is not None:
+            buttons.append(("▶️ Reprendre le sniper", discord.ButtonStyle.primary, resume_sniper)
+                           if pause_label("sniper") else
+                           ("⏸️ Pause sniper 1 h", discord.ButtonStyle.secondary, pause_sniper))
+        buttons.append(("🔄 Actualiser", discord.ButtonStyle.secondary, refresh))
+        return Buttons(s.discord_owner_id, buttons)
+
+    async def refresh(interaction: discord.Interaction, note: str = "") -> None:
+        await interaction.response.edit_message(content=note or None, embed=state_embed(ctx, workers, started),
+                                                view=state_view())
+
+    async def verify_and_refresh(interaction: discord.Interaction) -> None:
+        await refresh(interaction, verify())
+
+    async def pause_sniper(interaction: discord.Interaction) -> None:
+        await pauses.pause(ctx, ["sniper"], utcnow() + timedelta(hours=1))
+        log.info("Discord : sniper en pause 1 h")
+        await refresh(interaction, "⏸️ Sniper en pause 1 h.")
+
+    async def resume_sniper(interaction: discord.Interaction) -> None:
+        await pauses.resume(ctx, ["sniper"])
+        log.info("Discord : sniper repris")
+        await refresh(interaction, "▶️ Sniper repris.")
+
+    async def watch_antibot() -> None:
+        """Vérification anti-bot demandée : message privé avec « C'est fait » ; levée, le message le dit."""
+        await client.wait_until_ready()
+        alerted: datetime | None = None
+        message: discord.Message | None = None
+        while not client.is_closed():
+            since = sniper.antibot_since if sniper is not None else None
+            try:
+                if sniper is not None and since is not None and since != alerted:
+                    alerted = since
+                    owner = await client.fetch_user(s.discord_owner_id)
+                    message = await owner.send(embed=antibot_embed(since, sniper.antibot_missed),
+                                               view=VerifyButton(s.discord_owner_id, verify_pressed))
+                elif since is None and alerted is not None:
+                    alerted = None
+                    if message is not None:
+                        await message.edit(embed=discord.Embed(
+                            title="✅ Vérification levée", color=GREEN,
+                            description=f"Les mises passent de nouveau ({paris(utcnow())})."), view=None)
+                    message = None
+            except discord.HTTPException as exc:  # messages privés fermés… : l'alerte du webhook reste
+                log.warning("Discord : message privé anti-bot impossible (%s)", exc)
+            await asyncio.sleep(WATCH_SECONDS)
+
     async def setup_hook() -> None:
+        client.add_view(VerifyButton(s.discord_owner_id, verify_pressed))  # boutons envoyés avant un redémarrage
         if guild:
             tree.copy_global_to(guild=guild)
         synced = await tree.sync(guild=guild)
         log.info("Discord : %d commande(s) enregistrée(s) %s", len(synced),
                  "sur le serveur" if guild else "(globales : jusqu'à 1 h avant d'apparaître)")
+        if sniper is not None:
+            client.watch_task = asyncio.create_task(watch_antibot())  # type: ignore[attr-defined]
 
     client.setup_hook = setup_hook  # type: ignore[method-assign]
+
+    @tree.command(name="etat", description="Santé du bot : session, vérification anti-bot, workers, pauses")
+    async def etat(interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(embed=state_embed(ctx, workers, started), view=state_view())
+
+    @tree.command(name="verif-faite", description="Vérification anti-bot faite : les mises reprennent sans attendre")
+    async def verif_faite(interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(verify())
+
+    @tree.command(name="pause", description="Mettre le sniper, les ventes ou tout le bot en pause")
+    @app_commands.describe(quoi="sniper par défaut", duree="1 h par défaut")
+    @app_commands.choices(quoi=[app_commands.Choice(name=n, value=n) for n in PAUSE_TARGETS],
+                          duree=[app_commands.Choice(name=n, value=m) for n, m in PAUSE_MINUTES])
+    async def pause(interaction: discord.Interaction, quoi: app_commands.Choice[str] | None = None,
+                    duree: app_commands.Choice[int] | None = None) -> None:
+        what = quoi.value if quoi else "sniper"
+        minutes = duree.value if duree else 60
+        names = PAUSE_TARGETS[what] or [w.name for w in workers]
+        until = utcnow() + timedelta(minutes=minutes) if minutes else None
+        paused = await pauses.pause(ctx, [n for n in names if any(w.name == n for w in workers)], until)
+        if not paused:
+            await interaction.response.send_message(f"Rien à mettre en pause : « {what} » n'est pas actif.")
+            return
+        log.info("Discord : pause de %s jusqu'à %s", ", ".join(paused), until or "/reprise")
+        end = f"jusqu'à {until.astimezone(timeutils.PARIS):%H:%M}" if until else "jusqu'à /reprise"
+        text = (f"⏸️ **{', '.join(paused)}** en pause {end}.\nLes mises déjà placées et les ventes en cours ne "
+                "sont pas annulées ; leurs résultats sont relus à la reprise.")
+
+        async def resume_now(button_interaction: discord.Interaction) -> None:
+            resumed = await pauses.resume(ctx, paused)
+            await button_interaction.response.edit_message(
+                content=f"▶️ Repris : {', '.join(resumed) or 'déjà repris'}.", view=None)
+
+        await interaction.response.send_message(text, view=Buttons(s.discord_owner_id, [
+            ("▶️ Reprendre", discord.ButtonStyle.primary, resume_now)]))
+
+    @tree.command(name="reprise", description="Reprendre ce qui est en pause")
+    @app_commands.describe(quoi="tout par défaut")
+    @app_commands.choices(quoi=[app_commands.Choice(name=n, value=n) for n in PAUSE_TARGETS])
+    async def reprise(interaction: discord.Interaction, quoi: app_commands.Choice[str] | None = None) -> None:
+        names = PAUSE_TARGETS[quoi.value] if quoi else None
+        resumed = await pauses.resume(ctx, names)
+        log.info("Discord : reprise de %s", ", ".join(resumed) or "rien")
+        await interaction.response.send_message(f"▶️ Repris : {', '.join(resumed)}." if resumed
+                                                else "Rien n'était en pause.")
 
     @client.event
     async def on_ready() -> None:
@@ -302,7 +530,11 @@ def build_client(ctx: Context, sniper: AuctionSniper | None, cli: ModuleType) ->
     return client
 
 
-async def run_discord(ctx: Context, sniper: AuctionSniper | None, cli: ModuleType) -> None:
+async def run_discord(ctx: Context, workers: list[Worker], cli: ModuleType, started_at: datetime) -> None:
     """Connecte le bot et répond aux commandes jusqu'à l'arrêt (relancé par `supervise` s'il tombe)."""
-    async with build_client(ctx, sniper, cli) as client:
-        await client.start(ctx.settings.discord_bot_token)
+    async with build_client(ctx, workers, cli, started_at) as client:
+        try:
+            await client.start(ctx.settings.discord_bot_token)
+        finally:
+            if task := getattr(client, "watch_task", None):
+                task.cancel()

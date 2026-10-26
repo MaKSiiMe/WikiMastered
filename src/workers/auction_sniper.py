@@ -1151,6 +1151,25 @@ class AuctionSniper(Worker):
             "(mise à la main sur le marché, ou page Paquets) : les mises repartent dès qu'elle est faite.")
 
     @property
+    def antibot_since(self) -> datetime | None:
+        """Début du blocage des mises par la vérification anti-bot (None : les mises passent)."""
+        return self._antibot_since
+
+    @property
+    def antibot_missed(self) -> int:
+        return self._antibot_missed
+
+    def verification_done(self) -> bool:
+        """Vérification faite dans le navigateur (/verif-faite) : la prochaine mise réelle part sans attendre
+        SNIPER_ANTIBOT_RETRY_SECONDS. Acceptée, elle lève le blocage (« vérification levée ») ; refusée, l'attente
+        reprend. False si aucune vérification n'attendait."""
+        if not self._antibot_since:
+            return False
+        self._antibot_retry_at = _EPOCH
+        self.log.info("vérification signalée faite : la prochaine mise réelle la teste")
+        return True
+
+    @property
     def blocked(self) -> str | None:
         if not self._antibot_since:
             return None

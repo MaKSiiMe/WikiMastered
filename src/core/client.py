@@ -360,6 +360,11 @@ class WikiMastersClient:
     def can_refresh(self) -> bool:
         return bool(self.settings.supabase_anon_key) and not self._refresh_blocked
 
+    def paused_routes(self) -> dict[str, float]:
+        """Routes en pause (refus ou panne du site) : nom -> secondes restantes (commande Discord /etat)."""
+        now = time.monotonic()
+        return {name: end - now for name, (end, _) in self._route_pause.items() if end > now}
+
     def session_status(self) -> str:
         session = self.auth_session()
         expires = session.expires_at if session else None
