@@ -218,6 +218,12 @@ class Settings(BaseSettings):
     # capital (Mark Wahlberg ✨, achetée 6119, invendue à 7037 puis à 6333 le 25/10). 0 = jamais sous le prix d'achat.
     position_max_loss: float = 0.10
     position_loss_after: int = 2
+    # Après POSITION_FIRE_SALE_AFTER mises en vente sans acheteur, la revente part à 1 WB pour environ
+    # POSITION_FIRE_SALE_MINUTES, fin entre 00 h et 03 h ou entre 06 h et 09 h (Paris). Du 15 au 26/10, les L parties
+    # de ≤ 10 WB se sont vendues ×0,94 leur prix habituel (médiane) : ×1,08-1,11 et 3-4 % sous la moitié pour une fin
+    # à 00-03 h ou 06-09 h, contre ×0,81 et 22 % sous la moitié à 18-21 h. 0 = jamais.
+    position_fire_sale_after: int = 3
+    position_fire_sale_minutes: int = 360
 
     # --- Module C : inventaire --------------------------------------------------
     inventory_interval_minutes: float = 360.0

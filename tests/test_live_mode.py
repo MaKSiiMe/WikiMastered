@@ -99,22 +99,22 @@ async def test_duplicates_fill_free_slots_during_the_day(tmp_path, monkeypatch):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"], auto_list=True,
-                                   sell_price_lookups_per_run=0)
+                                   sell_price_lookups_per_run=0, sell_max_listings_per_run=2)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     for card, prices in (("A", [300, 310]), ("B", [100, 90]), ("C", [50, 60])):
         await seed_observed(db, card, prices)
     inv = InventoryManager(ctx)
     await inv.setup()
-    assert await inv.fill_free_slots() == 2  # 2 places libres sur 5 : les 2 doublons les mieux cotés
+    # Les 2 doublons les mieux cotés entrent dans la file (SELL_MAX_LISTINGS_PER_RUN en attente), places libres ou non.
+    assert await inv.fill_free_slots() == 2
     rows = await db._all("SELECT card_id, post_at FROM listings ORDER BY base_amount DESC")
     assert [r["card_id"] for r in rows] == ["A", "B"]
     soon = morning + timedelta(hours=10)
     assert all(datetime.fromisoformat(r["post_at"]) < soon for r in rows)  # pas d'attente jusqu'au soir
-    slots["selling"] = 4  # une vente terminée libère une place (4 en cours + 2 programmées = plein)
+    slots["selling"] = 5  # toutes les places prises : la file est pleine, rien de plus
     assert await inv.fill_free_slots() == 0
-    await db._exec("UPDATE listings SET status = 'posted'")
-    slots["selling"] = 4
+    await db._exec("UPDATE listings SET status = 'posted'")  # publiés : la file se vide, le suivant y entre
     assert await inv.fill_free_slots() == 1 and len(reads) == 1  # la collection n'est pas relue
     assert not notifier.sent  # pas de message Discord pour les doublons
     await db.close()
