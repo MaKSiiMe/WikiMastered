@@ -401,6 +401,31 @@ class Database:
             out["sim_cost" if r["dry_run"] else "real_cost"] += r["cost"]
         return out
 
+    async def position_results(self, since: datetime) -> list[aiosqlite.Row]:
+        """Positions réelles du sniper closes depuis `since` (commande roi) : revendues (sale_price), ou gardées
+        invendues (sale_price NULL). Hors cartes de collection et achats manuels repris."""
+        return await self._all(
+            f"SELECT amount, sale_price, sold_at FROM bids WHERE closed = 1 AND dry_run = 0 AND sold_at >= ? "
+            f"AND reason NOT LIKE 'collection%' AND {NOT_MANUAL} ORDER BY sold_at", (iso(since),))
+
+    async def held_positions(self) -> list[aiosqlite.Row]:
+        """Positions détenues (achetées, pas encore revendues), avec leur vente en cours s'il y en a une."""
+        return await self._all(
+            "SELECT b.*, l.status AS listing_status, l.base_amount AS listing_price, l.target_end AS listing_end "
+            f"FROM bids b LEFT JOIN listings l ON l.bid_id = b.id AND l.status IN {LISTING_OPEN} "
+            "WHERE b.status IN ('won', 'sim_won') AND b.closed = 0 ORDER BY b.dry_run, b.settled_at")
+
+    async def open_listings(self) -> list[aiosqlite.Row]:
+        """Ventes programmées ou en cours (commande Discord /ventes), les plus proches de la fin d'abord."""
+        return await self._all(f"SELECT * FROM listings WHERE status IN {LISTING_OPEN} "
+                               "ORDER BY COALESCE(target_end, post_at)")
+
+    async def known_titles(self, text: str, limit: int = 25) -> list[str]:
+        """Titres de cartes vues sur le marché contenant `text` (autocomplétion de /snipe et /prix)."""
+        rows = await self._all("SELECT DISTINCT title FROM auctions_seen WHERE title LIKE ? ORDER BY length(title) "
+                               "LIMIT ?", (f"%{text}%", limit))
+        return [r["title"] for r in rows if r["title"]]
+
     async def bought_card_ids(self) -> set[str]:
         """Cartes achetées pour de vrai par le bot (positions et collection), revendues ou non."""
         rows = await self._all("SELECT DISTINCT card_id FROM bids WHERE status = 'won' AND dry_run = 0")

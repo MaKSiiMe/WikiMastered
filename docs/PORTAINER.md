@@ -55,6 +55,22 @@ COLLECTION_SETS=jours
 PROTECTED_TAGS=date
 ```
 
+### Commandes Discord (facultatif)
+
+Pour demander des infos au bot ou lui faire chercher une carte (`/roi`, `/bilan`, `/snipe`… voir le [README](../README.md#commandes-slash)) :
+
+1. [Portail développeur Discord](https://discord.com/developers/applications) > **New Application**. Onglet **Bot** : **Reset Token** et copie-le ; laisse les *Privileged Gateway Intents* désactivés et décoche **Public Bot**.
+2. Onglet **OAuth2** > **URL Generator** : coche `bot` et `applications.commands`, puis la permission `Send Messages`. Ouvre l'URL et choisis ton serveur.
+3. Dans Discord, *Paramètres* > *Avancés* > **Mode développeur**. Clic droit sur ton pseudo > *Copier l'identifiant utilisateur* ; clic droit sur le serveur > *Copier l'identifiant du serveur*.
+
+```
+DISCORD_BOT_TOKEN=<le token>
+DISCORD_OWNER_ID=<ton identifiant utilisateur>
+DISCORD_GUILD_ID=<identifiant du serveur>
+```
+
+Seul `DISCORD_OWNER_ID` peut se servir des commandes. Sans `DISCORD_GUILD_ID`, elles mettent jusqu'à une heure à apparaître.
+
 À ne **pas** ajouter : un petit `SNIPER_DAILY_BUDGET` (une position coûte jusqu'à ~540 WB : un budget de 300 bloquerait presque tous les achats).
 
 Toutes les autres variables sont décrites dans [.env.example](../.env.example).

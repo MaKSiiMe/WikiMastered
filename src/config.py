@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     # « off » = logs seulement. Le salon principal garde alertes, achats, ventes, cartes gagnées, bilans.
     discord_activity_webhook_url: str = ""
     discord_mention: str = ""
+    # Commandes slash (/roi, /bilan, /snipe…) : bot Discord (portail développeur > Bot > token). Vide = pas de
+    # commandes, les webhooks seuls. Seul DISCORD_OWNER_ID (ton identifiant utilisateur) peut s'en servir ;
+    # DISCORD_GUILD_ID (ton serveur) les fait apparaître tout de suite au lieu d'attendre jusqu'à 1 h.
+    discord_bot_token: str = ""
+    discord_owner_id: int = 0
+    discord_guild_id: int = 0
     daily_report_time: time = time(23, 0)
     recap_interval_hours: int = 4  # récap des workers toutes les N heures (0 = aucun)
     # Récap du sniper : chaque enchère misée sur les N dernières heures (gagnées, perdues, gain latent et manqué).

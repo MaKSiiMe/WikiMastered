@@ -40,6 +40,10 @@ from src.core.models import Auction, BidResult, Card, OwnedCard
 from src.core.notifier import Topic
 from src.core.pricing import Quote, combine, trusted
 from src.core.timeutils import in_window, local_dt, now_local, utcnow
+from src.snipes import REASON as SNIPE_REASON
+from src.snipes import Snipe
+from src.snipes import load as load_snipes
+from src.snipes import remove as remove_snipe
 from src.workers.base import Worker
 from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers.collection import collection_key, record_win, targets as collection_targets
@@ -388,7 +392,9 @@ class AuctionSniper(Worker):
         self._collection_wanted: set[str] = set()
         self._collection_logged: dict[str, str | None] = {}
         self._vanished_retry: dict[int, datetime] = {}  # mise -> prochaine relecture de son enchère introuvable
+        self._snipes: dict[str, Snipe] = {}  # cartes demandées sur Discord (/snipe), par clé de titre
         await self._load_collection()
+        await self.reload_snipes()
         await self._recover_vanished()
         await self._refresh_engaged()
         await self._check_config()
@@ -418,6 +424,7 @@ class AuctionSniper(Worker):
         if self._ticks % 20 == 0 and not guard:
             await self._refresh_engaged()
             await self._load_collection()
+            await self.reload_snipes()
 
         # Une requête par passage, par priorité : carte de collection dans sa fenêtre de mise ou cible misée à
         # relire à sa fin ; repérage très en retard ; revente dans sa fenêtre ; cote à l'avance ; repérage.
@@ -476,11 +483,11 @@ class AuctionSniper(Worker):
 
     def _lateness(self, params: SnipeParams, now: datetime) -> list[tuple[float, float, tuple[str, str]]]:
         """(retard en s, période visée, source) de chaque source de repérage : nouvelles ventes et ventes
-        terminées de chaque rareté suivie, jours manquants de la collection."""
+        terminées de chaque rareté suivie, jours manquants de la collection et cartes demandées sur Discord."""
         sources = [((kind, rarity), every) for rarity in self._resale_rarities
                    for kind, every in (("recent", self.settings.sniper_discovery_seconds),
                                        ("ended", self.settings.sniper_observe_seconds))]
-        if self._collection_missing:
+        if self._collection_missing or self._snipes:
             sources.append((("day", ""), self.settings.collection_search_seconds))
         return [((now - self._last_read.get(key, _EPOCH)).total_seconds() - every, every, key)
                 for key, every in sources]
@@ -551,13 +558,13 @@ class AuctionSniper(Worker):
         self._unread = {aid: u for aid, u in self._unread.items() if u[1] > horizon}
 
     def _next_day(self) -> str:
-        """Prochain jour manquant à chercher (rotation sur tous les jours manquants)."""
-        while self._day_queue and self._day_queue[0] not in self._collection_missing:
+        """Prochain titre à chercher (rotation sur les jours manquants et les cartes demandées sur Discord)."""
+        while self._day_queue and self._day_queue[0] not in self._collection_missing | set(self._snipes):
             self._day_queue.pop(0)
         if not self._day_queue:
-            self._day_queue = sorted(self._collection_missing)
+            self._day_queue = sorted(self._collection_missing | set(self._snipes))
         key = self._day_queue.pop(0)
-        return self._day_titles.get(key, key)
+        return self._snipes[key].title if key in self._snipes else self._day_titles.get(key, key)
 
     def _check_gap(self, rarity: str, auctions: list[Auction], more: bool, now: datetime,
                    elapsed: float | None = None) -> None:
@@ -596,6 +603,8 @@ class AuctionSniper(Worker):
         if a.status != "active" or is_own(a, self.api.user_id) \
                 or a.seconds_left(now) <= self.settings.sniper_min_seconds_left:
             return False
+        if snipe := self._snipe_for(a):
+            return a.min_bid <= snipe.max_price
         if collection_key(a.title) in self._collection_missing:
             return a.min_bid <= self.settings.collection_max_price
         if a.rarity not in self._resale_rarities:
@@ -652,8 +661,16 @@ class AuctionSniper(Worker):
         return min(ended, key=lambda t: t.auction.end_at) if ended else None
 
     def _wanted(self, auction: Auction) -> bool:
-        """Carte manquante à la collection (gardée, pas revendue)."""
-        return collection_key(auction.title) in self._collection_missing
+        """Carte manquante à la collection ou demandée sur Discord (gardée, pas revendue)."""
+        return collection_key(auction.title) in self._collection_missing or self._snipe_for(auction) is not None
+
+    def _snipe_for(self, auction: Auction) -> Snipe | None:
+        snipe = self._snipes.get(collection_key(auction.title))
+        return snipe if snipe is not None and snipe.matches(auction) else None
+
+    async def reload_snipes(self) -> None:
+        """Relit les cartes demandées sur Discord (aussi appelé par /snipe et /annuler, sans attendre)."""
+        self._snipes = await load_snipes(self.db)
 
     def _collection_soon(self, params: SnipeParams, now: datetime) -> float | None:
         """Secondes avant qu'une carte de collection manquante entre dans sa fenêtre de mise (si ≤ la garde)."""
@@ -977,13 +994,15 @@ class AuctionSniper(Worker):
                               a.seconds_left(), outcome)
 
     async def _collection_cap(self, auction: Auction) -> int | None:
-        """Plafond si la carte manque à la collection et que le bot ne mise pas déjà sur une autre vente."""
-        if collection_key(auction.title) not in self._collection_missing:
+        """Plafond si la carte manque à la collection (ou est demandée sur Discord) et que le bot ne mise pas déjà
+        sur une autre vente."""
+        snipe = self._snipe_for(auction)
+        if snipe is None and collection_key(auction.title) not in self._collection_missing:
             return None
         engaged = await self.db.collection_auctions_engaged(auction.catalog_id)
         if engaged - {auction.id}:
             return None  # une autre vente de la même carte est déjà en cours pour le bot
-        return self.settings.collection_max_price
+        return snipe.max_price if snipe else self.settings.collection_max_price
 
     def is_manual_interest(self, auction: Auction) -> bool:
         """Carte que tu cherches toi-même (tu mises dessus) : le bot ne l'achète pas pour la revendre."""
@@ -1069,8 +1088,13 @@ class AuctionSniper(Worker):
         # Déjà surenchérie : un rival suit nos mises d'un pas, la suivante va droit au plafond (une seule de plus).
         rebid = last is not None and last["status"] in ("placed", "outbid")
         push = 1.0 if rebid else self.settings.sniper_bid_push
-        decision = decide(auction, params, quote, self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
-                          collection_cap=collection_cap, resale=resale, push=push)
+        snipe = self._snipe_for(auction)  # demandée sur Discord : gardée, jamais achetée pour la revente
+        # Sa mise maximale est choisie à la demande : SNIPER_MAX_BID ne la réduit pas.
+        decision = decide(auction, params if snipe is None else replace(params, max_bid=0), quote,
+                          self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
+                          collection_cap=collection_cap, resale=resale and snipe is None, push=push)
+        if decision is not None and snipe is not None:
+            decision = replace(decision, reason=f"{SNIPE_REASON} ≤ {decision.ceiling}")
         if decision is None:
             self._outcome(auction, "collection : trop chère" if collection_cap is not None else
                           refusal(auction, params, quote, self.settings.price_min_sales, portfolio,
@@ -1102,7 +1126,8 @@ class AuctionSniper(Worker):
         Rien n'est gardé quand les mises des L sont simulées : le 18/10 après 12:00, la collection laissait passer
         des jours à 10 WB pour un quota que personne n'utilisait."""
         cap = self.settings.collection_bids_per_check
-        return (decision.collection and cap > 0 and self.settings.is_live("collection_bid")
+        return (decision.collection and not decision.reason.startswith(SNIPE_REASON) and cap > 0
+                and self.settings.is_live("collection_bid")
                 and self.settings.is_live("place_bid") and self._collection_since_check >= cap)
 
     def _antibot_pending(self, decision: Decision) -> bool:
@@ -1378,6 +1403,10 @@ class AuctionSniper(Worker):
                 await record_win(self.ctx, row["title"])
             notify = self.notifier.info if simulated else self.notifier.success
             title = "Collection : carte obtenue (simulé)" if simulated else "Collection : carte obtenue !"
+            if str(row["reason"]).startswith(SNIPE_REASON):  # demande remplie : plus de mise sur cette carte
+                await remove_snipe(self.db, row["title"])
+                await self.reload_snipes()
+                title = "Carte demandée obtenue (simulé)" if simulated else "Carte demandée obtenue !"
             if simulated and not self.settings.notify_simulated:
                 self.log.info("%s : %s", title, row["title"])
                 return

@@ -1,0 +1,291 @@
+"""Commandes slash Discord : demander une info au bot, ou une carte au sniper, sans ouvrir la console.
+
+Un bot Discord (DISCORD_BOT_TOKEN) tourne dans le même processus que les workers : il lit la même base et passe
+par le même client du site (mêmes écarts entre requêtes). Les webhooks gardent les messages du bot ; ce bot-ci
+ne fait que répondre, et seulement à DISCORD_OWNER_ID.
+
+- Lecture : /bilan, /roi, /solde, /positions, /ventes, /prix, /collection, /sniper.
+- Actions : /snipe (confirmée par un bouton), /snipes, /annuler. Voir src/snipes.py.
+"""
+
+from __future__ import annotations
+
+import io
+import logging
+from datetime import datetime
+from types import ModuleType
+
+import discord
+from discord import app_commands
+
+from src import snipes
+from src.core import timeutils
+from src.core.timeutils import utcnow
+from src.workers.auction_sniper import AuctionSniper
+from src.workers.base import Context
+from src.workers.collection import progress_lines, targets
+
+log = logging.getLogger("wikimastered.discord")
+
+TEXT_LIMIT = 3900  # description d'un embed : 4096 au plus, avec le bloc de code
+CONFIRM_SECONDS = 120
+RARITIES = ["C", "PC", "R", "SR", "UR", "L"]
+COLOR = 0x5865F2
+
+
+def paris(value: str | datetime | None) -> str:
+    if not value:
+        return "?"
+    moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+    return f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
+
+
+def text_embed(title: str, text: str, *, code: bool = True) -> tuple[discord.Embed, discord.File | None]:
+    """Embed du texte ; trop long, il est coupé et joint en entier dans un fichier."""
+    file = None
+    if len(text) > TEXT_LIMIT:
+        file = discord.File(io.BytesIO(text.encode()), filename="detail.txt")
+        text = text[:TEXT_LIMIT].rsplit("\n", 1)[0] + "\n… (la suite dans le fichier joint)"
+    return discord.Embed(title=title, description=f"```\n{text}\n```" if code else text, color=COLOR), file
+
+
+async def reply(interaction: discord.Interaction, title: str, text: str, *, code: bool = True) -> None:
+    embed, file = text_embed(title, text, code=code)
+    extra = {"file": file} if file else {}
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed, **extra)
+    else:
+        await interaction.response.send_message(embed=embed, **extra)
+
+
+def positions_text(rows) -> str:
+    if not rows:
+        return "Aucune position détenue."
+    lines = []
+    for r in rows:
+        sim = " (simulée)" if r["dry_run"] else ""
+        if r["listing_status"] in ("posted", "uncertain", "simulated"):
+            sale = f"en vente {r['listing_price']} WB, fin {paris(r['listing_end'])}"
+        elif r["listing_status"]:
+            sale = f"vente programmée à {r['listing_price']} WB"
+        else:
+            sale = "attend une place de vente"
+        lines.append(f"{r['rarity'] or '?':<3} {r['title'][:40]} : achetée {r['amount']} WB{sim}, {sale}")
+    return "\n".join(lines)
+
+
+def listings_text(rows) -> str:
+    if not rows:
+        return "Aucune vente programmée ni en cours."
+    lines = []
+    for r in rows:
+        when = f"fin {paris(r['target_end'])}" if r["status"] != "scheduled" else f"publiée {paris(r['post_at'])}"
+        kind = {"scheduled": "programmée", "simulated": "simulée", "uncertain": "à vérifier",
+                "waiting": "en attente"}.get(r["status"], "en cours")
+        lines.append(f"{r['rarity'] or '?':<3} {r['title'][:40]} : {r['base_amount']} WB, {kind}, {when}")
+    return "\n".join(lines)
+
+
+def snipes_text(found: dict[str, snipes.Snipe]) -> str:
+    if not found:
+        return "Aucune carte demandée. /snipe pour en ajouter une."
+    return "\n".join(f"{s.label} (depuis le {paris(s.added_at)})" for s in found.values())
+
+
+class Confirm(discord.ui.View):
+    """Boutons Confirmer / Annuler, pour le seul propriétaire."""
+
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=CONFIRM_SECONDS)
+        self.owner_id = owner_id
+        self.value: bool | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.owner_id
+
+    async def _answer(self, interaction: discord.Interaction, value: bool) -> None:
+        self.value = value
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Confirmer", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self._answer(interaction, True)
+
+    @discord.ui.button(label="Annuler", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self._answer(interaction, False)
+
+
+class OwnerTree(app_commands.CommandTree):
+    """Toutes les commandes, pour le seul DISCORD_OWNER_ID ; une erreur répond au lieu de rester muette."""
+
+    def __init__(self, client: discord.Client, owner_id: int):
+        super().__init__(client)
+        self.owner_id = owner_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+        if interaction.type == discord.InteractionType.application_command:
+            await interaction.response.send_message("Commandes réservées au propriétaire du bot.", ephemeral=True)
+        return False
+
+    async def on_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+        if isinstance(error, app_commands.CheckFailure):
+            return
+        cause = getattr(error, "original", error)
+        log.error("commande /%s : %s", interaction.command.name if interaction.command else "?", cause,
+                  exc_info=cause)
+        text = f"Erreur : {type(cause).__name__} : {cause}"[:1900]
+        if interaction.response.is_done():
+            await interaction.followup.send(text)
+        else:
+            await interaction.response.send_message(text)
+
+
+def build_client(ctx: Context, sniper: AuctionSniper | None, cli: ModuleType) -> discord.Client:
+    """`cli` : le module src.main (bilan, ROI, prix… comme les commandes de la console), passé par lui-même :
+    lancé par `python -m src.main`, il n'est pas importable sous ce nom sans être rechargé."""
+    s = ctx.settings
+    intents = discord.Intents.none()
+    intents.guilds = True
+    client = discord.Client(intents=intents)
+    tree = client.tree = OwnerTree(client, s.discord_owner_id)  # type: ignore[attr-defined]
+    guild = discord.Object(id=s.discord_guild_id) if s.discord_guild_id else None
+
+    async def setup_hook() -> None:
+        if guild:
+            tree.copy_global_to(guild=guild)
+        synced = await tree.sync(guild=guild)
+        log.info("Discord : %d commande(s) enregistrée(s) %s", len(synced),
+                 "sur le serveur" if guild else "(globales : jusqu'à 1 h avant d'apparaître)")
+
+    client.setup_hook = setup_hook  # type: ignore[method-assign]
+
+    @client.event
+    async def on_ready() -> None:
+        log.info("Discord : connecté en tant que %s", client.user)
+
+    async def title_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        if len(current) < 2:
+            return []
+        return [app_commands.Choice(name=t[:100], value=t[:100]) for t in await ctx.db.known_titles(current)]
+
+    # ------------------------------------------------------------ lecture
+    @tree.command(name="bilan", description="Le bilan du jour, comme celui du soir")
+    async def bilan(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        _, description, sections = await cli.daily_report_parts(ctx)
+        embed = discord.Embed(title=f"Bilan du {timeutils.now_local():%d/%m} (à {timeutils.now_local():%H:%M})",
+                              description=description, color=COLOR)
+        for name, value in sections:
+            embed.add_field(name=name, value=value[:1024] or "—", inline=False)
+        await interaction.followup.send(embed=embed)
+
+    @tree.command(name="roi", description="Bénéfice et ROI des reventes, jour par jour")
+    @app_commands.describe(jours="nombre de jours, aujourd'hui compris (7 par défaut)")
+    async def roi(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 60] = 7) -> None:
+        await reply(interaction, f"ROI des reventes, {jours} jour(s)", await cli.roi_status(ctx, jours))
+
+    @tree.command(name="solde", description="Solde du compte et capital immobilisé dans les positions")
+    async def solde(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        balance = await ctx.api.balance()
+        held = await ctx.db.positions_summary()
+        text = f"Solde : **{balance} WB**\nPositions : {held['real_count']} détenue(s), {held['real_cost']} WB " \
+               f"immobilisés\nTotal : **{balance + held['real_cost']} WB**"
+        await reply(interaction, "Solde", text, code=False)
+
+    @tree.command(name="positions", description="Cartes achetées pour la revente, pas encore revendues")
+    async def positions(interaction: discord.Interaction) -> None:
+        rows = await ctx.db.held_positions()
+        await reply(interaction, f"Positions ({len(rows)})", positions_text(rows))
+
+    @tree.command(name="ventes", description="Ventes programmées et en cours")
+    async def ventes(interaction: discord.Interaction) -> None:
+        rows = await ctx.db.open_listings()
+        await reply(interaction, f"Ventes ({len(rows)})", listings_text(rows))
+
+    @tree.command(name="prix", description="Ventes observées d'une carte, estimation du bot, ventes en cours")
+    @app_commands.describe(titre="titre exact de la carte")
+    @app_commands.autocomplete(titre=title_choices)
+    async def prix(interaction: discord.Interaction, titre: str) -> None:
+        await interaction.response.defer(thinking=True)
+        await reply(interaction, titre[:250], await cli.prices_status(ctx, titre))
+
+    @tree.command(name="collection", description="Avancement des collections et cartes manquantes")
+    async def collection(interaction: discord.Interaction) -> None:
+        state = await ctx.db.kv_get("collection")
+        by_key = targets(ctx)
+        lines = progress_lines(state, by_key, utcnow(), days=7)
+        if state:
+            missing = [by_key.get(k, k) for k in state["missing"]]
+            lines.append(f"\nManquantes ({len(missing)}) : " + (", ".join(missing) or "aucune"))
+        await reply(interaction, "Collection", "\n".join(lines))
+
+    @tree.command(name="sniper", description="Récap des enchères misées par le sniper")
+    @app_commands.describe(heures="période, en heures (24 par défaut)")
+    async def sniper_report(interaction: discord.Interaction, heures: app_commands.Range[float, 1, 168] = 24) -> None:
+        text = await cli.sniper_report_status(ctx, heures, True)
+        await reply(interaction, f"Sniper, {heures:g} dernières heures", text)
+
+    # ------------------------------------------------------------ actions
+    @tree.command(name="snipe", description="Demander une carte au sniper : il la mise jusqu'à ta mise maximale")
+    @app_commands.describe(titre="titre exact de la carte", prix_max="mise maximale en WB",
+                           rarete="une seule rareté (toutes par défaut)")
+    @app_commands.autocomplete(titre=title_choices)
+    @app_commands.choices(rarete=[app_commands.Choice(name=r, value=r) for r in RARITIES])
+    async def snipe(interaction: discord.Interaction, titre: str, prix_max: app_commands.Range[int, 1, 100_000],
+                    rarete: app_commands.Choice[str] | None = None) -> None:
+        rarity = rarete.value if rarete else ""
+        notes = []
+        if titre.casefold() not in {t.casefold() for t in await ctx.db.known_titles(titre, limit=200)}:
+            notes.append("⚠️ Jamais vue sur le marché par le bot : vérifie le titre exact.")
+        if sniper is None:
+            notes.append("⚠️ Sniper désactivé (ENABLE_SNIPER) : rien ne sera misé.")
+        elif not s.is_live("collection_bid"):
+            notes.append("ℹ️ Mises de collection simulées (DRY_RUN / SIMULATE) : la mise sera simulée.")
+        label = snipes.Snipe(titre, prix_max, rarity).label
+        embed = discord.Embed(title="Demander cette carte ?", color=COLOR,
+                              description=f"**{label}**\nMise au minimum, jusqu'à {prix_max} WB ; gardée, pas "
+                                          "revendue." + ("\n\n" + "\n".join(notes) if notes else ""))
+        view = Confirm(s.discord_owner_id)
+        await interaction.response.send_message(embed=embed, view=view)
+        await view.wait()
+        if not view.value:
+            embed.title, embed.color = ("Annulé" if view.value is False else "Annulé (pas de réponse)"), 0x99AAB5
+            await interaction.edit_original_response(embed=embed, view=None)
+            return
+        added = await snipes.add(ctx.db, titre, prix_max, rarity)
+        if sniper is not None:
+            await sniper.reload_snipes()
+        log.info("Discord : carte demandée %s", added.label)
+        embed.title, embed.color = "Carte demandée", 0x57F287
+        await interaction.edit_original_response(embed=embed, view=None)
+
+    @tree.command(name="snipes", description="Cartes demandées au sniper")
+    async def snipes_list(interaction: discord.Interaction) -> None:
+        await reply(interaction, "Cartes demandées", snipes_text(await snipes.load(ctx.db)))
+
+    async def snipe_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        return [app_commands.Choice(name=sn.label[:100], value=sn.title[:100])
+                for sn in (await snipes.load(ctx.db)).values() if current.casefold() in sn.title.casefold()][:25]
+
+    @tree.command(name="annuler", description="Ne plus demander une carte au sniper")
+    @app_commands.describe(titre="carte demandée")
+    @app_commands.autocomplete(titre=snipe_choices)
+    async def annuler(interaction: discord.Interaction, titre: str) -> None:
+        removed = await snipes.remove(ctx.db, titre)
+        if sniper is not None:
+            await sniper.reload_snipes()
+        text = f"Retirée : {removed.label}" if removed else f"« {titre} » n'était pas demandée."
+        await reply(interaction, "Carte demandée", text, code=False)
+
+    return client
+
+
+async def run_discord(ctx: Context, sniper: AuctionSniper | None, cli: ModuleType) -> None:
+    """Connecte le bot et répond aux commandes jusqu'à l'arrêt (relancé par `supervise` s'il tombe)."""
+    async with build_client(ctx, sniper, cli) as client:
+        await client.start(ctx.settings.discord_bot_token)
