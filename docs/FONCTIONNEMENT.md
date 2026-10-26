@@ -98,7 +98,7 @@ flowchart TD
 
 ## Positions : revendre
 
-Une carte gagnée est mise en vente dès son arrivée, pour 12 h s'il y a moins de 5 positions, sinon pour 6 h. Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher.
+Une carte gagnée est mise en vente dès son arrivée, pour 12 h s'il y a moins de 5 positions, sinon pour 6 h. Si cette durée la ferait finir à une heure où les L se vendent mal (11-13 h, 18-22 h), le bot prend l'autre durée quand elle finit mieux. La durée est revue au moment de publier, pour une carte qui a attendu une place. Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher.
 
 ```mermaid
 stateDiagram-v2

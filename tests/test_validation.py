@@ -255,11 +255,12 @@ async def test_position_listed_12h_until_5_positions_are_held(tmp_path):
     for i in range(4):
         await held(f"a{i}")
     await held("sim", dry_run=True)  # ventes réelles : une position simulée n'occupe pas tes places
-    assert await inv.position_minutes() == 720
+    night = datetime(2026, 10, 26, 2, 0, tzinfo=PARIS)  # fin à 08 h ou 14 h : aucune heure évitée
+    assert await inv.position_minutes(night) == 720
     _, minutes, end = inv._plan(now, position=True, at_peak=True, position_minutes=720)
     assert minutes == 720 and end == now + timedelta(hours=12)
     await held("a4")
-    assert await inv.position_minutes() == 360
+    assert await inv.position_minutes(night) == 360
     await db.close()
 
 
@@ -652,4 +653,43 @@ async def test_tagged_pack_card_is_sold_from_its_cote(tmp_path):
     row = await db._one("SELECT owned_card_id, base_amount, reason FROM listings")
     assert (row["owned_card_id"], row["base_amount"], row["reason"]) == ("gw", 1450, "position (paquet)")
     assert ("SUCCESS", "Carte à revendre prise en charge") in notifier.sent
+    await db.close()
+
+
+def test_position_duration_avoids_bad_end_hours():
+    """26/10 : une L gagnée l'après-midi finissait en 6 h à 19-22 h (×0,91-0,96) ; en 12 h, à 01-04 h."""
+    from src.workers.inventory_manager import position_duration
+
+    avoid = [11, 12, 13, 18, 19, 20, 21, 22]
+    at = lambda h: datetime(2026, 10, 26, h, 30, tzinfo=PARIS)  # noqa: E731
+    assert position_duration(at(14), 360, 720, prefer_long=False, avoid_hours=avoid) == 720   # 20:30 → 02:30
+    assert position_duration(at(20), 360, 720, prefer_long=False, avoid_hours=avoid) == 360   # 02:30
+    assert position_duration(at(9), 360, 720, prefer_long=True, avoid_hours=avoid) == 360     # 21:30 → 15:30
+    assert position_duration(at(7), 360, 720, prefer_long=False, avoid_hours=avoid) == 360    # 13:30 et 19:30 : mauvais
+    assert position_duration(at(14), 360, 720, prefer_long=False, avoid_hours=[]) == 360
+
+
+@pytest.mark.asyncio
+async def test_waiting_position_duration_chosen_when_posted(tmp_path, monkeypatch):
+    """26/10 : Bordeaux, gagnée à 18:05, programmée pour 12 h, attendait une place jusqu'au lendemain. La durée est
+    revue à la publication : 5 positions détenues (6 h), mais à 14:30 une vente de 6 h finirait à 20:30."""
+    from src.workers import inventory_manager
+    from src.workers.inventory_manager import InventoryManager
+    from tests.test_integration import make_client
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    for i in range(5):
+        await db.record_bid(auction_id=f"a{i}", card_id=f"c{i}", title=f"L{i}", rarity="L", is_shiny=False,
+                            amount=500, reference_price=900, reason="revente ~900 WB", night=False, dry_run=False,
+                            status="won", end_at=now)
+    await db.schedule_listing(owned_card_id="o1", card_id="c0", title="Bordeaux", rarity="L", base_amount=2599,
+                              duration_minutes=360, post_at=now - timedelta(minutes=1),
+                              target_end=now + timedelta(hours=6), reason="position (achetée 2198)", bid_id=1)
+    monkeypatch.setattr(inventory_manager, "now_local", lambda: datetime(2026, 10, 26, 14, 30, tzinfo=PARIS))
+    await InventoryManager(ctx).post_due_listings()
+    row = await db._one("SELECT duration_minutes, status FROM listings WHERE title = 'Bordeaux'")
+    assert row["status"] == "simulated" and row["duration_minutes"] == 720
     await db.close()

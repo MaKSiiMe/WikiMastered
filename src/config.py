@@ -211,6 +211,10 @@ class Settings(BaseSettings):
     position_list_duration_minutes: int = 360
     position_list_long_minutes: int = 720
     position_list_long_below: int = 5     # 0 = toujours POSITION_LIST_DURATION_MINUTES
+    # Heures de fin (Paris) évitées : l'autre durée est prise si elle finit hors de ces heures. Ventes de L du
+    # 25/10 19:43 au 26/10 19:18 (prix ÷ médiane des 8 ventes précédentes de la carte) : ×0,91-0,97 et 23-33 % sous
+    # ×0,8 pour une fin à 18-22 h, ×0,93-0,95 à 11 h et 13 h, contre ×1,04-1,09 à 00-01 h et 07-09 h. Vide = jamais.
+    position_avoid_end_hours: IntList = Field(default_factory=lambda: [11, 12, 13, 18, 19, 20, 21, 22])
     position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
     position_max_relists: int = 2         # puis au prix d'achat, tant qu'une place de vente est libre
     # Après POSITION_LOSS_AFTER mises en vente sans acheteur, la revente peut descendre jusqu'à POSITION_MAX_LOSS
