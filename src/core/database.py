@@ -731,6 +731,37 @@ class Database:
             groups.setdefault(r["rarity"], []).append((r["price"], single))
         return {rarity: (sales[:limit], len(sales)) for rarity, sales in groups.items()}
 
+    async def observed_for_cards(self, card_ids: Iterable[str], limit: int
+                                 ) -> dict[tuple[str, bool], dict[str, tuple[list[tuple[int, bool]], int]]]:
+        """`observed_by_rarity` de beaucoup de cartes à la fois (valeur de la collection, /valeur) : par (carte,
+        shiny), puis par rareté. Requêtes groupées par 500 cartes."""
+        ids = sorted(set(card_ids))
+        groups: dict[tuple[str, bool], dict[str, list[tuple[int, bool]]]] = {}
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            rows = await self._all(
+                "SELECT card_id, is_shiny, rarity, price, base_amount FROM observed_sales o WHERE card_id IN "
+                f"({', '.join('?' * len(chunk))}) AND rarity IS NOT NULL AND NOT {SUSPECT_SALE} "
+                "ORDER BY ended_at DESC", chunk)
+            for r in rows:
+                single = r["base_amount"] is not None and r["price"] <= r["base_amount"]
+                groups.setdefault((r["card_id"], bool(r["is_shiny"])), {}).setdefault(r["rarity"], []).append(
+                    (r["price"], single))
+        return {key: {rarity: (sales[:limit], len(sales)) for rarity, sales in by_rarity.items()}
+                for key, by_rarity in groups.items()}
+
+    async def site_averages(self, card_ids: Iterable[str], since: datetime) -> dict[str, dict[str, float]]:
+        """Cote du site en cache depuis `since`, de beaucoup de cartes à la fois : {carte: {rareté: moyenne}}."""
+        ids = sorted(set(card_ids))
+        out: dict[str, dict[str, float]] = {}
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            for r in await self._all(f"SELECT card_id, rarity, average FROM price_cache WHERE card_id IN "
+                                     f"({', '.join('?' * len(chunk))}) AND average IS NOT NULL AND fetched_at >= ?",
+                                     [*chunk, iso(since)]):
+                out.setdefault(r["card_id"], {})[r["rarity"]] = r["average"]
+        return out
+
     async def observed_for_title(self, title: str) -> list[aiosqlite.Row]:
         """Ventes observées d'une carte, par son titre (commande prices) : plus récentes d'abord, suspectes marquées."""
         return await self._all(
