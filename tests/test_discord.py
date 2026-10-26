@@ -9,7 +9,7 @@ import pytest
 
 from src import snipes
 from src.core.models import Auction
-from src.roi import roi_text
+from src.roi import roi, roi_discord, roi_text
 from src.workers.auction_sniper import AuctionSniper, Target, snipe_params
 from tests.test_integration import make_client, make_context, seed_observed
 from tests.test_sniper_discovery import sale
@@ -19,13 +19,19 @@ def test_roi_groups_resales_by_paris_day():
     """Une revente à 23:30 UTC compte pour le lendemain à Paris ; une invendue gardée est à part."""
     rows = [{"amount": 100, "sale_price": 150, "sold_at": "2026-10-25T10:00:00+00:00"},
             {"amount": 200, "sale_price": 180, "sold_at": "2026-10-25T23:30:00+00:00"},
-            {"amount": 300, "sale_price": None, "sold_at": "2026-10-26T08:00:00+00:00"}]
-    text = roi_text(rows, 2, date(2026, 10, 26), held=(3, 900))
-    assert "2 revente(s), bénéfice +30 WB, soit +15 WB/jour · ROI +10.0 %" in text
+            {"amount": 300, "sale_price": None, "sold_at": "2026-10-26T08:00:00+00:00"},
+            {"amount": 999, "sale_price": 9999, "sold_at": "2026-10-20T08:00:00+00:00"}]  # hors période
+    report = roi(rows, 2, date(2026, 10, 26), held=(3, 900))
+    text = roi_text(report)
+    assert "2 revente(s), bénéfice +30 WB, soit +15 WB/jour · ROI +10,0 %" in text
     assert "En les comptant perdues : -270 WB" in text and "3 position(s) détenue(s), 900 WB" in text
     day25, day26 = text.splitlines()[-2:]
     assert day25.startswith("25/10") and "+50" in day25 and "+50 %" in day25
     assert day26.startswith("26/10") and "-20" in day26 and "1 (300 WB)" in day26
+    head, days = roi_discord(report)
+    assert head.startswith("## +30 WB") and "ROI **+10,0 %**" in head
+    assert days == ["`26/10` 🔴 **-20 WB** · -10 % · 1 vente(s) · 1 gardée(s)",
+                    "`25/10` 🟢 **+50 WB** · +50 % · 1 vente(s)"]
 
 
 @pytest.mark.asyncio
