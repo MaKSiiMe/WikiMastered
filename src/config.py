@@ -240,6 +240,10 @@ class Settings(BaseSettings):
 
     auto_discard: bool = False
     protected_tags: CsvList = Field(default_factory=list)  # étiquettes jamais vendues ni défaussées
+    # Tes propres achats à revendre : un exemplaire portant cette étiquette (casse ignorée) devient une position du bot,
+    # revendue avec les mêmes règles (prix de départ, remises à -10 %, plancher), au prix que tu l'as payé : ta vente
+    # observée de la carte (le bot note l'acheteur des ventes des raretés qu'il suit), relue sur le site. Vide : jamais.
+    manual_resale_tag: str = "revente"
     discard_rarities: CsvList = Field(default_factory=lambda: ["C", "PC"])
     discard_max_value: int = 2
     discard_keep_copies: int = 1

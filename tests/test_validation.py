@@ -511,3 +511,61 @@ async def test_report_separates_rejected_bids_collection_and_simulated_positions
     assert (report["positions_held"], report["capital_in_positions"]) == (1, 270)
     assert (report["positions_held_sim"], report["capital_simulated"]) == (1, 600)
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tagged_purchase_becomes_a_position_at_the_price_paid(tmp_path):
+    """26/10 : le 11 septembre (L) acheté 7400 à la main ; étiqueté « revente », le bot la revend comme ses positions,
+    au prix final relu sur le site. Hors des chiffres du sniper ; repris une seule fois."""
+    from tests.test_integration import ME
+
+    arrived = datetime.now(UTC) - timedelta(hours=20)
+    copy = {**owned("911", "c911", "Attentats du 11 septembre 2001"), "obtained_at": arrived.isoformat(),
+            "tags": [{"name": "Revente"}]}
+    other = {**owned("x", "cx", "Pack"), "tags": [{"name": "revente"}]}  # carte d'un paquet : aucun achat
+
+    def handler(request):
+        path = request.url.path
+        if path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": [copy, other] if request.url.params["page"] == "0" else []})
+        if path == "/api/marketplace/a911":
+            return httpx.Response(200, json={"auction": {
+                "id": "a911", "card": {"id": "c911", "wikipedia_title": "Attentats", "rarity": "L"},
+                "status": "settled_sold", "end_at": arrived.isoformat(), "base_amount": 7400,
+                "final_price": 7450, "winner_id": ME}})
+        return httpx.Response(404, json={})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    await seed_observed(db, "c911", [8000, 8200, 8100], rarity="L")
+    rows = [("a911", 7400, arrived - timedelta(minutes=1), ME.upper()),           # ton achat (vu 7400)
+            ("old", 6000, arrived - timedelta(days=3), ME),                       # trop ancien
+            ("rival", 8000, arrived - timedelta(minutes=5), "someone-else")]      # acheté par un autre
+    await db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at, buyer_id) "
+        "VALUES (?, 'c911', 'Attentats', 'L', ?, ?, ?)", [(a, p, t.isoformat(), b) for a, p, t, b in rows])
+    await db.db.commit()
+    inv = InventoryManager(ctx)
+    assert await inv.adopt_manual(await inv._recent_copies()) == 1
+    bid = (await db.positions_to_list())[0]
+    assert (bid["auction_id"], bid["amount"], bid["status"], bid["reason"]) == ("a911", 7450, "won", "achat manuel")
+    assert bid["reference_price"] > 7450  # estimation des ventes observées : revente au-dessus du prix payé
+    assert ("SUCCESS", "Achat à revendre pris en charge") in notifier.sent
+    assert [t for _, t in notifier.sent].count("Achat à revendre : prix introuvable") == 1
+
+    # Repris une fois : ni nouvelle position, ni nouvel avertissement.
+    assert await inv.adopt_manual(await inv._recent_copies()) == 0
+    assert len(await db.positions_to_list()) == 1
+    assert [t for _, t in notifier.sent].count("Achat à revendre : prix introuvable") == 1
+    # Une position comme les autres, mais hors des chiffres du sniper.
+    since = datetime.now(UTC) - timedelta(days=3)
+    assert (await db.positions_summary())["real_cost"] == 7450
+    assert not await db.bids_since(since) and await db.committed_since(since) == 0
+    stats = await db.recap_stats(since)
+    assert stats["bids_real"] == stats["won"] == 0 and stats["held_real"] == 1
+    # Revendue comme une position du bot : l'exemplaire étiqueté, au-dessus du prix payé.
+    await inv.manage_positions()
+    row = await db._one("SELECT owned_card_id, base_amount, reason FROM listings")
+    assert row["owned_card_id"] == "911" and row["base_amount"] > 7450 and row["reason"] == "position (achetée 7450)"
+    await db.close()

@@ -123,6 +123,10 @@ OBSERVED_KEEP_DAYS = 60
 WASH_PAIR_MIN = 2
 
 HELD = "status IN ('won', 'sim_won') AND closed = 0"
+# Tes propres achats repris par le bot pour la revente (MANUAL_RESALE_TAG) : des positions comme les autres, mais
+# hors des chiffres du sniper (mises, gagnées, dépenses du jour).
+MANUAL_REASON = "achat manuel"
+NOT_MANUAL = f"reason NOT LIKE '{MANUAL_REASON}%'"
 # Vente observée suspecte : vendeur = acheteur, ou paire vendeur -> acheteur déjà vue (alias o).
 SUSPECT_SALE = ("(o.seller_id IS NOT NULL AND o.buyer_id IS NOT NULL AND (o.seller_id = o.buyer_id OR "
                 "(SELECT COUNT(*) FROM observed_sales p WHERE p.seller_id = o.seller_id "
@@ -311,7 +315,7 @@ class Database:
             "(SELECT base_amount FROM observed_sales o WHERE o.auction_id = b.auction_id)) AS seen_start "
             "FROM bids b LEFT JOIN listings l ON l.id = (SELECT MAX(id) FROM listings WHERE bid_id = b.id) "
             "LEFT JOIN bids f ON f.id = (SELECT MIN(id) FROM bids WHERE auction_id = b.auction_id) "
-            "WHERE b.id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id) "
+            f"WHERE b.id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id) AND b.{NOT_MANUAL} "
             "AND (SELECT MIN(placed_at) FROM bids WHERE auction_id = b.auction_id) >= ? ORDER BY b.placed_at",
             (iso(since),),
         )
@@ -382,7 +386,7 @@ class Database:
 
         En DRY_RUN, ce sont les mises simulées (en cours ou remportées) qui comptent."""
         row = await self._one(
-            "SELECT COALESCE(SUM(amount), 0) AS s FROM bids b WHERE dry_run = ? AND placed_at >= ? "
+            f"SELECT COALESCE(SUM(amount), 0) AS s FROM bids b WHERE dry_run = ? AND placed_at >= ? AND {NOT_MANUAL} "
             "AND status IN ('placed', 'won', 'uncertain', 'simulated', 'sim_won') AND id = "
             "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)",
             (int(dry_run), iso(since)),
@@ -429,6 +433,33 @@ class Database:
             "AND id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)")
         return {"positions": int(row["positions"]), "real_positions": int(row["real_positions"]),
                 "sim_cost": int(row["sim_cost"])} if row else {"positions": 0, "real_positions": 0, "sim_cost": 0}
+
+    async def my_purchase(self, card_id: str, rarity: str | None, shiny: bool, buyer_id: str,
+                          since: datetime, until: datetime) -> aiosqlite.Row | None:
+        """Ta dernière vente observée de cette carte (même rareté, shiny ou non), finie entre `since` et `until`, et
+        pas déjà une position (du bot ou un achat manuel repris)."""
+        return await self._one(
+            "SELECT auction_id, title, price, ended_at FROM observed_sales WHERE card_id = ? AND rarity IS ? "
+            "AND is_shiny = ? AND lower(buyer_id) = ? AND ended_at >= ? AND ended_at <= ? AND auction_id NOT IN "
+            "(SELECT auction_id FROM bids WHERE status = 'won') ORDER BY ended_at DESC LIMIT 1",
+            (card_id, rarity, int(shiny), buyer_id.lower(), iso(since), iso(until)))
+
+    async def holds_position(self, card_id: str, rarity: str | None, shiny: bool) -> bool:
+        """Une position réelle de cette carte (même rareté, shiny ou non) attend déjà sa revente."""
+        return await self._one(f"SELECT 1 FROM bids WHERE {HELD} AND dry_run = 0 AND card_id = ? AND rarity IS ? "
+                               "AND is_shiny = ?", (card_id, rarity, int(shiny))) is not None
+
+    async def record_manual_position(self, *, auction_id: str, card_id: str, title: str, rarity: str | None,
+                                     is_shiny: bool, amount: int, reference_price: float | None,
+                                     bought_at: datetime) -> int:
+        """Ton achat repris comme une position du bot, gagnée à `bought_at` (sa revente cherche un exemplaire
+        arrivé depuis)."""
+        return await self._exec(
+            "INSERT INTO bids (auction_id, card_id, title, rarity, is_shiny, amount, reference_price, reason, "
+            "night, dry_run, status, end_at, placed_at, settled_at, final_price) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'won', ?, ?, ?, ?)",
+            (auction_id, card_id, title, rarity, int(is_shiny), amount, reference_price, MANUAL_REASON,
+             iso(bought_at), iso(bought_at), iso(utcnow()), amount))
 
     # --------------------------------------------------------------- ventes
     async def schedule_listing(self, *, owned_card_id: str, card_id: str, title: str, rarity: str | None,
@@ -653,7 +684,7 @@ class Database:
         rows = await self._all(
             "SELECT COUNT(*) AS bids, COALESCE(SUM(status IN ('won', 'sim_won')), 0) AS wins, "
             "COALESCE(SUM(dry_run = 0 AND status != 'rejected'), 0) AS real_bids FROM bids b "
-            "WHERE rarity = ? AND reason NOT LIKE 'collection%' AND placed_at >= ? "
+            f"WHERE rarity = ? AND reason NOT LIKE 'collection%' AND {NOT_MANUAL} AND placed_at >= ? "
             "AND id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)", (rarity, iso(since)))
         return rows[0]
 
@@ -736,14 +767,15 @@ class Database:
             return int(row[0] or 0) if row else 0
 
         position = "reason NOT LIKE 'collection%'"
+        sniper = f"{position} AND {NOT_MANUAL}"
         return {
             "observed": await one("SELECT COUNT(*) FROM observed_sales WHERE ended_at >= ?"),
-            "bids_real": await one(f"SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 0 AND {position}"),
-            "bids_sim": await one(f"SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 1 AND {position}"),
+            "bids_real": await one(f"SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 0 AND {sniper}"),
+            "bids_sim": await one(f"SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 1 AND {sniper}"),
             "bids_collection": await one("SELECT COUNT(*) FROM bids WHERE placed_at >= ? "
                                          "AND reason LIKE 'collection%'"),
             "won": await one(f"SELECT COUNT(*) FROM bids WHERE settled_at >= ? AND status IN ('won', 'sim_won') "
-                             f"AND {position}"),
+                             f"AND {sniper}"),
             "won_collection": await one("SELECT COUNT(*) FROM bids WHERE settled_at >= ? "
                                         "AND status IN ('won', 'sim_won') AND reason LIKE 'collection%'"),
             "held": await one(f"SELECT COUNT(*) FROM bids WHERE {HELD} AND {position}", ()),
@@ -816,7 +848,7 @@ class Database:
     async def report(self, since: datetime) -> dict[str, Any]:
         s = iso(since)
         bids = await self._all(
-            "SELECT status, amount, dry_run, reason FROM bids b WHERE placed_at >= ? AND id = "
+            f"SELECT status, amount, dry_run, reason FROM bids b WHERE placed_at >= ? AND {NOT_MANUAL} AND id = "
             "(SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id)", (s,)
         )
         listings = await self._all("SELECT status, base_amount FROM listings WHERE created_at >= ?", (s,))
