@@ -433,6 +433,37 @@ async def test_relist_follows_the_copy_back_under_a_new_id(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_unsold_resale_is_relisted_under_the_returned_copy(tmp_path):
+    """25-26/10 : chaque remise en vente partait sous l'ancien identifiant, refusée « vous ne possédez pas cette
+    carte », puis reprise 1 min plus tard. L'exemplaire revenu est cherché avant la remise en vente."""
+    def handler(request):
+        path = request.url.path
+        if path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": [owned("back", "mw", "Mark Wahlberg")]})
+        if path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 4, "maxConcurrentAuctions": 5})
+        return httpx.Response(200, json={"auction": {
+            "id": "auc", "card": {"id": "mw", "wikipedia_title": "Mark Wahlberg", "rarity": "L"},
+            "status": "settled_unsold", "end_at": datetime.now(UTC).isoformat(), "base_amount": 5700}})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    bid = await db.record_bid(auction_id="a", card_id="mw", title="Mark Wahlberg", rarity="L", is_shiny=False,
+                              amount=5000, reference_price=7000, reason="revente ~7000 WB", night=False,
+                              dry_run=False, status="won", end_at=now)
+    lid = await db.schedule_listing(owned_card_id="sold-copy", card_id="mw", title="Mark Wahlberg", rarity="L",
+                                    base_amount=5700, duration_minutes=720, post_at=now - timedelta(hours=12),
+                                    target_end=now - timedelta(minutes=5), reason="position", bid_id=bid)
+    await db.update_listing(lid, status="posted", auction_id="auc")
+    await InventoryManager(ctx).settle_listings()
+    row = await db._one("SELECT owned_card_id, relist_count FROM listings ORDER BY id DESC LIMIT 1")
+    assert (row["owned_card_id"], row["relist_count"]) == ("back", 1)
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_failed_relist_resumes_at_its_reduced_price(tmp_path):
     """Remise en vente refusée pour de bon : la position repart à son prix réduit, pas au prix de départ."""
     def handler(request):

@@ -944,9 +944,24 @@ class InventoryManager(Worker):
             # Déjà au prix d'achat : message discret, la carte peut tourner plusieurs fois.
             self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
                                f"(achetée {bid['amount']}).", important=row["base_amount"] > floor)
-        await self._schedule(owned_id=row["owned_card_id"], card_id=row["card_id"], title=row["title"],
-                             rarity=row["rarity"], price=price, reason=f"position (achetée {bid['amount']})",
-                             bid_id=bid["id"], relist_count=row["relist_count"] + 1)
+        await self._schedule(owned_id=await self._returned_copy(row, bid), card_id=row["card_id"],
+                             title=row["title"], rarity=row["rarity"], price=price,
+                             reason=f"position (achetée {bid['amount']})", bid_id=bid["id"],
+                             relist_count=row["relist_count"] + 1)
+
+    async def _returned_copy(self, row, bid) -> str:
+        """Exemplaire d'une revente invendue : le site le rend sous un nouvel identifiant (les 25-26/10, chaque remise
+        en vente était d'abord refusée « vous ne possédez pas cette carte », puis reprise 1 min plus tard). Pas encore
+        revenu, ou collection illisible : l'ancien identifiant, que la publication sait reprendre."""
+        if bid["dry_run"] or row["owned_card_id"].startswith("sim-"):
+            return row["owned_card_id"]
+        try:
+            copies = same_copies(await self._owned_copies(row["card_id"], row["title"]), row["rarity"],
+                                 bool(bid["is_shiny"]))
+        except ApiError as exc:
+            self.log.debug("%s : collection illisible (%s), ancien exemplaire gardé", row["title"], exc)
+            return row["owned_card_id"]
+        return newest_sellable(copies, self._protected_tags()) or row["owned_card_id"]
 
     async def _slot_for_relist(self, bid_id: int) -> bool:
         """Place de vente libre pour cette position, une fois servies les ventes programmées et les autres positions
