@@ -523,11 +523,14 @@ async def test_tagged_purchase_becomes_a_position_at_the_price_paid(tmp_path):
     copy = {**owned("911", "c911", "Attentats du 11 septembre 2001"), "obtained_at": arrived.isoformat(),
             "tags": [{"name": "Revente"}]}
     other = {**owned("x", "cx", "Pack"), "tags": [{"name": "revente"}]}  # carte d'un paquet : aucun achat
+    # Arrivée il y a 1 min : sa vente n'est peut-être pas encore notée, elle attend (pas d'avertissement).
+    fresh = {**owned("y", "cy", "Neuve"), "obtained_at": datetime.now(UTC).isoformat(), "tags": [{"name": "revente"}]}
 
     def handler(request):
         path = request.url.path
         if path == "/api/my-collection":
-            return httpx.Response(200, json={"collection": [copy, other] if request.url.params["page"] == "0" else []})
+            page = [copy, other, fresh] if request.url.params["page"] == "0" else []
+            return httpx.Response(200, json={"collection": page})
         if path == "/api/marketplace/a911":
             return httpx.Response(200, json={"auction": {
                 "id": "a911", "card": {"id": "c911", "wikipedia_title": "Attentats", "rarity": "L"},

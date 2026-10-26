@@ -65,6 +65,8 @@ MANUAL_KV = "manual_resale"  # exemplaires déjà repris, et ceux dont l'achat e
 # Ton achat d'un exemplaire : fini au plus N avant son arrivée dans la collection (ou juste après, horloges).
 MANUAL_BOUGHT_BEFORE = timedelta(days=2)
 MANUAL_BOUGHT_AFTER = timedelta(minutes=30)
+# Exemplaire arrivé depuis moins de N : sa vente n'est peut-être pas encore notée (HARVEST_DELAY du sniper), il attend.
+MANUAL_SETTLE = timedelta(minutes=10)
 
 
 # ---------------------------------------------------------------- logique pure
@@ -564,7 +566,8 @@ class InventoryManager(Worker):
         adopted_ids, missing_ids = set(state.get("adopted", [])), set(state.get("missing", []))
         adopted = 0
         for c in tagged:
-            if c.id in adopted_ids or await self.db.holds_position(c.catalog_id, c.rarity, c.is_shiny):
+            if c.id in adopted_ids or (c.obtained_at and utcnow() - c.obtained_at < MANUAL_SETTLE) \
+                    or await self.db.holds_position(c.catalog_id, c.rarity, c.is_shiny):
                 continue
             label = f"{c.title} ({c.rarity}{' ✨' if c.is_shiny else ''})"
             arrived = c.obtained_at or utcnow()
@@ -601,14 +604,15 @@ class InventoryManager(Worker):
 
     async def _paid(self, buy, me: str) -> int | None:
         """Prix payé : le prix final relu sur le site (la vente observée peut dater de quelques secondes avant la
-        fin), sinon le dernier prix vu. Gagnée par quelqu'un d'autre : None (ce n'est pas ton achat)."""
+        fin), sinon le dernier prix vu. En cours, invendue ou gagnée par quelqu'un d'autre : None (ce n'est pas ton
+        achat)."""
         try:
             auction = await self.api.auction(buy["auction_id"])
         except ApiError as exc:
             self.log.debug("enchère %s illisible (%s) : prix observé gardé", buy["auction_id"], exc)
             return buy["price"]
         winner = (auction.winner_id or auction.current_bidder_id or "").lower()
-        if auction.status == "active" or (winner and winner != me):
+        if auction.status in ("active", "settled_unsold") or (winner and winner != me):
             return None
         final = auction.final_price or auction.current_bid or buy["price"]
         if final != buy["price"]:
