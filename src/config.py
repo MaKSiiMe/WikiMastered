@@ -280,7 +280,7 @@ class Settings(BaseSettings):
     value_scan_freeze_below: int = 50
 
     # --- Module G : collection (cartes gardées, jamais revendues) ---------------------
-    collection_sets: CsvList = Field(default_factory=list)    # « jours » = les 366 jours de l'année
+    collection_sets: CsvList = Field(default_factory=list)    # « jours » + clés de config/collections.yaml
     collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
     collection_max_price: int = 50                              # mise maximale pour une carte manquante
     collection_refresh_minutes: float = 360.0
@@ -288,7 +288,7 @@ class Settings(BaseSettings):
     # Mises réelles de collection par vérification anti-bot (le site en accepte ~9-10, puis la redemande) :
     # le reste est gardé pour les L. 0 = pas de limite.
     collection_bids_per_check: int = 2
-    collection_tag: str = "date"           # étiquette ajoutée à un exemplaire de chaque carte possédée ("" = non)
+    collection_tag: str = "date"           # étiquette des jours et de COLLECTION_TITLES ("" = non)
     collection_tag_max_per_run: int = 60   # étiquettes posées par passage (requêtes espacées)
 
     @field_validator("*", mode="before")

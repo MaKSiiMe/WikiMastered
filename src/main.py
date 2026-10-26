@@ -48,7 +48,7 @@ from src.tools.inspect_api import inspect
 from src.workers.achievements import AchievementsWorker
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
-from src.workers.collection import CollectionWorker, progress_lines, summary_line, targets
+from src.workers.collection import CollectionWorker, progress_lines, summary_line, targets, unknown_text
 from src.workers.collection import refresh as refresh_collection
 from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
@@ -476,7 +476,7 @@ async def collection_status(ctx: Context) -> None:
     print(f"COLLECTION_SETS = {s.collection_sets}  COLLECTION_TITLES = {s.collection_titles}")
     state = await refresh_collection(ctx)
     if state["unknown_sets"]:
-        print(f"Ensemble(s) inconnu(s) : {state['unknown_sets']} — valeur attendue : jours")
+        print(unknown_text(s, state["unknown_sets"]))
     by_key = targets(ctx)
     print("\n".join(progress_lines(state, by_key, utcnow(), days=30)))
     print("Manquantes : " + (", ".join(by_key.get(k, k) for k in state["missing"]) or "aucune"))

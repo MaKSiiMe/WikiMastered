@@ -34,10 +34,12 @@ class WikiMastersAPI:
     async def collection_stats(self) -> CollectionStats:
         return CollectionStats.model_validate(await self.client.get("collection_stats"))
 
-    async def collection_page(self, page: int, sort: str = "added", q: str = "") -> CollectionPage:
-        return CollectionPage.model_validate(await self.client.get("collection_page", page=page, sort=sort, q=q))
+    async def collection_page(self, page: int, sort: str = "added", q: str = "",
+                              background: bool = False) -> CollectionPage:
+        return CollectionPage.model_validate(await self.client.get("collection_page", page=page, sort=sort, q=q,
+                                                                   background=background))
 
-    async def iter_collection(self, q: str = "") -> AsyncIterator[OwnedCard]:
+    async def iter_collection(self, q: str = "", background: bool = False) -> AsyncIterator[OwnedCard]:
         """Parcourt toute la collection (pages de 50 à partir de 0) [WR api.js loadCollection].
 
         Lire 8 000 exemplaires prend plusieurs minutes : une carte gagnée ou vendue entre-temps décale
@@ -46,7 +48,7 @@ class WikiMastersAPI:
         seen: set[str] = set()
         repeated = 0
         for page in range(MAX_COLLECTION_PAGES):
-            result = await self.collection_page(page, q=q)
+            result = await self.collection_page(page, q=q, background=background)
             raw_count = len(result.collection)
             for row in result.rows():
                 if row.id in seen:
@@ -61,8 +63,8 @@ class WikiMastersAPI:
         if repeated:
             log.info("collection modifiée pendant la lecture : %d exemplaire(s) revu(s) ignoré(s)", repeated)
 
-    async def load_collection(self, q: str = "") -> list[OwnedCard]:
-        return [row async for row in self.iter_collection(q)]
+    async def load_collection(self, q: str = "", background: bool = False) -> list[OwnedCard]:
+        return [row async for row in self.iter_collection(q, background)]
 
     async def market_page(self, *, page: int = 1, sort: str = "ending_soon", q: str = "",
                           limit: int = 50, rarity: str = "", background: bool = False) -> tuple[list[Auction], bool]:

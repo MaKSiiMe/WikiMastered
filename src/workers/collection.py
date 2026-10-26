@@ -1,8 +1,12 @@
-"""Module G : compléter une collection (par défaut, les 366 jours de l'année).
+"""Module G : compléter des collections de cartes (les 366 jours de l'année, les éléments chimiques…).
 
-- Toutes les COLLECTION_REFRESH_MINUTES, lit les cartes possédées de la collection par
-  recherche dans ta collection (une recherche par mois pour les jours : 12 requêtes au lieu
-  de 175 pages), et enregistre les possédées / manquantes (kv « collection »).
+- Une collection = un nom, une étiquette et une liste de titres Wikipédia exacts. « jours » est
+  intégrée ; les autres sont décrites dans config/collections.yaml. COLLECTION_SETS choisit
+  celles qui sont actives, COLLECTION_TITLES ajoute des titres isolés.
+- Toutes les COLLECTION_REFRESH_MINUTES, lit les cartes possédées des collections et enregistre
+  les possédées / manquantes (kv « collection »). Les jours seuls : une recherche par mois
+  (12 requêtes au lieu de 175 pages) ; avec une collection du fichier, une lecture complète en
+  requêtes de fond (le sniper passe avant).
 - Le sniper mise sur une carte manquante en vente, jusqu'à COLLECTION_MAX_PRICE, dans la
   même fenêtre que ses autres mises. Une carte gagnée est gardée, jamais revendue.
 - Jamais deux enchères en même temps pour la même carte ; jamais sur une carte que tu
@@ -11,9 +15,9 @@
 - Suivi de complétion : avancement de chaque collection (jours, titres) et date d'obtention de
   chaque carte (kv « collection », clé first_owned), pour le récap, le bilan et la commande.
 
-- Étiquette (COLLECTION_TAG, « date » par défaut) : ajoutée à un exemplaire de chaque carte
-  possédée qui n'en a pas, comme le fait l'éditeur d'étiquettes du site (tables Supabase `tags`
-  et `user_card_tags` [WP tags.js]). Avec PROTECTED_TAGS=date, cet exemplaire n'est jamais vendu.
+- Étiquette de la collection (COLLECTION_TAG pour les jours, « date » par défaut) : ajoutée à un
+  exemplaire de chaque carte possédée qui n'en a pas, comme le fait l'éditeur d'étiquettes du site
+  (tables Supabase `tags` et `user_card_tags` [WP tags.js]). Avec PROTECTED_TAGS=date, cet exemplaire n'est jamais vendu.
 
 Les titres attendus sont ceux de Wikipédia (« 1er janvier », « 14 octobre »), vérifiés sur les
 cartes du site ; seuls les titres exacts comptent (pas « 14 août en sport » ni « 10 mai 1981 »).
@@ -24,8 +28,14 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
+import yaml
+
+from src.config import Settings
 from src.core import timeutils
 from src.core.client import ApiError
 from src.core.models import OwnedCard
@@ -37,6 +47,8 @@ from src.workers.base import Context, Worker
 log = logging.getLogger(__name__)
 
 KV_KEY = "collection"
+COLLECTIONS_FILE = Path(__file__).resolve().parents[2] / "config" / "collections.yaml"
+TITLES = "_titres"  # COLLECTION_TITLES
 MONTHS = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre",
           "novembre", "décembre")
 MONTH_DAYS = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
@@ -52,43 +64,63 @@ def collection_key(title: str) -> str:
     return re.sub(r"^1er\b", "1", normalize_title(title))
 
 
-SET_ALIASES = {"jours": "jours", "jour": "jours", "dates": "jours", "date": "jours", "days": "jours",
-               "calendrier": "jours"}
+SET_ALIASES = {"jour": "jours", "dates": "jours", "date": "jours", "days": "jours", "calendrier": "jours"}
 
 
-def sets(ctx: Context) -> tuple[set[str], list[str]]:
-    """(ensembles reconnus, valeurs inconnues) de COLLECTION_SETS."""
-    known: set[str] = set()
+@dataclass(frozen=True)
+class Collection:
+    name: str                # nom affiché (récap, bilan, commande)
+    titles: tuple[str, ...]  # titres Wikipédia exacts
+    tag: str = ""            # étiquette posée sur un exemplaire de chaque carte possédée ("" = aucune)
+
+
+def defined(settings: Settings) -> dict[str, Collection]:
+    """Collections connues : « jours » (intégrée), puis celles de config/collections.yaml."""
+    out = {"jours": Collection("Jours de l'année", tuple(year_days()), settings.collection_tag.strip())}
+    raw = yaml.safe_load(COLLECTIONS_FILE.read_text(encoding="utf-8")) if COLLECTIONS_FILE.exists() else None
+    for key, spec in (raw or {}).items():
+        out[normalize_title(str(key))] = Collection(str(spec.get("nom") or key),
+                                                    tuple(str(t) for t in spec.get("titres") or ()),
+                                                    str(spec.get("etiquette") or "").strip())
+    return out
+
+
+def collections(settings: Settings) -> tuple[dict[str, Collection], list[str]]:
+    """(collections actives, valeurs inconnues de COLLECTION_SETS)."""
+    known = defined(settings)
+    active: dict[str, Collection] = {}
     unknown: list[str] = []
-    for value in ctx.settings.collection_sets:
-        alias = SET_ALIASES.get(normalize_title(value))
-        if alias:
-            known.add(alias)
+    for value in settings.collection_sets:
+        key = normalize_title(value)
+        key = SET_ALIASES.get(key, key)
+        if key in known:
+            active[key] = known[key]
         else:
             unknown.append(value)
-    return known, unknown
+    if settings.collection_titles:
+        active[TITLES] = Collection("Titres", tuple(settings.collection_titles), settings.collection_tag.strip())
+    return active, unknown
+
+
+def unknown_text(settings: Settings, unknown: list[str]) -> str:
+    return f"COLLECTION_SETS : {', '.join(unknown)} inconnu(s) ; collections connues : {', '.join(defined(settings))}."
 
 
 def targets(ctx: Context) -> dict[str, str]:
-    """Clé -> titre affiché, pour tous les ensembles et titres demandés."""
-    s = ctx.settings
-    titles: list[str] = []
-    if "jours" in sets(ctx)[0]:
-        titles += year_days()
-    titles += s.collection_titles
-    return {collection_key(t): t for t in titles}
+    """Clé -> titre affiché, pour toutes les collections actives."""
+    return {collection_key(t): t for c in collections(ctx.settings)[0].values() for t in c.titles}
 
 
 async def refresh(ctx: Context) -> dict:
-    """Relit les cartes possédées de la collection et enregistre l'état (kv)."""
+    """Relit les cartes possédées des collections et enregistre l'état (kv)."""
     wanted = targets(ctx)
-    known, unknown = sets(ctx)
-    searches = list(MONTHS) if "jours" in known else []
-    searches += ctx.settings.collection_titles
+    active, unknown = collections(ctx.settings)
+    full = bool(set(active) - {"jours", TITLES})  # une collection du fichier : toute la collection est lue
+    searches = [""] if full else (list(MONTHS) if "jours" in active else []) + list(ctx.settings.collection_titles)
     copies: dict[str, list[OwnedCard]] = {}
     near: set[str] = set()  # titres trouvés mais non reconnus (diagnostic du format des titres)
     for q in searches:
-        for row in await ctx.api.load_collection(q=q):
+        for row in await ctx.api.load_collection(q=q, background=full):
             key = collection_key(row.title)
             if key in wanted:
                 copies.setdefault(key, []).append(row)
@@ -100,7 +132,7 @@ async def refresh(ctx: Context) -> dict:
              "total": len(wanted), "unmatched": sorted(near)[:20], "unknown_sets": unknown,
              "at": utcnow().isoformat(), "sets": set_progress(ctx, owned),
              "first_owned": first_owned(previous, owned, utcnow())}
-    state.update(await tag_owned(ctx, copies))
+    state.update(await tag_owned(ctx, copies, active.values()))
     await ctx.db.kv_set(KV_KEY, state)
     return state
 
@@ -123,12 +155,9 @@ async def record_win(ctx: Context, title: str) -> None:
 def set_progress(ctx: Context, owned: set[str]) -> dict[str, list[int]]:
     """Avancement de chaque collection : {nom : [possédées, total]}."""
     out: dict[str, list[int]] = {}
-    if "jours" in sets(ctx)[0]:
-        days = {collection_key(t) for t in year_days()}
-        out["Jours de l'année"] = [len(days & owned), len(days)]
-    titles = {collection_key(t) for t in ctx.settings.collection_titles}
-    if titles:
-        out["Titres"] = [len(titles & owned), len(titles)]
+    for c in collections(ctx.settings)[0].values():
+        keys = {collection_key(t) for t in c.titles}
+        out[c.name] = [len(keys & owned), len(keys)]
     return out
 
 
@@ -159,17 +188,20 @@ def progress_lines(state: dict | None, titles: dict[str, str], now: datetime, da
     return lines
 
 
-async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]]) -> dict:
-    """Ajoute l'étiquette de collection au meilleur exemplaire de chaque carte possédée qui n'en a pas."""
+async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: Iterable[Collection]) -> dict:
+    """Ajoute l'étiquette de chaque collection au meilleur exemplaire de chaque carte possédée qui n'en a pas."""
     from src.workers.inventory_manager import keep_order  # import local : évite un cycle
 
-    tag = ctx.settings.collection_tag.strip()
-    if not tag:
+    keys_by_tag: dict[str, set[str]] = {}
+    for c in active:
+        if c.tag:
+            keys_by_tag.setdefault(c.tag, set()).update(collection_key(t) for t in c.titles)
+    if not keys_by_tag:
         return {}
-    wanted = tag.casefold()
-    untagged = [min(rows, key=keep_order) for rows in copies.values()
-                if not any(wanted in r.tag_names for r in rows)]
-    out: dict = {"tag": tag, "to_tag": len(untagged), "tagged": 0}
+    untagged = [(tag, min(rows, key=keep_order)) for tag, keys in keys_by_tag.items()
+                for key, rows in copies.items()
+                if key in keys and not any(tag.casefold() in r.tag_names for r in rows)]
+    out: dict = {"tag": ", ".join(keys_by_tag), "to_tag": len(untagged), "tagged": 0}
     if not untagged:
         return out
     live = ctx.settings.is_live("tag_card")
@@ -179,12 +211,14 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]]) -> dict:
     except ApiError as exc:
         out["tag_error"] = str(exc)
         return out
-    tag_id = next((t["id"] for t in data or [] if isinstance(t, dict)
-                   and str(t.get("name", "")).strip().casefold() == wanted), None) if status == 200 else None
-    if tag_id is None:
-        out["tag_error"] = f"étiquette « {tag} » introuvable (HTTP {status}) : crée-la une fois sur le site"
-        return out
-    for row in untagged[: ctx.settings.collection_tag_max_per_run]:
+    ids = {str(t.get("name", "")).strip().casefold(): t["id"] for t in data or []
+           if isinstance(t, dict)} if status == 200 else {}
+    missing = [tag for tag in keys_by_tag if tag.casefold() not in ids]
+    if missing:
+        out["tag_error"] = (f"étiquette(s) « {', '.join(missing)} » introuvable(s) (HTTP {status}) : "
+                            "crée-la une fois sur le site")
+    for tag, row in [u for u in untagged if u[0].casefold() in ids][: ctx.settings.collection_tag_max_per_run]:
+        tag_id = ids[tag.casefold()]
         if not live:
             log.info("[DRY RUN] étiquette « %s » sur %s", tag, row.title)
             continue
@@ -217,11 +251,10 @@ class CollectionWorker(Worker):
         self.log.info("collection : %d/%d possédées, %d manquantes", len(state["owned"]), state["total"],
                       len(state["missing"]))
         if state.get("unknown_sets"):
-            self.notifier.warning("Collection : ensemble inconnu", f"COLLECTION_SETS={state['unknown_sets']} : "
-                                  "valeur attendue « jours ».")
+            self.notifier.warning("Collection : ensemble inconnu", unknown_text(self.settings, state["unknown_sets"]))
         if state.get("tagged"):
             self.notifier.info("Collection : étiquettes ajoutées",
-                               f"« {state['tag']} » ajoutée à {state['tagged']} carte(s) ; reste {state['to_tag']}.")
+                               f"« {state['tag']} » ajoutée(s) à {state['tagged']} carte(s) ; reste {state['to_tag']}.")
         if state.get("tag_error"):
             self.log.warning("étiquettes de collection : %s", state["tag_error"])
         return self.settings.collection_refresh_minutes * 60
