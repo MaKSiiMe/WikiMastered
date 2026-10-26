@@ -42,6 +42,7 @@ from src.core.models import MarketPage
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
+from src.overrides import load as load_overrides
 from src.pauses import load as load_pauses
 from src.recap import recap_loop
 from src.roi import Roi, roi, roi_text
@@ -411,6 +412,8 @@ async def supervise(name: str, start: Callable[[], Awaitable[None]], notifier) -
 async def run_bot(settings: Settings) -> None:
     async with build_context(settings) as ctx:
         await load_pauses(ctx)
+        if changed := await load_overrides(ctx):
+            log.info("Réglages changés sur Discord : %s", ", ".join(f"{k}={v}" for k, v in changed.items()))
         workers: list[Worker] = []
         if settings.enable_sniper:
             workers.append(AuctionSniper(ctx))

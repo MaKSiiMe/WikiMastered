@@ -8,6 +8,9 @@ ne fait que répondre, et seulement à DISCORD_OWNER_ID.
 - Actions : /snipe (confirmée par un bouton), /snipes, /annuler. Voir src/snipes.py.
 - Pilotage : /etat (avec boutons), /pause, /reprise (src/pauses.py), /verif-faite. Une vérification anti-bot
   demandée par le site arrive aussi en message privé, avec un bouton « C'est fait ».
+- Cartes : /garder, /vendre, /carte, /opportunites… et les boutons des messages de vente (src/discord_cards.py).
+- Connecté, le bot envoie lui-même les messages de vente à boutons (dans le salon de leur webhook) et les alertes
+  critiques en message privé ; déconnecté, tout repart par les webhooks.
 """
 
 from __future__ import annotations
@@ -347,6 +350,43 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                 log.warning("Discord : message privé anti-bot impossible (%s)", exc)
             await asyncio.sleep(WATCH_SECONDS)
 
+    channels: dict[str, discord.abc.Messageable] = {}
+
+    async def owner_dm() -> discord.User:
+        return client.get_user(s.discord_owner_id) or await client.fetch_user(s.discord_owner_id)
+
+    async def channel_for(url: str) -> discord.abc.Messageable:
+        """Salon d'un webhook (lu une fois) ; inaccessible au bot (salon privé…) : ton message privé."""
+        if url not in channels:
+            try:
+                hook = await discord.Webhook.from_url(url, client=client).fetch()
+                channel = client.get_channel(hook.channel_id) or await client.fetch_channel(hook.channel_id)
+                channels[url] = channel  # type: ignore[assignment]
+            except (discord.HTTPException, ValueError) as exc:
+                log.warning("Discord : salon du webhook illisible (%s), messages à boutons en privé", exc)
+                channels[url] = await owner_dm()
+        return channels[url]
+
+    async def with_buttons(actions: dict, embed: dict, url: str) -> bool:
+        view = message_view(actions)
+        if view is None or not client.is_ready():
+            return False
+        target = await channel_for(url) if url else await owner_dm()
+        try:
+            await target.send(embed=discord.Embed.from_dict(embed), view=view)
+        except discord.Forbidden:  # le bot ne peut pas écrire dans ce salon : en privé
+            channels[url] = await owner_dm()
+            await channels[url].send(embed=discord.Embed.from_dict(embed), view=view)
+        return True
+
+    async def direct(embed: dict) -> None:
+        if client.is_ready():
+            await (await owner_dm()).send(embed=discord.Embed.from_dict(embed))
+
+    from src.discord_cards import message_view, register  # importe ce module : chargé une fois défini
+
+    register(client, tree, ctx, workers)
+
     async def setup_hook() -> None:
         client.add_view(VerifyButton(s.discord_owner_id, verify_pressed))  # boutons envoyés avant un redémarrage
         if guild:
@@ -356,7 +396,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                  "sur le serveur" if guild else "(globales : jusqu'à 1 h avant d'apparaître)")
         if sniper is not None:
             client.watch_task = asyncio.create_task(watch_antibot())  # type: ignore[attr-defined]
-
+        ctx.notifier.with_buttons, ctx.notifier.direct = with_buttons, direct
     client.setup_hook = setup_hook  # type: ignore[method-assign]
 
     @tree.command(name="etat", description="Santé du bot : session, vérification anti-bot, workers, pauses")
@@ -536,5 +576,6 @@ async def run_discord(ctx: Context, workers: list[Worker], cli: ModuleType, star
         try:
             await client.start(ctx.settings.discord_bot_token)
         finally:
+            ctx.notifier.with_buttons = ctx.notifier.direct = None  # messages de nouveau par les webhooks seuls
             if task := getattr(client, "watch_task", None):
                 task.cancel()

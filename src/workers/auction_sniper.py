@@ -664,6 +664,23 @@ class AuctionSniper(Worker):
         """Carte manquante à la collection ou demandée sur Discord (gardée, pas revendue)."""
         return collection_key(auction.title) in self._collection_missing or self._snipe_for(auction) is not None
 
+    def watched(self) -> list[tuple[Auction, int | None, str]]:
+        """Ventes suivies (commande Discord /opportunites) : enchère, plafond, motif ; les plus proches de la fin
+        d'abord."""
+        now = utcnow()
+        out = []
+        for t in self._targets.values():
+            a = t.auction
+            if a.seconds_left(now) <= 0:
+                continue
+            if snipe := self._snipe_for(a):
+                out.append((a, snipe.max_price, "demandée"))
+            elif collection_key(a.title) in self._collection_missing:
+                out.append((a, self.settings.collection_max_price, "collection"))
+            else:
+                out.append((a, t.ceiling, "revente, misée" if t.recheck else "revente"))
+        return sorted(out, key=lambda w: w[0].end_at)
+
     def _snipe_for(self, auction: Auction) -> Snipe | None:
         snipe = self._snipes.get(collection_key(auction.title))
         return snipe if snipe is not None and snipe.matches(auction) else None
@@ -1292,7 +1309,7 @@ class AuctionSniper(Worker):
                     f"Le site refuse les mises tant qu'elle n'est pas faite ({label} : {decision.amount} WB "
                     "refusée). Fais-la toi-même dans ton navigateur : mise à la main sur le marché, ou page "
                     f"Paquets si elle la demande. En attendant, le bot {retry_text(retry)} et te prévient dès "
-                    "qu'une mise repasse.")
+                    "qu'une mise repasse.", dm=False)  # message privé à part, avec le bouton « C'est fait »
             return False
         if not retried and isinstance(server_min, int) and decision.amount < server_min <= decision.ceiling:
             # Un rival a misé entre la lecture et la mise : une position repart au-dessus du nouveau minimum.

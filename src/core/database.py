@@ -123,6 +123,8 @@ MANUAL_REASON = "achat manuel"
 NOT_MANUAL = f"reason NOT LIKE '{MANUAL_REASON}%'"
 # Revente à 1 WB d'une position invendue POSITION_FIRE_SALE_AFTER fois (motif de la vente).
 FIRE_SALE_REASON = "liquidation"
+# Vente demandée sur Discord (/vendre) : publiée à la première place libre, avant les autres.
+MANUAL_SALE_REASON = "vente manuelle"
 # Vente observée suspecte : vendeur = acheteur, ou paire vendeur -> acheteur déjà vue (alias o).
 SUSPECT_SALE = ("(o.seller_id IS NOT NULL AND o.buyer_id IS NOT NULL AND (o.seller_id = o.buyer_id OR "
                 "(SELECT COUNT(*) FROM observed_sales p WHERE p.seller_id = o.seller_id "
@@ -508,7 +510,8 @@ class Database:
         return await self._all(
             "SELECT l.* FROM listings l LEFT JOIN bids b ON b.id = l.bid_id "
             "WHERE l.status IN ('scheduled', 'waiting') AND l.post_at <= ? "
-            f"ORDER BY l.reason LIKE '{FIRE_SALE_REASON}%' DESC, l.base_amount - COALESCE(b.amount, 0) DESC, "
+            f"ORDER BY l.reason LIKE '{FIRE_SALE_REASON}%' DESC, l.reason LIKE '{MANUAL_SALE_REASON}%' DESC, "
+            "l.base_amount - COALESCE(b.amount, 0) DESC, "
             "l.post_at", (iso(now),)
         )
 
@@ -567,6 +570,20 @@ class Database:
             await self.update_listing(r["id"], post_at=now,
                                       target_end=now + timedelta(minutes=r["duration_minutes"] or 0))
         return len(rows)
+
+    async def get_listing(self, listing_id: int) -> aiosqlite.Row | None:
+        return await self._one("SELECT * FROM listings WHERE id = ?", (listing_id,))
+
+    async def cancel_scheduled(self, bid_id: int) -> int:
+        """Annule les ventes pas encore publiées de cette position (/garder, bouton « Garder »)."""
+        cur = await self.db.execute("UPDATE listings SET status = 'cancelled', settled_at = ? WHERE bid_id = ? "
+                                    "AND status IN ('scheduled', 'waiting')", (iso(utcnow()), bid_id))
+        await self.db.commit()
+        return cur.rowcount
+
+    async def held_for_title(self, title: str) -> list[aiosqlite.Row]:
+        """Positions détenues de cette carte (titre exact, casse ignorée)."""
+        return await self._all(f"SELECT * FROM bids WHERE {HELD} AND lower(title) = lower(?)", (title,))
 
     async def update_listing(self, listing_id: int, **fields: Any) -> None:
         cols = ", ".join(f"{k} = ?" for k in fields)

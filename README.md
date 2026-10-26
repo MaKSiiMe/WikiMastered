@@ -98,7 +98,22 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | `/pause [quoi] [durée]` | Met en pause le sniper (par défaut), les ventes ou tout (sauf la garde), 1 h par défaut ou jusqu'à `/reprise`. Gardée après un redémarrage |
 | `/reprise [quoi]` | Reprend ce qui est en pause |
 
+| `/garder <carte> [rareté]` | Ne jamais vendre ni défausser cette carte ; arrête sa revente si le bot la revendait |
+| `/gardees`, `/liberer <carte>` | Voir les cartes gardées, en libérer une |
+| `/vendre <carte> <prix> [rareté]` | Vendre ton exemplaire le plus récent (hors favori, shiny, gardé) à ce prix, à la première place libre, avant les autres ventes. Confirmée par un bouton |
+| `/plafond-collection [wb]` | Voir ou changer la mise maximale d'une carte de collection manquante, sans redéployer |
+| `/carte <carte>` | Tes exemplaires, les ventes observées, ce que le bot en fait. Boutons : garder, vendre, demander au sniper |
+| `/opportunites` | Les ventes que le sniper surveille et son plafond pour chacune |
+
 Quand le site demande la vérification anti-bot, le bot t'envoie aussi un **message privé** avec un bouton « C'est fait ». Le message indique ensuite quand les mises repassent.
+
+Avec le bot Discord connecté :
+- les **alertes critiques** arrivent aussi en message privé ;
+- « Revente sans acheteur » arrive avec les boutons **Changer le prix**, **Brader à 1 WB** et **Garder** (tant que la remise en vente n'est pas publiée) ;
+- « Revente à 1 WB » arrive avec **Changer le prix** et **Garder** ;
+- « Position invendue » et « Vente sans acheteur » arrivent avec **Remettre en vente…**.
+
+Ces boutons marchent encore après un redémarrage du bot.
 
 Une carte demandée est cherchée par son titre, comme un jour manquant, passe en priorité dans la fenêtre de mise et ignore `SNIPER_MAX_BID`. Gagnée, elle n'est plus demandée. Avec les mises de collection simulées (`SIMULATE=collection`), la mise est simulée.
 

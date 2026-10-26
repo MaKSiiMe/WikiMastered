@@ -32,10 +32,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 
+from src import keeps
 from src.config import RARITY_RANK, Settings
 from src.core.api import COLLECTION_PAGE_SIZE
 from src.core.client import ApiError, RateLimited, UncertainMutation
-from src.core.database import FIRE_SALE_REASON
+from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
 from src.core.models import Auction, DiscardResult, MyBids, OwnedCard, parse_items
 from src.core.notifier import Topic
 from src.core.pricing import ANY, Quote
@@ -264,12 +265,34 @@ def discard_affects_count(s: Settings) -> bool:
 
 
 async def excluded_copies(ctx: Context, rows: list[OwnedCard]) -> set[str]:
-    """Exemplaires jamais vendus ni défaussés : engagés dans un échange, déjà en vente ou programmés, ou portant une
-    étiquette de PROTECTED_TAGS (casse ignorée)."""
+    """Exemplaires jamais vendus ni défaussés : engagés dans un échange, déjà en vente ou programmés, portant une
+    étiquette de PROTECTED_TAGS (casse ignorée), ou d'une carte gardée sur Discord (/garder)."""
     excluded = await ctx.api.protected_owned_ids({r.id for r in rows})
     excluded |= await ctx.db.scheduled_owned_ids()
+    excluded |= keeps.protected(rows, await keeps.load(ctx.db))
     protected = {t.casefold() for t in ctx.settings.protected_tags}
     return excluded | {r.id for r in rows if r.tag_names & protected}
+
+
+async def copies_of(ctx: Context, title: str) -> tuple[list[OwnedCard], set[str]]:
+    """Exemplaires possédés d'une carte (titre exact, casse ignorée ; commandes Discord /vendre et /carte), et ceux
+    à ne pas vendre (échange, déjà en vente, protégés, gardés). Un favori reste dans la liste : le site refuse de le
+    vendre, l'appelant le signale."""
+    rows: list[OwnedCard] = []
+    for number in range(COPY_SEARCH_PAGES):
+        page = await ctx.api.collection_page(number, sort="rarity", q=title)
+        rows += [r for r in page.rows() if r.title.casefold() == title.strip().casefold()]
+        if len(page.collection) < COLLECTION_PAGE_SIZE:
+            break
+    return rows, await excluded_copies(ctx, rows) if rows else set()
+
+
+async def stop_resale(ctx: Context, bid_id: int) -> int:
+    """Position gardée sur Discord : ses ventes pas encore publiées sont annulées, la position est close (carte
+    gardée). Renvoie le nombre de ventes annulées."""
+    cancelled = await ctx.db.cancel_scheduled(bid_id)
+    await ctx.db.close_position(bid_id, None)
+    return cancelled
 
 
 def parse_selling(mine: MyBids) -> list:
@@ -518,7 +541,9 @@ class InventoryManager(Worker):
         return soon.time(), (soon + timedelta(minutes=30)).time()
 
     async def _schedule(self, *, owned_id: str, card_id: str, title: str, rarity: str | None, price: int,
-                        reason: str, at_peak: bool = True, bid_id: int | None = None, relist_count: int = 0) -> bool:
+                        reason: str, at_peak: bool = True, bid_id: int | None = None,
+                        relist_count: int = 0) -> int | None:
+        """Programme une vente ; renvoie son identifiant (None : exemplaire déjà en vente)."""
         position = bid_id is not None
         post_at, minutes, target = self._plan(now_local(), position=position, at_peak=at_peak,
                                               position_minutes=await self.position_minutes() if position else None)
@@ -530,7 +555,7 @@ class InventoryManager(Worker):
         if listing_id:
             self.log.info("vente programmée : %s (%s) %d WB, publication %s, fin %s",
                           title, rarity, price, f"{post_at:%d/%m %H:%M}", f"{target:%d/%m %H:%M}")
-        return bool(listing_id)
+        return listing_id
 
     # ------------------------------------------------------- ventes de doublons
     async def schedule_sales(self, candidates: list[SaleCandidate], slots: int | None = None) -> int:
@@ -711,6 +736,21 @@ class InventoryManager(Worker):
             if len(page.collection) < COLLECTION_PAGE_SIZE:
                 break
         return mine(await self.api.collection_page(0, sort="added"))
+
+    # ------------------------------------------------ demandes Discord (/vendre, /garder)
+    async def sell_copy(self, copy: OwnedCard, price: int) -> int | None:
+        """Vente demandée sur Discord : publiée à la première place libre, avant les autres ventes, pour la durée
+        d'une revente (fin hors des heures évitées). Renvoie l'identifiant de la vente."""
+        wanted = await self.position_minutes()
+        minutes = min(self.settings.listing_duration_options or [wanted], key=lambda d: abs(d - wanted))
+        now = utcnow()
+        listing_id = await self.db.schedule_listing(
+            owned_card_id=copy.id, card_id=copy.catalog_id, title=copy.title, rarity=copy.rarity, base_amount=price,
+            duration_minutes=minutes, post_at=now, target_end=now + timedelta(minutes=minutes),
+            reason=f"{MANUAL_SALE_REASON} (Discord)")
+        if listing_id:
+            self.log.info("vente manuelle programmée : %s (%s) %d WB, %d min", copy.title, copy.rarity, price, minutes)
+        return listing_id
 
     # --------------------------------------------------------- publication
     async def post_due_listings(self) -> None:
@@ -922,8 +962,15 @@ class InventoryManager(Worker):
                     await self.db.close_position(bid["id"], price)
                     self.notifier.success("Revente réussie", f"{label} : achetée {bid['amount']}, vendue {price} WB "
                                           f"({price - bid['amount']:+d})", important=True)
+                elif str(row["reason"]).startswith(MANUAL_SALE_REASON):
+                    self.notifier.success("Vente réussie", f"{label} : vendue {price} WB (départ "
+                                          f"{row['base_amount']}).", important=True)
                 continue
             await self.db.update_listing(row["id"], status="unsold", settled_at=utcnow())
+            if not bid and str(row["reason"]).startswith(MANUAL_SALE_REASON):
+                self.notifier.info("Vente sans acheteur", f"{label} : invendue à {row['base_amount']} WB, la carte "
+                                   "revient dans ta collection.", important=True,
+                                   actions={"kind": "kept", "listing": row["id"]})
             await self._unsold(row, bid, label)
 
     async def _simulated_sale(self, row, bid) -> int | None:
@@ -960,24 +1007,27 @@ class InventoryManager(Worker):
             await self.db.close_position(bid["id"], None)
             if not bid["dry_run"] or self.settings.notify_simulated:
                 self.notifier.warning("Position invendue", f"{label} : invendue après {row['relist_count'] + 1} "
-                                      "essai(s), carte gardée : toutes les places de vente sont prises.")
+                                      "essai(s), carte gardée : toutes les places de vente sont prises.",
+                                      actions=None if bid["dry_run"] else {"kind": "kept", "listing": row["id"]})
             return
         self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
+        listing_id = await self._schedule(owned_id=await self._returned_copy(row, bid), card_id=row["card_id"],
+                                          title=row["title"], rarity=row["rarity"], price=price,
+                                          reason=position_reason(bid["amount"]), bid_id=bid["id"],
+                                          relist_count=row["relist_count"] + 1)
         if not bid["dry_run"]:
-            # Déjà au prix d'achat : message discret, la carte peut tourner plusieurs fois.
+            # Déjà au prix d'achat : message discret, la carte peut tourner plusieurs fois. Boutons (bot Discord) :
+            # changer le prix, brader, garder.
             self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
-                               f"(achetée {bid['amount']}).", important=row["base_amount"] > floor)
-        await self._schedule(owned_id=await self._returned_copy(row, bid), card_id=row["card_id"],
-                             title=row["title"], rarity=row["rarity"], price=price,
-                             reason=position_reason(bid["amount"]), bid_id=bid["id"],
-                             relist_count=row["relist_count"] + 1)
+                               f"(achetée {bid['amount']}).", important=row["base_amount"] > floor,
+                               actions={"kind": "relist", "listing": listing_id} if listing_id else None)
 
     async def _fire_sale(self, owned_id: str, bid, unsold: int) -> None:
         """Invendue `unsold` fois : revente à 1 WB, fin à 00-03 h ou 06-09 h (POSITION_FIRE_SALE_*). Publiée avant
         toute autre vente quand vient son heure."""
         s = self.settings
         post_at, minutes, end = plan_fire_sale(now_local(), s.listing_duration_options, s.position_fire_sale_minutes)
-        await self.db.schedule_listing(
+        listing_id = await self.db.schedule_listing(
             owned_card_id=owned_id, card_id=bid["card_id"], title=bid["title"], rarity=bid["rarity"], base_amount=1,
             duration_minutes=minutes, post_at=post_at, target_end=end,
             reason=f"{FIRE_SALE_REASON} (achetée {bid['amount']})", bid_id=bid["id"], relist_count=unsold)
@@ -987,7 +1037,8 @@ class InventoryManager(Worker):
         if not bid["dry_run"]:
             self.notifier.info("Revente à 1 WB", f"{label} : invendue {unsold} fois, remise en vente à 1 WB le "
                                f"{post_at:%d/%m à %H:%M} pour {minutes // 60} h, fin le {end:%d/%m à %H:%M} "
-                               f"(achetée {bid['amount']}).", important=True)
+                               f"(achetée {bid['amount']}).", important=True,
+                               actions={"kind": "fire_sale", "listing": listing_id} if listing_id else None)
 
     async def _returned_copy(self, row, bid) -> str:
         """Exemplaire d'une revente invendue : le site le rend sous un nouvel identifiant (les 25-26/10, chaque remise

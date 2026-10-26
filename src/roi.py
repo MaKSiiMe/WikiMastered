@@ -88,6 +88,15 @@ def roi_text(r: Roi) -> str:
     return "\n".join(summary) + "\n\n" + "\n".join(lines)
 
 
+BAR_WIDTH = 8
+
+
+def bar(value: float, top: float) -> str:
+    """Barre de `value` rapportée au plus grand écart de la période (graphique sans image)."""
+    full = round(BAR_WIDTH * abs(value) / top) if top else 0
+    return "█" * full + "·" * (BAR_WIDTH - full)
+
+
 def roi_discord(r: Roi) -> tuple[str, list[str]]:
     """Version Discord : un résumé court en tête, puis une ligne par jour, lisibles sur un téléphone."""
     t = r.totals
@@ -99,12 +108,14 @@ def roi_discord(r: Roi) -> tuple[str, list[str]]:
     if r.held[0]:
         head.append(f"📦 En cours : {r.held[0]} position(s), {wb(r.held[1])} WB immobilisés")
     days = []
+    top = max((abs(d.profit) for d in r.days), default=0)
     for d in reversed(r.days):  # le plus récent en haut
         if not d.sold and not d.kept:
-            days.append(f"`{d.day:%d/%m}` aucune revente")
+            days.append(f"`{d.day:%d/%m} {bar(0, top)}` aucune revente")
             continue
         mark = "🟢" if d.profit > 0 else "🔴" if d.profit < 0 else "⚪"
-        line = f"`{d.day:%d/%m}` {mark} **{wb(d.profit, True)} WB** · {pct(d.roi)} · {d.sold} vente(s)"
+        line = f"`{d.day:%d/%m} {bar(d.profit, top)}` {mark} **{wb(d.profit, True)} WB** · {pct(d.roi)} · " \
+               f"{d.sold} vente(s)"
         if d.kept:
             line += f" · {d.kept} gardée(s)"
         days.append(line)
