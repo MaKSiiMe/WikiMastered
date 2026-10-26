@@ -62,3 +62,34 @@ async def test_account_value_adds_balance_cards_sales_and_leading_bids(tmp_path)
     assert "3 002 WB" in embed.description and "+1 002 WB depuis le 01/01" in embed.description
     assert await account.collection_snapshot(ctx) == snapshot  # récente : pas relue
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_value_worker_reads_the_collection_only_when_nobody_did(tmp_path):
+    from src.workers.account_value import AccountValue
+
+    pages = []
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 50})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": []})
+        if request.url.path == "/api/my-collection":
+            pages.append(request.url.params["page"])
+            return httpx.Response(200, json={"collection": []})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    await account.store_collection(ctx, [])  # lecture récente d'un autre worker
+    worker = AccountValue(ctx)
+    delay = await worker.step()
+    assert not pages and delay > 5 * 3600  # rien relu, prochain passage dans ~6 h
+    snapshot = await ctx.db.kv_get(account.KV_KEY)
+    snapshot["at"] = (datetime.now(UTC) - timedelta(hours=7)).isoformat()
+    await ctx.db.kv_set(account.KV_KEY, snapshot)
+    await worker.step()
+    assert pages == ["0"]
+    assert list((await ctx.db.kv_get(account.HISTORY_KEY)).values()) == [50]  # valeur du jour notée
+    await ctx.db.close()
