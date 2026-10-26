@@ -297,7 +297,8 @@ async def test_listings_respect_concurrent_limit(tmp_path):
             return httpx.Response(200, json={"id": "new"})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    # SELL_ANYTIME=false : un doublon vise le soir ; sans place, il est reporté au lendemain.
+    client, notifier = make_client(tmp_path, handler, dry_run=False, sell_anytime=False)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)

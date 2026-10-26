@@ -121,6 +121,8 @@ HELD = "status IN ('won', 'sim_won') AND closed = 0"
 # hors des chiffres du sniper (mises, gagnées, dépenses du jour).
 MANUAL_REASON = "achat manuel"
 NOT_MANUAL = f"reason NOT LIKE '{MANUAL_REASON}%'"
+# Revente à 1 WB d'une position invendue POSITION_FIRE_SALE_AFTER fois (motif de la vente).
+FIRE_SALE_REASON = "liquidation"
 # Vente observée suspecte : vendeur = acheteur, ou paire vendeur -> acheteur déjà vue (alias o).
 SUSPECT_SALE = ("(o.seller_id IS NOT NULL AND o.buyer_id IS NOT NULL AND (o.seller_id = o.buyer_id OR "
                 "(SELECT COUNT(*) FROM observed_sales p WHERE p.seller_id = o.seller_id "
@@ -474,10 +476,15 @@ class Database:
         )
 
     async def due_listings(self, now: datetime) -> list[aiosqlite.Row]:
-        # Les positions (cartes achetées pour revente) passent avant les doublons.
+        """Ventes à publier, la plus rentable d'abord : une place libérée va à la revente à 1 WB (heure de fin choisie),
+        puis au plus grand gain au prix demandé (prix de départ − prix d'achat ; tout le prix pour un doublon ou une
+        carte de paquet), puis à la plus ancienne. Le 26/10, les 5 places prises par les reventes du sniper,
+        Gabby Williams (L d'un paquet, 1407 WB) attendait depuis 2 jours derrière des reventes au prix d'achat."""
         return await self._all(
-            "SELECT * FROM listings WHERE status IN ('scheduled', 'waiting') AND post_at <= ? "
-            "ORDER BY bid_id IS NULL, post_at", (iso(now),)
+            "SELECT l.* FROM listings l LEFT JOIN bids b ON b.id = l.bid_id "
+            "WHERE l.status IN ('scheduled', 'waiting') AND l.post_at <= ? "
+            f"ORDER BY l.reason LIKE '{FIRE_SALE_REASON}%' DESC, l.base_amount - COALESCE(b.amount, 0) DESC, "
+            "l.post_at", (iso(now),)
         )
 
     async def listings_to_settle(self, before: datetime) -> list[aiosqlite.Row]:
@@ -494,8 +501,8 @@ class Database:
 
     async def last_failed_relist(self, bid_id: int) -> aiosqlite.Row | None:
         """Dernière remise en vente (après une vente sans acheteur) de cette position, si elle a échoué."""
-        row = await self._one("SELECT status, base_amount, relist_count FROM listings WHERE bid_id = ? "
-                              "ORDER BY id DESC LIMIT 1", (bid_id,))
+        row = await self._one("SELECT status, base_amount, relist_count, reason, duration_minutes FROM listings "
+                              "WHERE bid_id = ? ORDER BY id DESC LIMIT 1", (bid_id,))
         return row if row and row["status"] == "failed" and row["relist_count"] else None
 
     async def failed_listings_count(self, bid_id: int) -> int:
@@ -545,6 +552,11 @@ class Database:
         """Ventes programmées, qui réservent une place de vente (pas celles en attente d'un meilleur marché)."""
         extra = " AND owned_card_id NOT LIKE 'sim-%'" if real_only else ""
         row = await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE status = 'scheduled'{extra}")
+        return int(row["n"]) if row else 0
+
+    async def waiting_duplicates_count(self) -> int:
+        """Doublons programmés, pas encore publiés (ils attendent une place de vente)."""
+        row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE bid_id IS NULL AND status = 'scheduled'")
         return int(row["n"]) if row else 0
 
     async def scheduled_owned_ids(self) -> set[str]:

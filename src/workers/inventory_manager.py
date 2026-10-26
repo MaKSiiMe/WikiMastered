@@ -6,10 +6,12 @@
   les doublons). C'est une enchère : le prix de départ est le prix d'achat + la moitié du bénéfice
   attendu (POSITION_LIST_PROFIT_SHARE), au moins + POSITION_LIST_MARGIN ; les joueurs le font monter.
   Invendue, elle repart à −10 % (POSITION_MAX_RELISTS fois), puis au prix d'achat tant qu'une place de vente
-  est libre ; jamais sous le prix d'achat.
+  est libre ; jamais sous le prix d'achat. Invendue POSITION_FIRE_SALE_AFTER fois : à 1 WB, fin à 00-03 h ou 06-09 h.
+- Places de vente : une place libérée va à la vente qui rapporte le plus (Database.due_listings), revente ou doublon.
   Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
-- Tes achats (MANUAL_RESALE_TAG) : un exemplaire portant cette étiquette devient une position, revendue comme celles
-  du sniper, au prix payé (ta vente observée de la carte, relue sur le site).
+- Tes cartes (MANUAL_RESALE_TAG) : un exemplaire portant cette étiquette devient une position, revendue comme celles
+  du sniper, au prix payé (ta vente observée de la carte, relue sur le site) ; sans achat trouvé (carte d'un
+  paquet), à partir de sa cote.
 - Défausse : doublons sans valeur, seulement si aucun palier de succès de taille de
   collection n'est proche (ACHIEVEMENT_MILESTONES), par lots de 50 [WR discard.js]. Les raretés de
   DISCARD_LAST_COPY_RARITIES partent même en dernier exemplaire, si le passage de cotes (module I) a coté la carte sans
@@ -33,6 +35,7 @@ from datetime import UTC, datetime, time, timedelta
 from src.config import RARITY_RANK, Settings
 from src.core.api import COLLECTION_PAGE_SIZE
 from src.core.client import ApiError, RateLimited, UncertainMutation
+from src.core.database import FIRE_SALE_REASON
 from src.core.models import Auction, DiscardResult, MyBids, OwnedCard, parse_items
 from src.core.notifier import Topic
 from src.core.pricing import ANY, Quote
@@ -67,6 +70,8 @@ MANUAL_BOUGHT_BEFORE = timedelta(days=2)
 MANUAL_BOUGHT_AFTER = timedelta(minutes=30)
 # Exemplaire arrivé depuis moins de N : sa vente n'est peut-être pas encore notée (HARVEST_DELAY du sniper), il attend.
 MANUAL_SETTLE = timedelta(minutes=10)
+# Revente à 1 WB : fin dans une de ces fenêtres (Paris), où les L parties de ≤ 10 WB se vendent le mieux.
+FIRE_SALE_ENDS = ((time(0, 0), time(3, 0)), (time(6, 0), time(9, 0)))
 
 
 # ---------------------------------------------------------------- logique pure
@@ -307,6 +312,22 @@ def plan_listing_time(now: datetime, start: time, end: time, durations: list[int
     raise ValueError("aucune durée de vente ne permet de finir dans la fenêtre demandée")
 
 
+def plan_fire_sale(now: datetime, durations: list[int], preferred: int,
+                   rng: random.Random | None = None) -> tuple[datetime, int, datetime]:
+    """(publication, durée, fin) d'une revente à 1 WB : fin dans une fenêtre de FIRE_SALE_ENDS, publiée au plus tôt,
+    durée la plus proche de `preferred`."""
+    plans = [plan_listing_time(now, start, end, durations, 10, rng, preferred) for start, end in FIRE_SALE_ENDS]
+    return min(plans, key=lambda p: (p[0], abs(p[1] - preferred)))
+
+
+def position_reason(cost: int) -> str:
+    return f"position (achetée {cost})" if cost else "position (paquet)"
+
+
+def is_fire_sale(row) -> bool:
+    return (row["reason"] or "").startswith(FIRE_SALE_REASON)
+
+
 # ---------------------------------------------------------------------- worker
 class InventoryManager(Worker):
     name = "inventory"
@@ -354,19 +375,24 @@ class InventoryManager(Worker):
         return 30.0
 
     async def fill_free_slots(self) -> int:
-        """Remplit les places de vente libres avec les doublons les mieux cotés."""
+        """Garde les doublons les mieux cotés dans la file des ventes (SELL_MAX_LISTINGS_PER_RUN en attente au plus),
+        même quand toutes les places sont prises : une place libérée va à la vente qui rapporte le plus, revente ou
+        doublon (Database.due_listings). Avant le 26/10, un doublon n'entrait dans la file qu'une fois toutes les
+        reventes servies, et les L tirées des paquets attendaient des jours."""
         s = self.settings
-        free = min(s.sell_max_listings_per_run, await self.free_slots())
-        if free <= 0:
+        room = s.sell_max_listings_per_run - await self.db.waiting_duplicates_count()
+        if room <= 0:
             return 0
         stale = self._queue_at is None or utcnow() - self._queue_at > timedelta(minutes=s.inventory_interval_minutes)
         if not self._sale_queue and stale:
             groups, excluded, quotes, _ = await self.snapshot()
-            self._sale_queue = select_for_sale(groups, quotes, excluded, s, await self.db.bought_card_ids())
-            self._queue_at = utcnow()
-            self.log.info("%d doublon(s) à vendre (cote ≥ %d WB)", len(self._sale_queue), s.sell_min_value)
-        batch, self._sale_queue = self._sale_queue[:free], self._sale_queue[free:]
-        return await self.schedule_sales(batch, slots=free)
+            self._refresh_sale_queue(select_for_sale(groups, quotes, excluded, s, await self.db.bought_card_ids()))
+        batch, self._sale_queue = self._sale_queue[:room], self._sale_queue[room:]
+        return await self.schedule_sales(batch, slots=room)
+
+    def _refresh_sale_queue(self, candidates: list[SaleCandidate]) -> None:
+        self._sale_queue, self._queue_at = candidates, utcnow()
+        self.log.info("%d doublon(s) à vendre (cote ≥ %d WB)", len(candidates), self.settings.sell_min_value)
 
     # ------------------------------------------------------------ analyse
     async def snapshot(self, lookups: int | None = None
@@ -408,6 +434,9 @@ class InventoryManager(Worker):
         report: dict = {}
         if self.settings.manual_resale_tag.strip():
             report["manual"] = await self.adopt_manual([c for copies in groups.values() for c in copies])
+        if self.settings.auto_list and not list_cards:  # la file des doublons reprend cette lecture de la collection
+            self._refresh_sale_queue(select_for_sale(groups, quotes, excluded, self.settings,
+                                                     await self.db.bought_card_ids()))
         if list_cards:
             report["listed"] = await self.schedule_sales(select_for_sale(groups, quotes, excluded, self.settings,
                                                                          await self.db.bought_card_ids()))
@@ -532,14 +561,19 @@ class InventoryManager(Worker):
                                           "ta collection depuis ~2 h (vendue ou échangée à la main ?). Position close.")
                 continue
             self._copy_retry.pop(row["id"], None)
+            # Carte d'un paquet (prix d'achat 0) : départ à sa cote, comme un doublon.
             price = list_price(row["amount"], s.position_list_margin, s.sale_fee_pct,
-                               estimate=row["reference_price"], share=s.position_list_profit_share)
+                               estimate=row["reference_price"],
+                               share=s.position_list_profit_share if row["amount"] else 1.0)
             # Remise en vente refusée : reprise à son prix réduit (le 18/10, Liste des éclipses solaires remise à
-            # 936 repartait à 1040, son prix de départ).
+            # 936 repartait à 1040, son prix de départ) ; une revente à 1 WB le reste.
             relist = await self.db.last_failed_relist(row["id"])
+            if relist and is_fire_sale(relist):
+                await self._fire_sale(owned_id, row, relist["relist_count"])
+                continue
             await self._schedule(owned_id=owned_id, card_id=row["card_id"], title=row["title"], rarity=row["rarity"],
                                  price=relist["base_amount"] if relist else price,
-                                 reason=f"position (achetée {row['amount']})", bid_id=row["id"],
+                                 reason=position_reason(row["amount"]), bid_id=row["id"],
                                  relist_count=relist["relist_count"] if relist else 0)
 
     # ------------------------------------------------------------ tes achats
@@ -553,10 +587,11 @@ class InventoryManager(Worker):
         return rows
 
     async def adopt_manual(self, rows: list[OwnedCard]) -> int:
-        """Tes achats étiquetés MANUAL_RESALE_TAG deviennent des positions, au prix payé : ta dernière vente observée
-        de la carte (même rareté, shiny ou non) finie avant l'arrivée de l'exemplaire, relue sur le site. Un exemplaire
-        n'est repris qu'une fois, jamais quand une position de la même carte attend déjà. Achat introuvable : prévenu
-        une fois, la carte n'est pas vendue. Renvoie le nombre d'achats repris."""
+        """Tes cartes étiquetées MANUAL_RESALE_TAG deviennent des positions, au prix payé : ta dernière vente observée
+        de la carte (même rareté, shiny ou non) finie avant l'arrivée de l'exemplaire, relue sur le site. Sans achat
+        trouvé (carte d'un paquet) : prix d'achat 0, mise en vente à sa cote. Un exemplaire n'est repris qu'une fois,
+        jamais quand une position de la même carte attend déjà ni quand il est déjà en vente. Sans cote : prévenu une
+        fois, la carte n'est pas vendue. Renvoie le nombre de cartes reprises."""
         s = self.settings
         tag, me = s.manual_resale_tag.strip().casefold(), (self.api.user_id or "").lower()
         tagged = [c for c in rows if tag in c.tag_names]
@@ -565,8 +600,9 @@ class InventoryManager(Worker):
         state = await self.db.kv_get(MANUAL_KV) or {}
         adopted_ids, missing_ids = set(state.get("adopted", [])), set(state.get("missing", []))
         adopted = 0
+        taken = await self.db.scheduled_owned_ids()
         for c in tagged:
-            if c.id in adopted_ids or (c.obtained_at and utcnow() - c.obtained_at < MANUAL_SETTLE) \
+            if c.id in adopted_ids or c.id in taken or (c.obtained_at and utcnow() - c.obtained_at < MANUAL_SETTLE) \
                     or await self.db.holds_position(c.catalog_id, c.rarity, c.is_shiny):
                 continue
             label = f"{c.title} ({c.rarity}{' ✨' if c.is_shiny else ''})"
@@ -574,31 +610,34 @@ class InventoryManager(Worker):
             buy = await self.db.my_purchase(c.catalog_id, c.rarity, c.is_shiny, me, arrived - MANUAL_BOUGHT_BEFORE,
                                             arrived + MANUAL_BOUGHT_AFTER)
             price = await self._paid(buy, me) if buy else None
-            if price is None:
-                if c.id not in missing_ids:
-                    missing_ids.add(c.id)
-                    self.notifier.warning(
-                        "Achat à revendre : prix introuvable",
-                        f"{label} porte l'étiquette « {s.manual_resale_tag} », mais je ne trouve pas ton achat dans "
-                        "les ventes que le bot a suivies (achat de plus de 2 jours avant l'arrivée, carte d'un paquet, "
-                        "vente pas vue). Je ne la vends pas : mets-la en vente toi-même.")
-                continue
             quote = None
             try:
                 quote = (await self.ctx.prices.quote(c.catalog_id, c.rarity, shiny=c.is_shiny, wait=False)).average
             except (RateLimited, ApiError) as exc:
                 self.log.debug("%s : cote indisponible (%s)", c.title, exc)
+            if price is None and not quote:
+                if c.id not in missing_ids:
+                    missing_ids.add(c.id)
+                    self.notifier.warning(
+                        "Carte à revendre : ni achat ni cote",
+                        f"{label} porte l'étiquette « {s.manual_resale_tag} », mais je ne trouve ni ton achat dans les "
+                        "ventes suivies ni assez de ventes pour la coter. Je ne la vends pas pour l'instant ; je "
+                        "réessaie à chaque passage.")
+                continue
             await self.db.record_manual_position(
-                auction_id=buy["auction_id"], card_id=c.catalog_id, title=c.title, rarity=c.rarity,
-                is_shiny=c.is_shiny, amount=price, reference_price=quote,
-                bought_at=datetime.fromisoformat(buy["ended_at"]))
+                auction_id=buy["auction_id"] if price is not None else f"paquet-{c.id}", card_id=c.catalog_id,
+                title=c.title, rarity=c.rarity, is_shiny=c.is_shiny, amount=price or 0, reference_price=quote,
+                bought_at=datetime.fromisoformat(buy["ended_at"]) if price is not None else arrived)
             adopted_ids.add(c.id)
             missing_ids.discard(c.id)
             adopted += 1
             target = f", revente visée ~{quote:.0f} WB" if quote else ""
-            self.notifier.success("Achat à revendre pris en charge",
-                                  f"{label} : achetée {price} WB{target}. Le bot la revend comme ses positions "
-                                  "(départ au-dessus du prix d'achat, remises à -10 %, plancher).", important=True)
+            origin = f"achetée {price} WB" if price is not None else "aucun achat trouvé (carte d'un paquet ?)"
+            start = "au-dessus du prix d'achat" if price is not None else "à sa cote"
+            self.notifier.success("Carte à revendre prise en charge",
+                                  f"{label} : {origin}{target}. Le bot la revend comme ses positions (départ {start}, "
+                                  f"remises à -10 %, puis à 1 WB après {s.position_fire_sale_after} invendus).",
+                                  important=True)
         await self.db.kv_set(MANUAL_KV, {"adopted": sorted(adopted_ids), "missing": sorted(missing_ids)})
         return adopted
 
@@ -674,7 +713,7 @@ class InventoryManager(Worker):
                     continue
                 selling += 1
             price = row["base_amount"]
-            if row["bid_id"] and not simulated:
+            if row["bid_id"] and not simulated and not is_fire_sale(row):
                 price = await self._undercut(row)
                 if price != row["base_amount"]:
                     await self.db.update_listing(row["id"], base_amount=price)
@@ -810,11 +849,12 @@ class InventoryManager(Worker):
                 self.notifier.info("Mise en vente vérifiée", f"{label} : pas créée.{again}")
 
     async def _postpone(self, row) -> None:
-        """Plus de place de vente. Revente d'une position publiée tout de suite (POSITION_POST_NOW) : nouvel essai
-        dans SELL_CHECK_MINUTES, dès qu'une place se libère (le 16/10, Place publique était reportée de 24 h).
-        Sinon : même horaire, le jour suivant."""
+        """Plus de place de vente. Revente d'une position publiée tout de suite (POSITION_POST_NOW), revente à 1 WB ou
+        doublon vendu à toute heure (SELL_ANYTIME) : nouvel essai dans SELL_CHECK_MINUTES, dès qu'une place se libère
+        (le 16/10, Place publique était reportée de 24 h). Sinon : même horaire, le jour suivant."""
         s = self.settings
-        if row["bid_id"] is not None and s.position_post_now:
+        if (row["bid_id"] is not None and s.position_post_now) or is_fire_sale(row) \
+                or (row["bid_id"] is None and s.sell_anytime):
             retry = utcnow() + timedelta(minutes=s.sell_check_minutes)
             await self.db.update_listing(row["id"], post_at=retry,
                                          target_end=retry + timedelta(minutes=row["duration_minutes"] or 0))
@@ -886,6 +926,10 @@ class InventoryManager(Worker):
         216) et Les Feux de l'amour, gardées après 3 essais, se sont vendues à la main (250 et 330)."""
         if not bid:
             return
+        unsold = row["relist_count"] + 1
+        if 0 < self.settings.position_fire_sale_after <= unsold:
+            await self._fire_sale(await self._returned_copy(row, bid), bid, unsold)
+            return
         # Plancher de la prochaine mise en vente : le prix d'achat, puis un peu dessous après POSITION_LOSS_AFTER
         # invendus (une carte qui ne part pas bloque une place de vente et son capital).
         floor = position_floor(bid["amount"], row["relist_count"] + 1, self.settings)
@@ -906,8 +950,25 @@ class InventoryManager(Worker):
                                f"(achetée {bid['amount']}).", important=row["base_amount"] > floor)
         await self._schedule(owned_id=await self._returned_copy(row, bid), card_id=row["card_id"],
                              title=row["title"], rarity=row["rarity"], price=price,
-                             reason=f"position (achetée {bid['amount']})", bid_id=bid["id"],
+                             reason=position_reason(bid["amount"]), bid_id=bid["id"],
                              relist_count=row["relist_count"] + 1)
+
+    async def _fire_sale(self, owned_id: str, bid, unsold: int) -> None:
+        """Invendue `unsold` fois : revente à 1 WB, fin à 00-03 h ou 06-09 h (POSITION_FIRE_SALE_*). Publiée avant
+        toute autre vente quand vient son heure."""
+        s = self.settings
+        post_at, minutes, end = plan_fire_sale(now_local(), s.listing_duration_options, s.position_fire_sale_minutes)
+        await self.db.schedule_listing(
+            owned_card_id=owned_id, card_id=bid["card_id"], title=bid["title"], rarity=bid["rarity"], base_amount=1,
+            duration_minutes=minutes, post_at=post_at, target_end=end,
+            reason=f"{FIRE_SALE_REASON} (achetée {bid['amount']})", bid_id=bid["id"], relist_count=unsold)
+        label = f"{bid['title']} ({bid['rarity']}{' ✨' if bid['is_shiny'] else ''})"
+        self.log.info("%s invendue %d fois : revente à 1 WB, publication %s, fin %s", label, unsold,
+                      f"{post_at:%d/%m %H:%M}", f"{end:%d/%m %H:%M}")
+        if not bid["dry_run"]:
+            self.notifier.info("Revente à 1 WB", f"{label} : invendue {unsold} fois, remise en vente à 1 WB le "
+                               f"{post_at:%d/%m à %H:%M} pour {minutes // 60} h, fin le {end:%d/%m à %H:%M} "
+                               f"(achetée {bid['amount']}).", important=True)
 
     async def _returned_copy(self, row, bid) -> str:
         """Exemplaire d'une revente invendue : le site le rend sous un nouvel identifiant (les 25-26/10, chaque remise
