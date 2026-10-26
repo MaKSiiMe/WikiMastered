@@ -439,11 +439,14 @@ async def run_bot(settings: Settings) -> None:
             jobs.append(("recap", lambda: recap_loop(ctx, workers, started_at)))
         if settings.enable_sniper and settings.sniper_report_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
-        if settings.discord_bot_token and not settings.discord_owner_id:
-            ctx.notifier.warning("Commandes Discord inactives", "DISCORD_BOT_TOKEN est renseigné mais pas "
-                                 "DISCORD_OWNER_ID (ton identifiant utilisateur Discord) : personne ne pourrait "
-                                 "s'en servir.")
+        if settings.discord_bot_token and settings.discord_owner_id <= 0:
+            ctx.notifier.warning("Commandes Discord inactives", "DISCORD_OWNER_ID manquant ou pas un nombre : il faut "
+                                 "ton identifiant utilisateur (Mode développeur, clic droit sur ton pseudo > Copier "
+                                 "l'identifiant utilisateur), pas ton pseudo.")
         elif settings.discord_bot_token:
+            if settings.discord_guild_id < 0:
+                ctx.notifier.warning("DISCORD_GUILD_ID ignoré", "Pas un nombre (clic droit sur le serveur > Copier "
+                                     "l'identifiant du serveur) : commandes globales, jusqu'à 1 h pour apparaître.")
             from src.discord_bot import run_discord  # discord.py chargé seulement avec un bot configuré
 
             sniper = next((w for w in workers if isinstance(w, AuctionSniper)), None)

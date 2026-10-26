@@ -152,7 +152,7 @@ def build_client(ctx: Context, sniper: AuctionSniper | None, cli: ModuleType) ->
     intents.guilds = True
     client = discord.Client(intents=intents)
     tree = client.tree = OwnerTree(client, s.discord_owner_id)  # type: ignore[attr-defined]
-    guild = discord.Object(id=s.discord_guild_id) if s.discord_guild_id else None
+    guild = discord.Object(id=s.discord_guild_id) if s.discord_guild_id > 0 else None
 
     async def setup_hook() -> None:
         if guild:
