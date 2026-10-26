@@ -276,6 +276,9 @@ class Settings(BaseSettings):
     # Toutes les N heures, toute la collection est cotée, derniers exemplaires compris (la vente automatique ne cote
     # que des doublons) : la défausse de DISCARD_LAST_COPY_RARITIES s'en sert. Aucun message.
     enable_value_scan: bool = True
+    # Valeur du compte (/valeur) : collection relue toutes les N heures au plus, si aucun autre worker ne l'a fait.
+    enable_account_value: bool = True
+    account_value_hours: float = 6.0
     value_scan_hours: float = 12.0
     # Cotes demandées au site par passage (0 = toutes), au plus une toutes les N s, et seulement quand aucune autre
     # requête n'attend. La route des cotes est limitée (18/10 : refusée 3 fois en 4 min au seul sniper) : refusée,

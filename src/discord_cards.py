@@ -437,8 +437,10 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         if sniper is None:
             await interaction.response.send_message("Sniper désactivé.")
             return
-        watched = sniper.watched()
         now = utcnow()
+        # Mise minimale déjà au-dessus du plafond : le sniper ne misera pas (sauf si sa cote remonte), à part.
+        everything = sniper.watched()
+        watched = [w for w in everything if w[1] is None or w[0].min_bid <= w[1]]
         lines = []
         for a, ceiling, why in watched[:OPPORTUNITIES_SHOWN]:
             cap = f"plafond {wb(ceiling)}" if ceiling is not None else "plafond à la cote"
@@ -446,9 +448,11 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             lines.append(f"{mark} **{a.rarity or '?'}** {a.title[:50]} · mise min {wb(a.min_bid)} · {cap} · "
                          f"fin dans {ago(a.end_at - now)}")
         more = f"\n… et {len(watched) - OPPORTUNITIES_SHOWN} autre(s)" if len(watched) > OPPORTUNITIES_SHOWN else ""
+        if too_high := len(everything) - len(watched):
+            more += f"\n{too_high} autre(s) suivie(s), déjà au-dessus du plafond"
         legend = "\n\n👀 revente · 🔁 déjà misée · 📅 collection · 🎯 demandée" if lines else ""
         await interaction.response.send_message(embed=discord.Embed(
-            title=f"Ventes suivies ({len(watched)})", color=COLOR,
+            title=f"Ventes jouables ({len(watched)})", color=COLOR,
             description=("\n".join(lines) or "Aucune vente suivie pour l'instant.") + more + legend))
 
     # ------------------------------------------------------------ boutons des messages de vente

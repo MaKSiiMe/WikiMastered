@@ -14,7 +14,8 @@ Bot Docker pour [WikiMasters](https://www.wiki-masters.com) : il achète des car
 | [Inventaire](src/workers/inventory_manager.py) | Revend les achats et les doublons, défausse les cartes sans valeur | 💰 |
 | [Collection](src/workers/collection.py) | Complète des collections de cartes : jours de l'année, éléments, pays… | 📅 |
 | [Succès](src/workers/achievements.py) | Réclame les récompenses, chaque soir à 22:50 | 🏆 |
-| [Cotes](src/workers/value_scan.py) | Cote toute la collection toutes les 12 h | 💰 |
+| [Cotes](src/workers/value_scan.py) | Cote toute la collection toutes les 12 h, pour la défausse des derniers exemplaires | 💰 |
+| [Valeur](src/workers/account_value.py) | Compte la valeur du compte (`/valeur`) toutes les 6 h, sans dépendre de la défausse | — |
 
 Le détail des règles (estimation des prix, mises, remises en vente, défausse…) est dans [docs/FONCTIONNEMENT.md](docs/FONCTIONNEMENT.md).
 

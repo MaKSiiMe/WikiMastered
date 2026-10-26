@@ -50,6 +50,7 @@ from src.sniper_backtest import cases_from
 from src.sniper_backtest import render as backtest_text
 from src.sniper_report import breakdown, sniper_report
 from src.tools.inspect_api import inspect
+from src.workers.account_value import AccountValue
 from src.workers.achievements import AchievementsWorker
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
@@ -425,6 +426,8 @@ async def run_bot(settings: Settings) -> None:
             workers.append(AchievementsWorker(ctx))
         if settings.enable_value_scan:
             workers.append(ValueScan(ctx))
+        if settings.enable_account_value:
+            workers.append(AccountValue(ctx))
         if settings.enable_profile_guard and settings.supabase_anon_key:
             workers.insert(0, ProfileGuard(ctx))  # en premier : une sanction arrête le bot avant les autres
         elif settings.enable_profile_guard:

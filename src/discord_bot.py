@@ -499,7 +499,14 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @app_commands.autocomplete(titre=title_choices)
     async def prix(interaction: discord.Interaction, titre: str) -> None:
         await interaction.response.defer(thinking=True)
-        await reply(interaction, titre[:250], await cli.prices_status(ctx, titre))
+        known = await ctx.db.known_titles(titre, limit=10)
+        exact = next((t for t in known if t.casefold() == titre.strip().casefold()), None)
+        if exact is None and known:  # « hitler » : les titres exacts qui le contiennent
+            await reply(interaction, "Quelle carte ?", f"Pas de carte « {titre} » exactement. Titres vus sur le "
+                        "marché :\n" + "\n".join(f"• {t}" for t in known) + "\n\nRelance /prix en choisissant "
+                        "dans la liste qui s'affiche pendant la frappe.", code=False)
+            return
+        await reply(interaction, (exact or titre)[:250], await cli.prices_status(ctx, exact or titre))
 
     @tree.command(name="collection", description="Avancement des collections et cartes manquantes")
     async def collection(interaction: discord.Interaction) -> None:
@@ -508,14 +515,15 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         lines = progress_lines(state, by_key, utcnow(), days=7)
         if state:
             missing = [by_key.get(k, k) for k in state["missing"]]
-            lines.append(f"\nManquantes ({len(missing)}) : " + (", ".join(missing) or "aucune"))
-        await reply(interaction, "Collection", "\n".join(lines))
+            lines.append(f"\n**Manquantes ({len(missing)})** : " + (", ".join(missing) or "aucune"))
+            lines.append(f"Mise max. par carte manquante : {s.collection_max_price} WB (/plafond-collection)")
+        await reply(interaction, "Collection", "\n".join(lines), code=False)
 
     @tree.command(name="sniper", description="Récap des enchères misées par le sniper")
     @app_commands.describe(heures="période, en heures (24 par défaut)")
     async def sniper_report(interaction: discord.Interaction, heures: app_commands.Range[float, 1, 168] = 24) -> None:
-        text = await cli.sniper_report_status(ctx, heures, True)
-        await reply(interaction, f"Sniper, {heures:g} dernières heures", text)
+        text = await cli.sniper_report_status(ctx, heures, True)  # en gras (**…**) : pas de bloc de code
+        await reply(interaction, f"Sniper, {heures:g} dernières heures", text, code=False)
 
     # ------------------------------------------------------------ actions
     @tree.command(name="snipe", description="Demander une carte au sniper : il la mise jusqu'à ta mise maximale")

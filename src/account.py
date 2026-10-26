@@ -1,8 +1,9 @@
 """Valeur du compte en WB (/valeur sur Discord) : solde + cartes possédées + cartes en vente + mises en tête.
 
 Lire toute la collection (≈ 5 600 exemplaires, 110 pages, le 27/10) prend plusieurs minutes : sa valeur est gardée
-en base (kv « collection_value ») à chaque lecture complète faite par un worker (cotes, inventaire), et relue à la
-demande seulement si elle date (COLLECTION_VALUE_MAX_AGE) ou sur le bouton « Recompter ». Rien n'est coté sur le
+en base (kv « collection_value ») à chaque lecture complète faite par un worker (cotes, inventaire, et le worker
+« valeur » qui la relit toutes les ACCOUNT_VALUE_HOURS si personne d'autre ne l'a fait), et relue à la demande
+seulement si elle date (COLLECTION_VALUE_MAX_AGE) ou sur le bouton « Recompter ». Rien n'est coté sur le
 site pour cela : chaque exemplaire vaut l'estimation du bot sans requête (ventes observées, cote du site en cache),
 sinon sa cote figée ; sans aucune des deux, il compte 0 et est compté à part.
 """
