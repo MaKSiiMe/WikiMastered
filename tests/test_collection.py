@@ -197,6 +197,43 @@ async def test_owned_days_get_the_date_tag(tmp_path):
     await db.close()
 
 
+@pytest.mark.asyncio
+async def test_collection_from_file_reads_everything_and_uses_its_own_tag(tmp_path, monkeypatch):
+    """Une collection de config/collections.yaml : toute la collection est lue (requêtes de fond), son
+    avancement est suivi à part et son étiquette est posée sur ses cartes, celle des jours sur les jours."""
+    import json as jsonlib
+
+    from src.workers import collection
+    from tests.test_session import cookie_for
+
+    path = tmp_path / "collections.yaml"
+    path.write_text("elements:\n  nom: Éléments chimiques\n  etiquette: élément\n"
+                    "  titres: [Hydrogène, Hélium, Mercure (chimie)]\n", encoding="utf-8")
+    monkeypatch.setattr(collection, "COLLECTIONS_FILE", path)
+    queries, inserted = [], []
+
+    def handler(request):
+        if request.url.host.endswith("supabase.co"):
+            if request.method == "GET":
+                return httpx.Response(200, json=[{"id": 7, "name": "date"}, {"id": 9, "name": "Élément"}])
+            inserted.append(jsonlib.loads(request.content))
+            return httpx.Response(201)
+        queries.append(request.url.params.get("q", ""))
+        return httpx.Response(200, json={"collection": [copy("o1", "h", "Hydrogène"), copy("o2", "m", "Mercure"),
+                                                         copy("o3", "d", "1er janvier")]})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, collection_sets=["Jours", "elements", "pays"],
+                                   supabase_anon_key="anon-key", wm_cookie=cookie_for("a1", "r1", 3600))
+    ctx = await make_context(tmp_path, client, notifier)
+    state = await collection.refresh(ctx)
+    assert queries == [""]  # une seule lecture complète, pas de recherche par mois
+    assert state["owned"] == ["1 janvier", "hydrogene"] and state["unknown_sets"] == ["pays"]
+    assert state["sets"] == {"Jours de l'année": [1, 366], "Éléments chimiques": [1, 3]}
+    assert sorted(i["tag_id"] for i in inserted) == [7, 9] and state["tagged"] == 2
+    assert "elements" in collection.unknown_text(client.settings, ["pays"])
+    await ctx.db.close()
+
+
 def test_completion_tracks_when_each_card_was_obtained():
     from datetime import datetime, timedelta
 

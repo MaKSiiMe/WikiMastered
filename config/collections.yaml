@@ -1,0 +1,19 @@
+# Collections à compléter (worker Collection). COLLECTION_SETS choisit celles qui sont actives,
+# par leur clé : COLLECTION_SETS=jours,elements.
+#
+# « jours » (les 366 jours de l'année, étiquette COLLECTION_TAG) est intégrée au code.
+# Une autre collection se décrit ici :
+#   nom        affiché dans le récap, le bilan et `python -m src.main collection`
+#   etiquette  posée sur un exemplaire de chaque carte possédée (à créer une fois sur le site ;
+#              l'ajouter à PROTECTED_TAGS pour qu'il ne soit jamais vendu). Sans etiquette : aucune.
+#   titres     titres exacts des articles Wikipédia, comme sur les cartes du site
+#              (« Mercure (chimie) », pas « Mercure »).
+#
+# Exemple :
+# elements:
+#   nom: Éléments chimiques
+#   etiquette: élément
+#   titres:
+#     - Hydrogène
+#     - Hélium
+#     - Lithium
