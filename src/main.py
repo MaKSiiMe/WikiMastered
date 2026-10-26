@@ -3,8 +3,10 @@
     python -m src.main run                      # le bot (commande par défaut du conteneur)
     python -m src.main check                    # vérifie la session et affiche le solde
     python -m src.main inspect                  # capture et compare les vraies réponses JSON
-    python -m src.main inventory scan|list|discard [--apply]
+    python -m src.main inventory scan|report|list|discard [--apply]
     python -m src.main report                   # envoie le bilan du jour sur Discord
+    python -m src.main roi [--days 7]           # bénéfice et ROI des reventes, jour par jour
+    python -m src.main prices "Titre"           # ventes observées d'une carte, estimation du bot
     python -m src.main collection               # collection à compléter (jours de l'année…)
     python -m src.main market [--pages 4] [--rarity UR]  # où sont les fins imminentes dans le marché
     python -m src.main profile                  # profil du joueur : solde, paquets, pity…
@@ -41,6 +43,7 @@ from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
 from src.recap import recap_loop
+from src.roi import roi_text
 from src.sniper_backtest import cases_from
 from src.sniper_backtest import render as backtest_text
 from src.sniper_report import breakdown, sniper_report
@@ -69,7 +72,7 @@ def setup_logging(settings: Settings) -> None:
     root = logging.getLogger()
     root.handlers[:] = [console, file_handler]
     root.setLevel(settings.log_level.upper())
-    for noisy in ("httpx", "httpcore", "hpack", "aiosqlite"):
+    for noisy in ("httpx", "httpcore", "hpack", "aiosqlite", "discord"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
@@ -95,6 +98,14 @@ async def build_context(settings: Settings):
 
 
 async def daily_report(ctx: Context, *, send: bool = True) -> dict:
+    stats, description, sections = await daily_report_parts(ctx)
+    if send:
+        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", description, topic=Topic.REPORT, sections=sections)
+    return stats
+
+
+async def daily_report_parts(ctx: Context) -> tuple[dict, str, list[tuple[str, str]]]:
+    """Chiffres du jour, puis le bilan tel qu'envoyé le soir (aussi demandé par /bilan sur Discord)."""
     since = local_dt(now_local().date(), time(0, 0))
     stats = await ctx.db.report(since)
     try:
@@ -108,9 +119,7 @@ async def daily_report(ctx: Context, *, send: bool = True) -> dict:
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         extra.append(summary_line(await ctx.db.kv_get("collection"), targets(ctx)))
     sections += [as_section(text) for text in extra]
-    if send:
-        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", description, topic=Topic.REPORT, sections=sections)
-    return stats
+    return stats, description, sections
 
 
 def report_sections(stats: dict, *, live_bids: bool) -> tuple[str, list[tuple[str, str]]]:
@@ -354,6 +363,13 @@ async def prices_status(ctx: Context, title: str) -> str:
                        ctx.client.user_id, now)
 
 
+async def roi_status(ctx: Context, days: int) -> str:
+    today = now_local().date()
+    rows = await ctx.db.position_results(local_dt(today - timedelta(days=days - 1), time(0, 0)))
+    held = await ctx.db.positions_summary()
+    return roi_text(rows, days, today, ctx.settings.sale_fee_pct, (held["real_count"], held["real_cost"]))
+
+
 async def heartbeat(ctx: Context) -> None:
     path = ctx.settings.data_dir / "heartbeat"
     while True:
@@ -423,6 +439,15 @@ async def run_bot(settings: Settings) -> None:
             jobs.append(("recap", lambda: recap_loop(ctx, workers, started_at)))
         if settings.enable_sniper and settings.sniper_report_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
+        if settings.discord_bot_token and not settings.discord_owner_id:
+            ctx.notifier.warning("Commandes Discord inactives", "DISCORD_BOT_TOKEN est renseigné mais pas "
+                                 "DISCORD_OWNER_ID (ton identifiant utilisateur Discord) : personne ne pourrait "
+                                 "s'en servir.")
+        elif settings.discord_bot_token:
+            from src.discord_bot import run_discord  # discord.py chargé seulement avec un bot configuré
+
+            sniper = next((w for w in workers if isinstance(w, AuctionSniper)), None)
+            jobs.append(("discord", lambda: run_discord(ctx, sniper, sys.modules[__name__])))
         tasks = [asyncio.create_task(supervise(name, start, ctx.notifier), name=name) for name, start in jobs]
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -590,6 +615,8 @@ def main(argv: list[str] | None = None) -> None:
     bt.add_argument("--capital", type=int, default=20000, help="WikiBidous + positions (budget d'une position)")
     bt.add_argument("--resale", type=float, default=1.0, help="revente = estimation × ce facteur (défaut 1)")
     bt.add_argument("--rarity", default="L")
+    roi = sub.add_parser("roi", help="bénéfice et ROI des reventes du sniper, jour par jour (lecture seule)")
+    roi.add_argument("--days", type=int, default=7)
     pr = sub.add_parser("prices", help="ventes observées d'une carte, estimation du bot et ventes en cours "
                                        "(lecture seule)")
     pr.add_argument("title", help="titre exact de la carte, entre guillemets")
@@ -623,6 +650,7 @@ def main(argv: list[str] | None = None) -> None:
         "hours": lambda ctx: hours_status(ctx, args.rarity),
         "sniper-report": lambda ctx: sniper_report_status(ctx, args.hours, args.summary, args.breakdown),
         "prices": lambda ctx: prices_status(ctx, args.title),
+        "roi": lambda ctx: roi_status(ctx, max(1, args.days)),
         "inventory": lambda ctx: inventory_cli(ctx, args.action, args.apply, args.lookups),
     }
     in_context(settings, commands[command])

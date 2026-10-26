@@ -4,3 +4,4 @@ pydantic-settings==2.10.1
 aiosqlite==0.21.0
 PyYAML==6.0.2
 tzdata==2025.2
+discord.py==2.6.4

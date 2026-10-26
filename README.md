@@ -76,6 +76,26 @@ Le bot tourne seul. Une alerte 🔴 sur Discord signale les trois cas où il fau
 
 Un récap toutes les 4 h, un bilan à 23:00, le récap des enchères à 08:00.
 
+### Commandes slash
+
+Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID` : voir [docs/PORTAINER.md](docs/PORTAINER.md)), le bot répond à ces commandes, et à toi seul :
+
+| Commande | Réponse |
+|---|---|
+| `/bilan` | Le bilan du jour, sans attendre 23:00 |
+| `/roi [jours]` | Bénéfice et ROI des reventes, jour par jour (7 jours par défaut) |
+| `/solde` | Solde, capital dans les positions, total |
+| `/positions` | Cartes achetées pour la revente, et où en est leur vente |
+| `/ventes` | Ventes programmées et en cours |
+| `/prix <carte>` | Ventes observées, estimation du bot, ventes en cours |
+| `/collection` | Avancement des collections, cartes manquantes |
+| `/sniper [heures]` | Récap des enchères misées |
+| `/snipe <carte> <prix_max> [rareté]` | Demander une carte au sniper : mise au minimum jusqu'à `prix_max`, gardée (pas revendue). Confirmée par un bouton |
+| `/snipes` | Cartes demandées |
+| `/annuler <carte>` | Ne plus demander une carte |
+
+Une carte demandée est cherchée par son titre, comme un jour manquant, passe en priorité dans la fenêtre de mise et ignore `SNIPER_MAX_BID`. Gagnée, elle n'est plus demandée. Avec les mises de collection simulées (`SIMULATE=collection`), la mise est simulée.
+
 ## Commandes
 
 À lancer dans la console du conteneur (Portainer > *Containers* > `wikimastered` > *Console*).
@@ -87,6 +107,7 @@ python -m src.main sniper-report --hours 24
 python -m src.main inventory scan         # ce qui serait vendu ou défaussé
 python -m src.main collection             # avancement de la collection
 python -m src.main prices "Titre exact"   # ventes observées d'une carte
+python -m src.main roi --days 7           # bénéfice et ROI des reventes, jour par jour
 ```
 
 Liste complète : `python -m src.main --help`.
