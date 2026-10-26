@@ -301,14 +301,21 @@ def hours_text(rows, rarities: list[str]) -> str:
 PRICES_SHOWN = 15  # ventes observées affichées par rareté
 
 
-def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime) -> str:
-    """Ventes observées d'une carte, estimation du bot, achats du bot et ventes en cours (commande prices)."""
+def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime,
+                md: bool = False) -> str:
+    """Ventes observées d'une carte, estimation du bot, achats du bot et ventes en cours (commande prices).
+    `md` : version Discord (/prix), lignes courtes en markdown, sans bloc de code."""
     def paris(value) -> str:
         moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
-        return f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
+        text = f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
+        return f"`{text}`" if md else text
 
-    lines = [f"{title}", "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de 2 min "
-             "avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais comptée."]
+    if md:
+        lines = ["Ventes finies avec au moins une mise, vues par le bot (une mise de dernière seconde peut manquer)."]
+    else:
+        lines = [f"{title}", "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de "
+                 "2 min avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais "
+                 "comptée."]
     rarities = sorted({r["rarity"] for r in observed} | set(quotes), key=lambda r: -RARITY_RANK.get(r, -1))
     if not rarities:
         lines.append("  aucune")
@@ -317,16 +324,24 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
         quote = quotes.get(rarity)
         estimate = f"~{quote.average:.0f} WB" if quote and quote.average is not None else "aucune"
         average = site.get(rarity, (None, None))[0]
-        lines.append(f"\n{rarity} : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
-                     f"5 dernières, plafonnée par la moyenne du site : "
-                     f"{f'{average:.0f} WB' if average is not None else 'inconnue'})")
+        site_text = f"{average:.0f} WB" if average is not None else "inconnue"
+        if md:
+            lines.append(f"\n**{rarity}** · {len(sales)} vente(s) · estimation du bot **{estimate}** (médiane des 5 "
+                         f"dernières, plafonnée par la cote du site : {site_text})")
+        else:
+            lines.append(f"\n{rarity} : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
+                         f"5 dernières, plafonnée par la moyenne du site : {site_text})")
         for r in sales[:PRICES_SHOWN]:
             notes = []
             if r["base_amount"] and r["price"] <= r["base_amount"]:
-                notes.append("au prix de départ, sans surenchère")
+                notes.append("sans surenchère" if md else "au prix de départ, sans surenchère")
             if r["suspect"]:
                 notes.append("suspecte, ignorée")
             start = f"départ {r['base_amount']}" if r["base_amount"] else "départ ?"
+            if md:
+                lines.append(f"{paris(r['ended_at'])} **{r['price']} WB** ({start})"
+                             + (f" · {', '.join(notes)}" if notes else ""))
+                continue
             notes_text = "  " + ", ".join(notes) if notes else ""
             lines.append(f"  {paris(r['ended_at'])}  {r['price']:>6} WB  ({start}){notes_text}")
         if len(sales) > PRICES_SHOWN:
@@ -348,7 +363,7 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
     return "\n".join(lines)
 
 
-async def prices_status(ctx: Context, title: str) -> str:
+async def prices_status(ctx: Context, title: str, md: bool = False) -> str:
     observed = await ctx.db.observed_for_title(title)
     auctions, _ = await ctx.api.market_page(sort="ending_soon", q=title, limit=50)
     now = utcnow()
@@ -363,7 +378,7 @@ async def prices_status(ctx: Context, title: str) -> str:
         site.update(cached[1] if cached else {})
     name = selling[0].title if selling else title
     return prices_text(name, observed, await ctx.db.bids_for_title(title), selling, quotes, site,
-                       ctx.client.user_id, now)
+                       ctx.client.user_id, now, md)
 
 
 async def roi_report(ctx: Context, days: int) -> Roi:

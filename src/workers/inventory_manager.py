@@ -348,11 +348,32 @@ def plan_listing_time(now: datetime, start: time, end: time, durations: list[int
 
 
 def plan_fire_sale(now: datetime, durations: list[int], preferred: int,
-                   rng: random.Random | None = None) -> tuple[datetime, int, datetime]:
-    """(publication, durée, fin) d'une revente à 1 WB : fin dans une fenêtre de FIRE_SALE_ENDS, publiée au plus tôt,
-    durée la plus proche de `preferred`."""
+                   rng: random.Random | None = None, min_minutes: int = 0) -> tuple[datetime, int, datetime]:
+    """(publication, durée, fin) d'une revente à 1 WB : fin dans une fenêtre de FIRE_SALE_ENDS, la plus proche
+    possible, en vente au moins `min_minutes` (durée la plus proche de `preferred`). Aucune durée assez longue : la
+    fenêtre la plus proche, comme avant."""
+    plans = []
+    for day in range(3):
+        for start, end in FIRE_SALE_ENDS:
+            target = random_in_window(now.date() + timedelta(days=day), start, end, rng)
+            feasible = [(target - timedelta(minutes=d), d) for d in durations
+                        if d >= min_minutes and target - timedelta(minutes=d) >= now]
+            if feasible:
+                post_at, minutes = min(feasible, key=lambda f: (abs(f[1] - preferred), f[0]))
+                plans.append((post_at, minutes, target))
+    if plans:
+        return min(plans, key=lambda p: p[2])
     plans = [plan_listing_time(now, start, end, durations, 10, rng, preferred) for start, end in FIRE_SALE_ENDS]
     return min(plans, key=lambda p: (p[0], abs(p[1] - preferred)))
+
+
+def relist_limits(cost: int, s: Settings) -> tuple[int, int]:
+    """(remises à -10 % permises, invendus avant la revente à 1 WB) d'une position achetée `cost` WB : moins pour
+    une position chère (POSITION_EXPENSIVE_*)."""
+    if s.position_expensive_from and cost >= s.position_expensive_from:
+        fire = s.position_expensive_fire_sale_after if s.position_fire_sale_after else 0
+        return min(s.position_max_relists, s.position_expensive_max_relists), fire
+    return s.position_max_relists, s.position_fire_sale_after
 
 
 def position_reason(cost: int) -> str:
@@ -995,13 +1016,14 @@ class InventoryManager(Worker):
         if not bid:
             return
         unsold = row["relist_count"] + 1
-        if 0 < self.settings.position_fire_sale_after <= unsold:
+        max_relists, fire_after = relist_limits(bid["amount"], self.settings)
+        if 0 < fire_after <= unsold:
             await self._fire_sale(await self._returned_copy(row, bid), bid, unsold)
             return
         # Plancher de la prochaine mise en vente : le prix d'achat, puis un peu dessous après POSITION_LOSS_AFTER
         # invendus (une carte qui ne part pas bloque une place de vente et son capital).
         floor = position_floor(bid["amount"], row["relist_count"] + 1, self.settings)
-        if row["relist_count"] < self.settings.position_max_relists:
+        if row["relist_count"] < max_relists:
             price = max(floor, round(row["base_amount"] * self.settings.position_relist_discount))
         elif await self._slot_for_relist(bid["id"]):
             price = floor
@@ -1028,7 +1050,8 @@ class InventoryManager(Worker):
         """Invendue `unsold` fois : revente à 1 WB, fin à 00-03 h ou 06-09 h (POSITION_FIRE_SALE_*). Publiée avant
         toute autre vente quand vient son heure."""
         s = self.settings
-        post_at, minutes, end = plan_fire_sale(now_local(), s.listing_duration_options, s.position_fire_sale_minutes)
+        post_at, minutes, end = plan_fire_sale(now_local(), s.listing_duration_options, s.position_fire_sale_minutes,
+                                               min_minutes=s.position_fire_sale_min_minutes)
         listing_id = await self.db.schedule_listing(
             owned_card_id=owned_id, card_id=bid["card_id"], title=bid["title"], rarity=bid["rarity"], base_amount=1,
             duration_minutes=minutes, post_at=post_at, target_end=end,

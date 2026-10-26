@@ -506,7 +506,8 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                         "marché :\n" + "\n".join(f"• {t}" for t in known) + "\n\nRelance /prix en choisissant "
                         "dans la liste qui s'affiche pendant la frappe.", code=False)
             return
-        await reply(interaction, (exact or titre)[:250], await cli.prices_status(ctx, exact or titre))
+        await reply(interaction, (exact or titre)[:250], await cli.prices_status(ctx, exact or titre, md=True),
+                    code=False)
 
     @tree.command(name="collection", description="Avancement des collections et cartes manquantes")
     async def collection(interaction: discord.Interaction) -> None:
