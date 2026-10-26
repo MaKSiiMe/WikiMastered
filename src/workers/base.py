@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import httpx
 
 from src.config import Settings
+from src.core import timeutils
 from src.core.api import WikiMastersAPI
 from src.core.client import ApiError, RateLimited, SessionExpired, UncertainMutation, WikiMastersClient
 from src.core.database import Database
@@ -26,6 +27,8 @@ class Context:
     db: Database
     notifier: DiscordNotifier
     prices: PriceService
+    # Workers en pause (/pause sur Discord) : nom -> fin, ou None jusqu'à /reprise. Voir src/pauses.py.
+    pauses: dict[str, datetime | None] = field(default_factory=dict)
 
 
 class Worker:
@@ -59,6 +62,10 @@ class Worker:
         ready = False
         while True:
             await self.ctx.client.wait_session()
+            if wait := self._paused_for():
+                self.next_due = utcnow() + timedelta(seconds=wait)  # en pause, pas « arrêté » pour le récap
+                await asyncio.sleep(wait)
+                continue
             try:
                 if not ready:
                     # Initialisation dans la boucle : un échec au démarrage (réseau…) est réessayé ici,
@@ -88,6 +95,32 @@ class Worker:
                 delay = self._on_error(exc)
             self.next_due = utcnow() + timedelta(seconds=max(0.0, delay))
             await asyncio.sleep(max(0.0, delay))
+
+    def _paused_for(self) -> float:
+        """Secondes à attendre avant de revérifier la pause (0 : pas en pause). Une pause finie est retirée."""
+        if self.name not in self.ctx.pauses:
+            return 0.0
+        until = self.ctx.pauses[self.name]
+        if until is not None and until <= utcnow():
+            del self.ctx.pauses[self.name]
+            self.log.info("fin de la pause, reprise")
+            return 0.0
+        left = (until - utcnow()).total_seconds() if until else 30.0
+        return min(1.0, max(0.1, left))  # /reprise est vue dans la seconde
+
+    @property
+    def errors_in_a_row(self) -> int:
+        return self._errors
+
+    @property
+    def paused(self) -> str | None:
+        """« en pause jusqu'à 14:30 » (ou jusqu'à /reprise), None hors pause."""
+        if self.name not in self.ctx.pauses:
+            return None
+        until = self.ctx.pauses[self.name]
+        if until is None:
+            return "en pause jusqu'à /reprise"
+        return f"en pause jusqu'à {until.astimezone(timeutils.PARIS):%H:%M}" if until > utcnow() else None
 
     @property
     def blocked(self) -> str | None:

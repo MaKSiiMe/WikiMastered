@@ -42,6 +42,7 @@ from src.core.models import MarketPage
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
+from src.pauses import load as load_pauses
 from src.recap import recap_loop
 from src.roi import Roi, roi, roi_text
 from src.sniper_backtest import cases_from
@@ -409,6 +410,7 @@ async def supervise(name: str, start: Callable[[], Awaitable[None]], notifier) -
 
 async def run_bot(settings: Settings) -> None:
     async with build_context(settings) as ctx:
+        await load_pauses(ctx)
         workers: list[Worker] = []
         if settings.enable_sniper:
             workers.append(AuctionSniper(ctx))
@@ -453,8 +455,7 @@ async def run_bot(settings: Settings) -> None:
                                      "l'identifiant du serveur) : commandes globales, jusqu'à 1 h pour apparaître.")
             from src.discord_bot import run_discord  # discord.py chargé seulement avec un bot configuré
 
-            sniper = next((w for w in workers if isinstance(w, AuctionSniper)), None)
-            jobs.append(("discord", lambda: run_discord(ctx, sniper, sys.modules[__name__])))
+            jobs.append(("discord", lambda: run_discord(ctx, workers, sys.modules[__name__], started_at)))
         tasks = [asyncio.create_task(supervise(name, start, ctx.notifier), name=name) for name, start in jobs]
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()

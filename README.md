@@ -93,6 +93,12 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | `/snipe <carte> <prix_max> [rareté]` | Demander une carte au sniper : mise au minimum jusqu'à `prix_max`, gardée (pas revendue). Confirmée par un bouton |
 | `/snipes` | Cartes demandées |
 | `/annuler <carte>` | Ne plus demander une carte |
+| `/etat` | Santé du bot : session, vérification anti-bot, routes du site en pause, chaque worker. Boutons : vérification faite, pause / reprise du sniper, actualiser |
+| `/verif-faite` | Vérification anti-bot faite dans le navigateur : la prochaine mise part tout de suite pour la tester |
+| `/pause [quoi] [durée]` | Met en pause le sniper (par défaut), les ventes ou tout (sauf la garde), 1 h par défaut ou jusqu'à `/reprise`. Gardée après un redémarrage |
+| `/reprise [quoi]` | Reprend ce qui est en pause |
+
+Quand le site demande la vérification anti-bot, le bot t'envoie aussi un **message privé** avec un bouton « C'est fait ». Le message indique ensuite quand les mises repassent.
 
 Une carte demandée est cherchée par son titre, comme un jour manquant, passe en priorité dans la fenêtre de mise et ignore `SNIPER_MAX_BID`. Gagnée, elle n'est plus demandée. Avec les mises de collection simulées (`SIMULATE=collection`), la mise est simulée.
 

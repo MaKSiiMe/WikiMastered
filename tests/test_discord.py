@@ -114,10 +114,10 @@ async def test_discord_commands_are_registered(tmp_path):
 
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(404), discord_owner_id=42)
     ctx = await make_context(tmp_path, client, notifier)
-    bot = build_client(ctx, None, sys.modules["src.main"])
+    bot = build_client(ctx, [], sys.modules["src.main"])
     names = {c.name for c in bot.tree.get_commands()}  # type: ignore[attr-defined]
     assert names == {"bilan", "roi", "solde", "positions", "ventes", "prix", "collection", "sniper", "snipe",
-                     "snipes", "annuler"}
+                     "snipes", "annuler", "etat", "verif-faite", "pause", "reprise"}
     assert src.main.roi_status  # les fonctions appelées par les commandes existent
     embed, file = text_embed("t", "ligne\n" * 1000)
     assert file is not None and len(embed.description) < 4096
@@ -132,3 +132,60 @@ def test_bad_discord_ids_never_stop_the_bot():
     s = Settings(_env_file=None, discord_owner_id="MaKSiiMe", discord_guild_id=" 123 ")
     assert s.discord_owner_id == -1 and s.discord_guild_id == 123
     assert Settings(_env_file=None, discord_owner_id="").discord_owner_id == 0
+
+
+@pytest.mark.asyncio
+async def test_paused_worker_skips_its_passes_until_resumed(tmp_path):
+    """Un worker en pause ne fait aucun passage ; la pause est gardée en base, une pause finie est oubliée."""
+    import asyncio
+
+    from src import pauses
+    from src.workers.base import Worker
+
+    class Counter(Worker):
+        name = "sniper"
+        steps = 0
+
+        async def step(self) -> float:
+            self.steps += 1
+            return 0.01
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(404))
+    ctx = await make_context(tmp_path, client, notifier)
+    await pauses.pause(ctx, ["sniper", "garde"], None)
+    assert ctx.pauses == {"sniper": None}  # la garde des sanctions n'est jamais en pause
+    worker = Counter(ctx)
+    task = asyncio.create_task(worker.run())
+    await asyncio.sleep(0.2)
+    assert worker.steps == 0 and worker.paused == "en pause jusqu'à /reprise"
+    await pauses.resume(ctx, ["sniper"])
+    await asyncio.sleep(1.5)
+    assert worker.steps > 0 and worker.paused is None
+    task.cancel()
+
+    await pauses.pause(ctx, ["inventory"], datetime.now(UTC) + timedelta(hours=1))
+    await pauses.pause(ctx, ["cotes"], datetime.now(UTC) - timedelta(minutes=1))
+    ctx.pauses.clear()
+    await pauses.load(ctx)  # redémarrage : la pause en cours revient, la finie est oubliée
+    assert set(ctx.pauses) == {"inventory"}
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_state_shows_antibot_and_verification_done_unblocks_next_bid(tmp_path):
+    from src.discord_bot import state_embed
+    from src.workers.auction_sniper import _EPOCH
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"bidding": [], "balance": 0}))
+    ctx = await make_context(tmp_path, client, notifier)
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    assert not sniper.verification_done()  # rien n'attendait
+    sniper._antibot_since = datetime.now(UTC) - timedelta(minutes=5)
+    sniper._antibot_retry_at = datetime.now(UTC) + timedelta(minutes=10)
+    ctx.pauses["inventory"] = None
+    embed = state_embed(ctx, [sniper], datetime.now(UTC) - timedelta(hours=2))
+    assert "Vérification anti-bot" in embed.description and embed.color.value == 0xFEE75C
+    assert "**sniper** : 🛑" in embed.fields[0].value
+    assert sniper.verification_done() and sniper._antibot_retry_at == _EPOCH
+    await ctx.db.close()
