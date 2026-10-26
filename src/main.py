@@ -43,7 +43,7 @@ from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
 from src.recap import recap_loop
-from src.roi import roi_text
+from src.roi import Roi, roi, roi_text
 from src.sniper_backtest import cases_from
 from src.sniper_backtest import render as backtest_text
 from src.sniper_report import breakdown, sniper_report
@@ -363,11 +363,15 @@ async def prices_status(ctx: Context, title: str) -> str:
                        ctx.client.user_id, now)
 
 
-async def roi_status(ctx: Context, days: int) -> str:
+async def roi_report(ctx: Context, days: int) -> Roi:
     today = now_local().date()
     rows = await ctx.db.position_results(local_dt(today - timedelta(days=days - 1), time(0, 0)))
     held = await ctx.db.positions_summary()
-    return roi_text(rows, days, today, ctx.settings.sale_fee_pct, (held["real_count"], held["real_cost"]))
+    return roi(rows, days, today, ctx.settings.sale_fee_pct, (held["real_count"], held["real_cost"]))
+
+
+async def roi_status(ctx: Context, days: int) -> str:
+    return roi_text(await roi_report(ctx, days))
 
 
 async def heartbeat(ctx: Context) -> None:

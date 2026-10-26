@@ -21,6 +21,7 @@ from discord import app_commands
 from src import snipes
 from src.core import timeutils
 from src.core.timeutils import utcnow
+from src.roi import roi_discord, wb
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context
 from src.workers.collection import progress_lines, targets
@@ -58,19 +59,31 @@ async def reply(interaction: discord.Interaction, title: str, text: str, *, code
         await interaction.response.send_message(embed=embed, **extra)
 
 
+def fields(lines: list[str], limit: int = 1024) -> list[str]:
+    """Lignes regroupées en valeurs de champ d'embed (1024 caractères au plus chacune)."""
+    out: list[str] = []
+    for line in lines:
+        if out and len(out[-1]) + 1 + len(line) <= limit:
+            out[-1] += "\n" + line
+        else:
+            out.append(line[:limit])
+    return out
+
+
 def positions_text(rows) -> str:
+    """Une ligne par position (sans bloc de code : lisible sur un téléphone)."""
     if not rows:
         return "Aucune position détenue."
     lines = []
     for r in rows:
-        sim = " (simulée)" if r["dry_run"] else ""
+        sim = " *(simulée)*" if r["dry_run"] else ""
         if r["listing_status"] in ("posted", "uncertain", "simulated"):
-            sale = f"en vente {r['listing_price']} WB, fin {paris(r['listing_end'])}"
+            sale = f"🏷️ en vente {wb(r['listing_price'])} WB, fin {paris(r['listing_end'])}"
         elif r["listing_status"]:
-            sale = f"vente programmée à {r['listing_price']} WB"
+            sale = f"🕒 vente programmée à {wb(r['listing_price'])} WB"
         else:
-            sale = "attend une place de vente"
-        lines.append(f"{r['rarity'] or '?':<3} {r['title'][:40]} : achetée {r['amount']} WB{sim}, {sale}")
+            sale = "⏳ attend une place de vente"
+        lines.append(f"**{r['rarity'] or '?'}** {r['title'][:60]}{sim}\nachetée {wb(r['amount'])} WB · {sale}")
     return "\n".join(lines)
 
 
@@ -80,16 +93,16 @@ def listings_text(rows) -> str:
     lines = []
     for r in rows:
         when = f"fin {paris(r['target_end'])}" if r["status"] != "scheduled" else f"publiée {paris(r['post_at'])}"
-        kind = {"scheduled": "programmée", "simulated": "simulée", "uncertain": "à vérifier",
-                "waiting": "en attente"}.get(r["status"], "en cours")
-        lines.append(f"{r['rarity'] or '?':<3} {r['title'][:40]} : {r['base_amount']} WB, {kind}, {when}")
+        kind = {"scheduled": "🕒 programmée", "simulated": "🧪 simulée", "uncertain": "❓ à vérifier",
+                "waiting": "⏳ en attente"}.get(r["status"], "🏷️ en cours")
+        lines.append(f"**{r['rarity'] or '?'}** {r['title'][:60]}\n{wb(r['base_amount'])} WB · {kind} · {when}")
     return "\n".join(lines)
 
 
 def snipes_text(found: dict[str, snipes.Snipe]) -> str:
     if not found:
         return "Aucune carte demandée. /snipe pour en ajouter une."
-    return "\n".join(f"{s.label} (depuis le {paris(s.added_at)})" for s in found.values())
+    return "\n".join(f"🎯 **{s.label}** (depuis le {paris(s.added_at)})" for s in found.values())
 
 
 class Confirm(discord.ui.View):
@@ -186,7 +199,11 @@ def build_client(ctx: Context, sniper: AuctionSniper | None, cli: ModuleType) ->
     @tree.command(name="roi", description="Bénéfice et ROI des reventes, jour par jour")
     @app_commands.describe(jours="nombre de jours, aujourd'hui compris (7 par défaut)")
     async def roi(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 60] = 7) -> None:
-        await reply(interaction, f"ROI des reventes, {jours} jour(s)", await cli.roi_status(ctx, jours))
+        head, days = roi_discord(await cli.roi_report(ctx, jours))
+        embed = discord.Embed(title=f"ROI des reventes · {jours} jour(s)", description=head, color=COLOR)
+        for i, value in enumerate(fields(days)):
+            embed.add_field(name="Par jour" if i == 0 else "\u200b", value=value, inline=False)
+        await interaction.response.send_message(embed=embed)
 
     @tree.command(name="solde", description="Solde du compte et capital immobilisé dans les positions")
     async def solde(interaction: discord.Interaction) -> None:
@@ -200,12 +217,12 @@ def build_client(ctx: Context, sniper: AuctionSniper | None, cli: ModuleType) ->
     @tree.command(name="positions", description="Cartes achetées pour la revente, pas encore revendues")
     async def positions(interaction: discord.Interaction) -> None:
         rows = await ctx.db.held_positions()
-        await reply(interaction, f"Positions ({len(rows)})", positions_text(rows))
+        await reply(interaction, f"Positions ({len(rows)})", positions_text(rows), code=False)
 
     @tree.command(name="ventes", description="Ventes programmées et en cours")
     async def ventes(interaction: discord.Interaction) -> None:
         rows = await ctx.db.open_listings()
-        await reply(interaction, f"Ventes ({len(rows)})", listings_text(rows))
+        await reply(interaction, f"Ventes ({len(rows)})", listings_text(rows), code=False)
 
     @tree.command(name="prix", description="Ventes observées d'une carte, estimation du bot, ventes en cours")
     @app_commands.describe(titre="titre exact de la carte")
@@ -266,7 +283,7 @@ def build_client(ctx: Context, sniper: AuctionSniper | None, cli: ModuleType) ->
 
     @tree.command(name="snipes", description="Cartes demandées au sniper")
     async def snipes_list(interaction: discord.Interaction) -> None:
-        await reply(interaction, "Cartes demandées", snipes_text(await snipes.load(ctx.db)))
+        await reply(interaction, "Cartes demandées", snipes_text(await snipes.load(ctx.db)), code=False)
 
     async def snipe_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         return [app_commands.Choice(name=sn.label[:100], value=sn.title[:100])
