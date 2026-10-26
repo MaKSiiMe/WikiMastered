@@ -117,3 +117,12 @@ async def test_discord_commands_are_registered(tmp_path):
     assert file is not None and len(embed.description) < 4096
     await bot.close()
     await ctx.db.close()
+
+
+def test_bad_discord_ids_never_stop_the_bot():
+    """Un pseudo à la place de l'identifiant : commandes coupées, mais le bot démarre."""
+    from src.config import Settings
+
+    s = Settings(_env_file=None, discord_owner_id="MaKSiiMe", discord_guild_id=" 123 ")
+    assert s.discord_owner_id == -1 and s.discord_guild_id == 123
+    assert Settings(_env_file=None, discord_owner_id="").discord_owner_id == 0

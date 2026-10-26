@@ -331,6 +331,17 @@ class Settings(BaseSettings):
             raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
         return value
 
+    @field_validator("discord_owner_id", "discord_guild_id", mode="before")
+    @classmethod
+    def _discord_id(cls, value: Any) -> Any:
+        """Identifiant Discord : un nombre (clic droit > Copier l'identifiant). Autre chose (un pseudo…) vaut -1 et
+        coupe les commandes au lieu d'empêcher le bot de démarrer (26/10 : pseudo dans DISCORD_OWNER_ID, bot
+        redémarré en boucle)."""
+        if isinstance(value, str):
+            value = value.strip()
+            return int(value) if value.isdigit() else (0 if not value else -1)
+        return value
+
     def is_live(self, endpoint: str) -> bool:
         """Cette écriture part-elle vraiment au site ? DRY_RUN, sauf LIVE_WRITES ; réel, sauf SIMULATE."""
         if self.dry_run:
