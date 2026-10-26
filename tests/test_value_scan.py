@@ -1,62 +1,20 @@
-"""Cartes de valeur de l'inventaire : derniers exemplaires compris, cotes de fond, cotes basses figées."""
+"""Cotes de toute la collection : derniers exemplaires compris, cotes de fond, cotes basses figées."""
 
 from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 
 from src.config import Settings
-from src.core.models import OwnedCard
 from src.core.pricing import Quote
-from src.workers.value_scan import ValueScan, find_valuable, frozen_value, next_watch, remembered, to_quote, to_report
+from src.workers.value_scan import ValueScan, frozen_value, to_quote
 from tests.test_integration import make_client, make_context
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
 WEEK, MONTH = timedelta(days=7), timedelta(days=30)
-
-
-def owned(oid: str, card: str, rarity: str = "C", **kw) -> OwnedCard:
-    return OwnedCard.model_validate({"id": oid, "card_id": card, "card": {"id": card, "wikipedia_title": card.title(),
-                                                                         "rarity": rarity}, **kw})
-
-
-def groups_of(*rows: OwnedCard) -> dict[str, list[OwnedCard]]:
-    from src.workers.inventory_manager import group_by_card
-    return group_by_card(list(rows))
-
-
-def test_last_copy_of_a_common_card_is_found():
-    """La vente auto ne vend que des doublons : une C à 150 WB en un seul exemplaire n'était jamais vue."""
-    groups = groups_of(owned("o1", "meme"), owned("o2", "pomme"), owned("o3", "pomme"), owned("o4", "banal"))
-    quotes = {"meme": {"C": Quote(150, 0)}, "pomme": {"C": Quote(120, 3)}, "banal": {"C": Quote(40, 0)}}
-    found = find_valuable(groups, quotes, set(), min_value=100, keep=1)
-    assert [(v.title, v.spare, v.copies, v.observed) for v in found] == [("Meme", False, 1, 0), ("Pomme", True, 2, 3)]
-
-
-def test_protected_and_favorite_copies_are_not_reported():
-    groups = groups_of(owned("o1", "fav", starred=True), owned("o2", "date"), owned("o3", "shiny", is_shiny=True))
-    quotes = {cid: {"C": Quote(500, 0)} for cid in ("fav", "date", "shiny")}
-    found = find_valuable(groups, quotes, {"o2"}, min_value=100, keep=1)
-    assert [(v.title, v.shiny) for v in found] == [("Shiny", True)]  # favori et étiquette protégée : ignorés
-
-
-def test_quote_of_another_rarity_is_not_used():
-    groups = groups_of(owned("o1", "meme", "C"))
-    assert find_valuable(groups, {"meme": {"L": Quote(900, 5)}}, set(), min_value=100, keep=1) == []
-
-
-def test_report_only_new_cards_or_big_rises():
-    groups = groups_of(owned("o1", "a"), owned("o2", "b"), owned("o3", "c"))
-    quotes = {"a": {"C": Quote(200, 0)}, "b": {"C": Quote(160, 0)}, "c": {"C": Quote(300, 0)}}
-    found = find_valuable(groups, quotes, set(), min_value=100, keep=1)
-    reported = {"a|C": 190.0, "b|C": 100.0, "gone|C": 500.0, "later|C": 400.0}
-    assert [v.title for v in to_report(found, reported)] == ["C", "B"]  # nouvelle ; cote +60 %
-    # Vendue ou retombée : oubliée ; en attente de sa nouvelle cote : gardée.
-    assert remembered(found, reported, {"later"}) == {"a|C": 200.0, "b|C": 160.0, "c|C": 300.0, "later|C": 400.0}
 
 
 def test_cards_to_quote_most_viewed_first_then_oldest():
@@ -77,16 +35,12 @@ def test_low_quotes_are_frozen_only_when_every_owned_rarity_is_low():
 
 
 @pytest.mark.asyncio
-async def test_scan_reports_valuable_cards_and_freezes_cheap_ones(tmp_path):
+async def test_scan_quotes_every_card_silently_and_freezes_cheap_ones(tmp_path):
     collection = [{"id": "o1", "card_id": "c1", "card": {"id": "c1", "wikipedia_title": "Mème", "rarity": "C"}},
                   {"id": "o2", "card_id": "c2", "card": {"id": "c2", "wikipedia_title": "Banal", "rarity": "PC",
                                                           "pageviews": 500}},
                   {"id": "o3", "card_id": "c2", "card": {"id": "c2", "wikipedia_title": "Banal", "rarity": "PC"}}]
     summaries = {"c1": {"C": {"average": 240}}, "c2": {"PC": {"average": 8}}}
-    end = (datetime.now(UTC) + timedelta(hours=3)).isoformat()
-    rival = {"id": "a1", "card": {"id": "c1", "wikipedia_title": "Mème", "rarity": "C"}, "status": "active",
-             "seller_id": "22222222-2222-2222-2222-222222222222", "end_at": end, "base_amount": 180,
-             "current_bid": None, "current_bidder_id": None}
     calls = {"sales": [], "limited": 1}
     messages = []
 
@@ -103,8 +57,6 @@ async def test_scan_reports_valuable_cards_and_freezes_cheap_ones(tmp_path):
                 calls["limited"] -= 1
                 return httpx.Response(403, headers={"Retry-After": "0"}, json={"error": "Too many requests"})
             return httpx.Response(200, json={"summary": summaries[card]})
-        if path == "/api/marketplace":
-            return httpx.Response(200, json={"auctions": [rival]})
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, value_scan_lookup_seconds=3, backoff_rate_limit_base_seconds=60,
@@ -122,12 +74,9 @@ async def test_scan_reports_valuable_cards_and_freezes_cheap_ones(tmp_path):
     client._route_pause.clear()
     while worker._queue:
         await worker.step()
-    await worker.step()  # analyse et message
+    await worker.step()  # fin du passage, sans aucun message ni ligne de récap
     assert calls["sales"] == ["c2", "c2", "c1"]
-    assert [t for t, _ in messages] == ["1 carte(s) de valeur dans ton inventaire"]
-    assert "Mème" in messages[0][1] and "~240 WB (moyenne du site) · dernier exemplaire" in messages[0][1]
-    assert "1 en vente, dès 180 WB" in messages[0][1]
-    assert worker.recap()[0].endswith("2/2 cartes cotées, 1 à 100 WB ou plus (1 nouvelle(s))")
+    assert not messages and not worker.recap()
     assert worker._next_run - datetime.now(UTC) > timedelta(hours=11)
     assert await ctx.db.frozen_values() == {"c2": {"PC": 8.0}}  # sous 50 WB : figée
 
@@ -142,7 +91,7 @@ async def test_scan_reports_valuable_cards_and_freezes_cheap_ones(tmp_path):
     assert again._queue == ["c1"]
     await again.step()
     await again.step()
-    assert calls["sales"] == ["c2", "c2", "c1", "c1"] and len(messages) == 1  # rien de nouveau à signaler
+    assert calls["sales"] == ["c2", "c2", "c1", "c1"] and not messages
 
     # La vente des doublons reprend la cote figée, sans la redemander.
     from src.workers.inventory_manager import InventoryManager
@@ -189,7 +138,7 @@ async def test_refused_quote_falls_back_on_the_old_site_average(tmp_path):
 
 def test_settings_defaults():
     s = Settings(_env_file=None)
-    assert (s.enable_value_scan, s.value_scan_hours, s.value_scan_min_value) == (True, 12.0, 100)
+    assert (s.enable_value_scan, s.value_scan_hours, s.manual_resale_tag) == (True, 12.0, "revente")
     assert (s.value_scan_lookups, s.value_scan_lookup_seconds, s.value_scan_freeze_below) == (0, 3.0, 50)
 
 
@@ -230,176 +179,3 @@ async def test_server_errors_pause_the_scan_without_slowing_it(tmp_path):
     assert await worker.lookup() > 25  # toujours en pause : aucune requête, pas de ralentissement
     assert worker._spacing == 3
     await ctx.db.close()
-
-
-@pytest.mark.asyncio
-async def test_valuable_cards_are_watched_on_the_market(tmp_path):
-    """Une C cotée 10 972 WB sur une seule vente : la surveillance dit si elle passe vraiment sur le marché."""
-    collection = [{"id": "o1", "card_id": "c1", "card": {"id": "c1", "wikipedia_title": "Volley albanais",
-                                                          "rarity": "C"}},
-                  {"id": "o2", "card_id": "c2", "card": {"id": "c2", "wikipedia_title": "Mème", "rarity": "C"}}]
-    from tests.test_integration import ME as me
-    soon = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
-    past = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
-
-    def auction(aid, card, rarity="C", seller="22222222-2222-2222-2222-222222222222", end=soon, bid=None):
-        return {"id": aid, "card": {"id": card, "wikipedia_title": "Volley albanais", "rarity": rarity},
-                "status": "active", "seller_id": seller, "end_at": end, "base_amount": 300, "current_bid": bid,
-                "current_bidder_id": None}
-    market = [auction("a1", "c1"), auction("a2", "c1", "PC"), auction("a3", "autre"), auction("a4", "c1", seller=me),
-              auction("a5", "c1", end=past)]
-    searched = []
-
-    def handler(request):
-        path = request.url.path
-        if path == "/api/my-collection":
-            return httpx.Response(200, json={"collection": collection})
-        if path == "/api/trades":
-            return httpx.Response(200, json={"trades": []})
-        if path.endswith("/sales"):
-            card = path.split("/")[-2]
-            return httpx.Response(200, json={"summary": {"C": {"average": 10972 if card == "c1" else 240}}})
-        if path == "/api/marketplace":
-            searched.append(request.url.params.get("q"))
-            return httpx.Response(200, json={"auctions": market})
-        raise AssertionError(f"route inattendue {request.url}")
-
-    client, notifier = make_client(tmp_path, handler)
-    ctx = await make_context(tmp_path, client, notifier)
-    worker = ValueScan(ctx)
-    await worker.setup()
-    worker._next_run = datetime.now(UTC)
-    await worker.step()
-    while worker._queue:
-        await worker.step()
-    await worker.step()  # analyse : seule la carte à 500 WB ou plus est surveillée
-    assert worker._watch == {"c1|C": "Volley albanais"}
-    assert (await ctx.db.kv_get("value_scan"))["watch"] == worker._watch
-    searched.clear()
-    worker._watch_due = datetime.now(UTC)
-    assert await worker.step() > 0
-    assert searched == ["Volley albanais"]
-    rows = await ctx.db.sightings_since(datetime.now(UTC) - timedelta(days=1))
-    assert [(r["auction_id"], r["rarity"], r["current_bid"]) for r in rows] == [("a1", "C", None), ("a2", "PC", None)]
-    assert worker._watch_due - datetime.now(UTC) > timedelta(minutes=25)  # 30 min la nuit, 2 h le jour
-    assert worker.recap()[-1] == "Marché des cartes à 500 WB ou plus (7 j) : 2 vente(s) repérée(s) pour 1/1 carte(s)"
-
-    # Relevée plus tard : la mise est mise à jour, la vente n'est pas comptée deux fois.
-    market[0]["current_bid"] = 450
-    await worker.watch_market()
-    rows = await ctx.db.sightings_since(datetime.now(UTC) - timedelta(days=1))
-    assert [(r["auction_id"], r["current_bid"]) for r in rows] == [("a1", 450), ("a2", None)]
-    await ctx.db.close()
-
-
-def test_value_sale_queue_order_and_exclusions():
-    from src.workers.inventory_manager import value_sale_price, value_sale_queue
-    s = Settings(_env_file=None, value_sell_min=1000, value_sell_exclude=["manifestations du 17 octobre 2026"])
-    watch = {"a|C": "Crouchen", "b|C": "Manifestations du 17 octobre 2026", "c|PC": "Sareee", "d|C": "Bondar",
-             "e|R": "Saint-Amable", "f|L": "Achetée"}
-    values = {"a|C": 23346, "b|C": 10972, "c|PC": 1228, "d|C": 1016, "e|R": 640, "f|L": 5000}
-    queue = value_sale_queue(watch, values, {}, s, bought={"f"})
-    assert [v.title for v in queue] == ["Crouchen", "Sareee", "Bondar"]  # exclue, sous 1000, achetée : jamais
-    # Déjà mises en vente : après celles qui ne l'ont jamais été, la plus ancienne d'abord.
-    listed = {"a|C": NOW - timedelta(hours=1), "c|PC": NOW - timedelta(days=2)}
-    assert [v.title for v in value_sale_queue(watch, values, listed, s, bought={"f"})] == ["Bondar", "Sareee",
-                                                                                          "Crouchen"]
-    assert value_sale_price(23346, 0.6, None) == 14008
-    assert value_sale_price(1228, 0.6, 900) == 900  # jamais sous la plus haute mise vue sur le marché
-
-
-@pytest.mark.asyncio
-async def test_value_cards_sold_one_at_a_time_on_a_reserved_slot(tmp_path):
-    from src.workers.inventory_manager import InventoryManager
-
-    def copy(oid, card, title, rarity="C", **kw):
-        return {"id": oid, "card_id": card, "card": {"id": card, "wikipedia_title": title, "rarity": rarity}, **kw}
-    collection = [copy("o1", "c1", "Crouchen", starred=True), copy("o2", "c1", "Crouchen", is_shiny=True),
-                  copy("o3", "c1", "Crouchen"),
-                  copy("o4", "c2", "Manifestations du 17 octobre 2026"), copy("o5", "c3", "Sareee", "PC")]
-    slots = {"selling": 5}
-    posted, auctions = [], {}
-
-    def handler(request):
-        path = request.url.path
-        if path == "/api/marketplace/mine":
-            return httpx.Response(200, json={"sellingCount": slots["selling"], "maxConcurrentAuctions": 5})
-        if path == "/api/my-collection":
-            q = request.url.params.get("q", "")
-            return httpx.Response(200, json={"collection": [c for c in collection
-                                                            if q in c["card"]["wikipedia_title"]]})
-        if path == "/api/trades":
-            return httpx.Response(200, json={"trades": []})
-        if request.method == "POST" and path == "/api/marketplace":
-            posted.append(request.read().decode())
-            return httpx.Response(201, json={"auction_id": f"v{len(posted)}"})
-        if path.startswith("/api/marketplace/v"):
-            return httpx.Response(200, json={"auction": auctions[path.rsplit("/", 1)[-1]]})
-        raise AssertionError(f"route inattendue {request.url}")
-
-    client, notifier = make_client(tmp_path, handler, dry_run=False,
-                                   value_sell_exclude=["Manifestations du 17 octobre 2026"])
-    ctx = await make_context(tmp_path, client, notifier)
-    db = ctx.db
-    await db.kv_set("value_scan", {"watch": {"c1|C": "Crouchen", "c2|C": "Manifestations du 17 octobre 2026",
-                                             "c3|PC": "Sareee"}})
-    await db.price_put("c1", {"C": (23346, None)})
-    await db.price_put("c2", {"C": (10972, None)})
-    await db.price_put("c3", {"PC": (1228, None)})
-    now = datetime.now(UTC)
-    await db.record_sightings([{"auction_id": "s1", "card_id": "c3", "title": "Sareee", "rarity": "PC",
-                                "is_shiny": 0, "base_amount": 300, "current_bid": 900,
-                                "end_at": (now + timedelta(hours=1)).isoformat(), "seen_at": now.isoformat()}])
-    inv = InventoryManager(ctx)
-    await inv.setup()
-
-    # Ventes pleines : la carte attend, et la prochaine place libre lui est gardée.
-    assert not await inv.sell_value_card() and inv._value_waiting
-    slots["selling"] = 4
-    assert await inv.free_slots() == 0  # ni doublon ni revente sur la place gardée
-    for i in range(2):  # doublons déjà programmés, plus tôt
-        await db.schedule_listing(owned_card_id=f"d{i}", card_id="d", title=f"Doublon {i}", rarity="C",
-                                  base_amount=20, duration_minutes=360, post_at=now - timedelta(minutes=5),
-                                  target_end=now + timedelta(hours=6), reason="cote 20")
-    await inv.post_due_listings()
-    assert not posted  # 4/5 : la place libre est celle de la carte de valeur, les doublons sont reportés
-    rows = await db._all("SELECT post_at FROM listings WHERE reason = 'cote 20'")
-    assert all(datetime.fromisoformat(r["post_at"]) > now + timedelta(hours=1) for r in rows)
-
-    # La plus chère d'abord, sur l'exemplaire libre (ni le favori ni le shiny), à 60 % de sa cote, pour 6 h.
-    assert await inv.sell_value_card()
-    await inv.post_due_listings()
-    assert len(posted) == 1 and '"card_id":"o3"' in posted[0].replace(" ", "")
-    row = await db._one("SELECT * FROM listings WHERE reason LIKE 'valeur%'")
-    assert (row["status"], row["base_amount"], row["duration_minutes"]) == ("posted", 14008, 60)
-    assert ("INFO", "Carte de valeur mise en vente") in notifier.sent
-    slots["selling"] = 5
-
-    # Une seule à la fois : rien tant que la première n'est pas réglée, et plus de place gardée.
-    assert not await inv.sell_value_card() and not inv._value_waiting
-
-    # Vendue : message, puis la suivante (jamais Manifestations), au prix de la mise vue sur le marché.
-    auctions["v1"] = {"id": "v1", "card": {"id": "c1", "wikipedia_title": "Crouchen", "rarity": "C"},
-                      "status": "settled_sold", "end_at": now.isoformat(), "base_amount": 14008,
-                      "current_bid": 15000, "final_price": 15000}
-    await db._exec("UPDATE listings SET target_end = ? WHERE id = ?",
-                   ((now - timedelta(minutes=5)).isoformat(), row["id"]))
-    await inv.settle_listings()
-    assert ("SUCCESS", "Carte de valeur vendue") in notifier.sent
-    collection[:] = [c for c in collection if c["id"] != "o3"]
-    slots["selling"] = 4
-    assert await inv.sell_value_card()
-    nxt = await db._one("SELECT * FROM listings WHERE reason LIKE 'valeur%' AND status = 'scheduled'")
-    assert (nxt["title"], nxt["base_amount"]) == ("Sareee", 900)
-    await db.close()
-
-
-def test_market_watch_runs_more_often_at_night():
-    """Toutes les 30 min la nuit (02:00-07:30), toutes les 2 h sinon, et au plus tard au début de la nuit."""
-    s = Settings(_env_file=None)
-    paris = ZoneInfo("Europe/Paris")
-    at = lambda h, m: datetime(2026, 10, 27, h, m, tzinfo=paris)  # noqa: E731
-    assert next_watch(at(3, 0), s) == at(3, 30)
-    assert next_watch(at(15, 0), s) == at(17, 0)
-    assert next_watch(at(1, 15), s) == at(2, 0)
-    assert next_watch(at(15, 0), Settings(_env_file=None, value_watch_night_minutes=0)) == at(17, 0)

@@ -31,7 +31,6 @@ class Topic(Enum):
     COLLECTION = "📅 Collection"  # cartes de collection obtenues, étiquettes
     SALES = "💰 Ventes"           # mises en vente, reventes, défausses
     ACHIEVEMENTS = "🏆 Succès"    # récompenses de succès réclamées
-    VALUE = "💎 Valeur"           # cartes de valeur repérées dans l'inventaire
     REPORT = "📊 Bilan"           # bilan du soir
     RECAP = "🩺 Récap"            # récap périodique des workers
 

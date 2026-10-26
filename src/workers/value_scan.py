@@ -1,44 +1,35 @@
-"""Module I : cartes de valeur oubliées dans l'inventaire.
+"""Module I : cotes de toute la collection, pour la défausse des derniers exemplaires.
 
-La vente automatique (AUTO_LIST) ne vend que des doublons, et ne demande la cote que de ceux-là. Une carte Commune
-ou Peu commune dont on n'a qu'un exemplaire peut pourtant valoir cher : le prix suit les tendances, pas la rareté.
-Toutes les VALUE_SCAN_HOURS heures, ce worker :
+La vente automatique (AUTO_LIST) ne cote que les doublons. La défausse des derniers exemplaires
+(DISCARD_LAST_COPY_RARITIES) a besoin de la cote de chaque carte, derniers exemplaires compris
+(Database.known_values). Toutes les VALUE_SCAN_HOURS heures, ce worker, sans aucun message :
 1. lit toute la collection ;
 2. cote les cartes à la suite, en requêtes de fond (seulement quand aucune autre requête n'attend : le sniper passe
    toujours avant), au plus une toutes les VALUE_SCAN_LOOKUP_SECONDS s. La route des cotes est limitée par le site :
    refusée, le rythme ralentit de moitié, puis réaccélère après une série de cotes acceptées. Les cartes jamais
-   cotées passent d'abord, les plus vues sur Wikipédia en tête (le prix suit la popularité), puis les cotes les
-   plus anciennes. Une cote de moins de VALUE_SCAN_MAX_AGE_DAYS jours est gardée ; une carte sans aucune vente est
-   recotée après VALUE_SCAN_UNSOLD_DAYS jours ;
+   cotées passent d'abord, les plus vues sur Wikipédia en tête, puis les cotes les plus anciennes. Une cote de moins
+   de VALUE_SCAN_MAX_AGE_DAYS jours est gardée ; une carte sans aucune vente est recotée après
+   VALUE_SCAN_UNSOLD_DAYS jours ;
 3. fige pour toujours la cote d'une carte sous VALUE_SCAN_FREEZE_BELOW WB (toutes ses raretés possédées) : elle n'est
-   plus jamais redemandée, ni ici ni par la vente des doublons ;
-4. signale sur Discord les cartes cotées au moins VALUE_SCAN_MIN_VALUE pas encore signalées (ou dont la cote a
-   monté de moitié depuis), avec les ventes concurrentes en cours, à la fin du passage et toutes les 3 h pendant
-   un long passage. Il ne vend rien : à toi de décider ;
-5. entre deux passages, cherche sur le marché toutes les VALUE_WATCH_MINUTES les cartes cotées au moins
-   VALUE_WATCH_MIN et garde leurs ventes en cours (table value_sightings) : la cote d'une C ou d'une PC vient souvent
-   d'une seule vente, ces relevés disent si la carte passe vraiment sur le marché, et à quel prix.
+   plus jamais redemandée, ni ici ni par la vente des doublons.
 
-Un exemplaire protégé (favori, étiquette PROTECTED_TAGS, en échange, déjà en vente) ne compte pas. La cote d'une
-carte Commune vient surtout de la moyenne du site (le bot n'observe que les ventes des raretés revendues), qui peut
-être datée : les ventes concurrentes en cours disent ce qu'elle vaut aujourd'hui.
+Un exemplaire protégé (favori, étiquette PROTECTED_TAGS, en échange, déjà en vente) ne compte pas. Les cartes de
+valeur ne sont plus signalées, surveillées sur le marché ni vendues : le 25/10, 15 mises en vente à 60 % de leur cote,
+aucune vendue ni même misée (abandonné le 26/10).
 """
 
 from __future__ import annotations
 
-import asyncio
-from collections import defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from src.config import Settings
 from src.core.client import ApiError, RateLimited
 from src.core.models import OwnedCard
 from src.core.notifier import Topic
 from src.core.pricing import ANY, Quote
-from src.core.timeutils import PARIS, in_window, next_local, now_local, utcnow
-from src.workers.base import Context, Worker
-from src.workers.inventory_manager import excluded_copies, group_by_card, spare_copies
+from src.core.timeutils import utcnow
+from src.workers.base import Worker
+from src.workers.inventory_manager import excluded_copies, group_by_card
 
 KV_KEY = "value_scan"
 ROUTE = "sales_summary"
@@ -46,39 +37,16 @@ START_DELAY = timedelta(minutes=10)  # après un démarrage, laisse d'abord le s
 MAX_SPACING = 300.0                  # espacement maximal des cotes quand la route est limitée
 SPEED_UP_AFTER = 20                  # cotes acceptées de suite avant de réaccélérer…
 SPEED_UP = 0.75                      # … doucement : chaque refus met la route en pause ≥ 60 s, sniper compris
-INTERIM_REPORT = timedelta(hours=3)  # passage long (première analyse) : cartes trouvées signalées en chemin
-RISE_TO_REPORT = 1.5                 # carte déjà signalée : de nouveau si sa cote a monté de moitié
-MAX_LINES = 15                       # cartes détaillées dans le message
 _EPOCH = datetime.min.replace(tzinfo=UTC)
-
-
-@dataclass(frozen=True)
-class Valuable:
-    card_id: str
-    title: str
-    rarity: str
-    value: float
-    observed: int       # ventes observées par le bot (0 : moyenne du site seule)
-    copies: int         # exemplaires de cette carte dans cette rareté
-    spare: bool         # un doublon, que la vente automatique peut vendre ; sinon le dernier exemplaire
-    shiny: bool         # seuls des exemplaires shiny sont libres (cote d'un exemplaire normal)
-    url: str | None
-
-    @property
-    def key(self) -> str:
-        return f"{self.card_id}|{self.rarity}"
 
 
 @dataclass
 class Cycle:
     started: datetime
     groups: dict[str, list[OwnedCard]]
-    excluded: set[str]
     candidates: list[str]   # cartes dont au moins un exemplaire est libre
-    report_due: datetime
 
 
-# ---------------------------------------------------------------- logique pure
 def free_copies(copies: list[OwnedCard], excluded: set[str]) -> list[OwnedCard]:
     """Exemplaires que tu pourrais vendre : ni favori ni protégé (étiquette, échange, déjà en vente)."""
     return [c for c in copies if not c.starred and c.id not in excluded]
@@ -86,40 +54,6 @@ def free_copies(copies: list[OwnedCard], excluded: set[str]) -> list[OwnedCard]:
 
 def owned_rarities(copies: list[OwnedCard]) -> set[str]:
     return {c.rarity or "?" for c in copies}
-
-
-def find_valuable(groups: dict[str, list[OwnedCard]], quotes: dict[str, dict[str, Quote]], excluded: set[str],
-                  min_value: int, keep: int) -> list[Valuable]:
-    """Cartes (par rareté) cotées au moins `min_value` et dont un exemplaire est libre, de la plus chère à la moins
-    chère. `keep` : exemplaires toujours gardés par la vente automatique (SELL_KEEP_COPIES)."""
-    out: list[Valuable] = []
-    for card_id, copies in groups.items():
-        spare = {c.id for c in spare_copies(copies, keep, excluded)}
-        by_rarity: dict[str, list[OwnedCard]] = defaultdict(list)
-        for copy in copies:
-            by_rarity[copy.rarity or "?"].append(copy)
-        for rarity, same in by_rarity.items():
-            free = free_copies(same, excluded)
-            q = quotes.get(card_id, {}).get(rarity) or quotes.get(card_id, {}).get(ANY)
-            if not free or not q or q.average is None or q.average < min_value:
-                continue
-            out.append(Valuable(card_id, same[0].title, rarity, q.average, q.count or 0, len(same),
-                                any(c.id in spare for c in same), all(c.is_shiny for c in free),
-                                same[0].card.page_url))
-    out.sort(key=lambda v: (-v.value, v.title))
-    return out
-
-
-def to_report(found: list[Valuable], reported: dict[str, float]) -> list[Valuable]:
-    """Cartes jamais signalées, ou dont la cote a monté de moitié depuis le dernier signalement."""
-    return [v for v in found if (before := reported.get(v.key)) is None or v.value >= before * RISE_TO_REPORT]
-
-
-def remembered(found: list[Valuable], reported: dict[str, float], unpriced: set[str]) -> dict[str, float]:
-    """Cotes à retenir : la plus haute signalée de chaque carte encore de valeur. Une carte qui ne l'est plus est
-    oubliée (signalée de nouveau si elle le redevient), sauf si elle attend sa nouvelle cote (`unpriced`)."""
-    kept = {k: v for k, v in reported.items() if k.split("|", 1)[0] in unpriced}
-    return kept | {v.key: max(v.value, reported.get(v.key, 0.0)) for v in found}
 
 
 def frozen_value(quotes: dict[str, Quote], rarities: set[str], below: int) -> dict[str, float] | None:
@@ -149,40 +83,14 @@ def to_quote(cards: dict[str, int], cache: dict[str, tuple[datetime, bool]], fro
                   key=lambda cid: (cid in cache, cache.get(cid, (_EPOCH, False))[0], -cards[cid], cid))
 
 
-def line(v: Valuable, rivals: tuple[int, int | None] | None, auto_list: bool) -> str:
-    name = f"[{v.title}]({v.url})" if v.url else v.title
-    source = f"{v.observed} vente(s) vue(s)" if v.observed else "moyenne du site"
-    if v.spare:
-        status = f"doublon ({v.copies} ex.), vendu par la vente auto" if auto_list else f"doublon ({v.copies} ex.)"
-    else:
-        status = "dernier exemplaire"
-    text = f"• **{name}** ({v.rarity}{' ✨' if v.shiny else ''}) : ~{v.value:.0f} WB ({source}) · {status}"
-    if rivals is not None:
-        count, cheapest = rivals
-        text += f" · {count} en vente, dès {cheapest} WB" if count else " · aucune autre en vente"
-    return text
-
-
-def next_watch(now: datetime, s: Settings) -> datetime:
-    """Prochaine surveillance du marché : toutes les VALUE_WATCH_NIGHT_MINUTES la nuit, toutes les VALUE_WATCH_MINUTES
-    sinon, et au plus tard au début de la nuit (moins de monde sur le site, le sniper a moins à relire)."""
-    if s.value_watch_night_minutes <= 0:
-        return now + timedelta(minutes=s.value_watch_minutes)
-    if in_window(now, s.night_start, s.night_end):
-        return now + timedelta(minutes=s.value_watch_night_minutes)
-    return min(now + timedelta(minutes=s.value_watch_minutes), next_local(s.night_start, now).astimezone(UTC))
-
-
 # ---------------------------------------------------------------------- worker
 class ValueScan(Worker):
-    name = "valeur"
-    topic = Topic.VALUE
+    name = "cotes"
+    topic = Topic.SALES
 
     async def setup(self) -> None:
         s = self.settings
         state = await self.db.kv_get(KV_KEY) or {}
-        self._reported: dict[str, float] = state.get("reported", {})
-        self._summary: str = state.get("summary", "")
         self._last_start = datetime.fromisoformat(state["started_at"]) if state.get("started_at") else None
         # Un passage interrompu (redémarrage) n'est pas compté : il reprend, sans perdre les cotes déjà demandées.
         last = self._last_start + timedelta(hours=s.value_scan_hours) if self._last_start else _EPOCH
@@ -194,27 +102,17 @@ class ValueScan(Worker):
         self._frozen_now = 0
         self._spacing = s.value_scan_lookup_seconds
         self._streak = 0
-        self._watch: dict[str, str] = state.get("watch", {})  # carte|rareté -> titre, cotées ≥ VALUE_WATCH_MIN
-        self._watch_due = utcnow() + START_DELAY
-        self._watch_summary = ""
 
     async def step(self) -> float:
         now = utcnow()
         if self._cycle is None:
-            if self._watch and now >= self._watch_due:
-                await self.watch_market()
             if now < self._next_run:
-                wait = min(1800.0, (self._next_run - now).total_seconds())
-                if self._watch:
-                    wait = min(wait, max(60.0, (self._watch_due - utcnow()).total_seconds()))
-                return wait
+                return min(1800.0, (self._next_run - now).total_seconds())
             await self.start_cycle(now)
             return self._spacing
-        if self._queue and now >= self._cycle.report_due:
-            await self.report(final=False)
         if self._queue:
             return await self.lookup()
-        await self.report(final=True)
+        await self.finish()
         return 60.0
 
     async def start_cycle(self, now: datetime) -> None:
@@ -228,11 +126,11 @@ class ValueScan(Worker):
         done = {cid for cid in candidates if owned_rarities(groups[cid]) <= frozen.get(cid, {}).keys()}
         todo = to_quote(views, await self.db.price_cache_state(), done, now, self._max_age,
                         timedelta(days=s.value_scan_unsold_days))
-        self._cycle = Cycle(now, groups, excluded, candidates, now + INTERIM_REPORT)
+        self._cycle = Cycle(now, groups, candidates)
         self._queue = todo[:s.value_scan_lookups] if s.value_scan_lookups > 0 else todo
         self._looked_up = self._frozen_now = self._streak = 0
         self._spacing = s.value_scan_lookup_seconds
-        self.log.info("inventaire : %d exemplaires, %d cartes libres (%d à cote figée), %d à coter à ce passage",
+        self.log.info("collection : %d exemplaires, %d cartes libres (%d à cote figée), %d à coter à ce passage",
                       len(rows), len(candidates), len(done), len(self._queue))
 
     def _slow_down(self) -> None:
@@ -284,135 +182,22 @@ class ValueScan(Worker):
             self._frozen_now += 1
         return bool(values)
 
-    async def analyse(self) -> tuple[list[Valuable], int, set[str]]:
-        """(cartes de valeur, cartes cotées, cartes encore sans cote), sans aucune requête de cote. Les cotes en
-        cache sous le seuil (venues de la vente des doublons ou d'un passage interrompu) sont figées au passage."""
+    async def finish(self) -> None:
+        """Fin du passage (le suivant dans VALUE_SCAN_HOURS) : les cotes en cache sous le seuil (venues de la vente des
+        doublons ou d'un passage interrompu) sont figées, sans aucune requête."""
         cycle = self._cycle
         assert cycle is not None
         frozen = await self.db.frozen_values()
-        quotes: dict[str, dict[str, Quote]] = {}
+        priced = 0
         for cid in cycle.candidates:
             if owned_rarities(cycle.groups[cid]) <= frozen.get(cid, {}).keys():
-                quotes[cid] = {r: Quote(v, 0) for r, v in frozen[cid].items()}
+                priced += 1
                 continue
-            quotes[cid] = await self.ctx.prices.quotes(cid, max_age=self._max_age, fetch=False)
-            await self._maybe_freeze(cid, quotes[cid])
-        unpriced = {cid for cid, q in quotes.items() if not any(x.average is not None for x in q.values())}
-        found = find_valuable(cycle.groups, quotes, cycle.excluded, self.settings.value_scan_min_value,
-                              self.settings.sell_keep_copies)
-        return found, len(quotes) - len(unpriced), unpriced
-
-    async def report(self, *, final: bool) -> None:
-        """Signale les nouvelles cartes de valeur ; `final` : fin du passage (le suivant dans VALUE_SCAN_HOURS)."""
-        cycle = self._cycle
-        assert cycle is not None
-        s = self.settings
-        found, priced, unpriced = await self.analyse()
-        fresh = to_report(found, self._reported)
-        if fresh:
-            self.send_report(fresh, await self._rivals(fresh[:MAX_LINES]), priced, len(cycle.candidates))
-        self._reported = remembered(found, self._reported, unpriced)
-        self._watch = {v.key: v.title for v in found if 0 < s.value_watch_min <= v.value}
-        self._summary = (f"{'Dernière analyse' if final else 'Analyse en cours'} le {now_local():%d/%m à %H:%M} : "
-                         f"{priced}/{len(cycle.candidates)} cartes cotées, {len(found)} à {s.value_scan_min_value} "
-                         f"WB ou plus ({len(fresh)} nouvelle(s))")
-        if final:
-            self._last_start, self._cycle = cycle.started, None
-            self._next_run = cycle.started + timedelta(hours=s.value_scan_hours)
-        else:
-            cycle.report_due = utcnow() + INTERIM_REPORT
-        await self.db.kv_set(KV_KEY, {"started_at": self._last_start.isoformat() if self._last_start else None,
-                                      "reported": self._reported, "summary": self._summary, "watch": self._watch})
-        self.log.info("%s ; %d cote(s) demandée(s) au site, %d figée(s), %d restante(s)", self._summary,
-                      self._looked_up, self._frozen_now, len(self._queue))
-
-    async def watch_market(self) -> None:
-        """Cherche chaque carte surveillée sur le marché (requêtes de fond) et garde ses ventes en cours, autres
-        vendeurs, toutes raretés."""
-        s = self.settings
-        me = (self.api.user_id or "").lower()
-        titles = {key.split("|", 1)[0]: title for key, title in self._watch.items()}
-        seen = failed = 0
-        for card_id, title in titles.items():
-            try:
-                auctions, _ = await self.api.market_page(sort="ending_soon", q=title, limit=50, background=True)
-            except (ApiError, RateLimited) as exc:
-                self.log.debug("ventes de %s illisibles (%s)", title, exc)
-                failed += 1
-                continue
-            now = utcnow()
-            on_sale = [a for a in auctions if a.catalog_id == card_id and a.status == "active" and a.end_at > now
-                       and (a.seller_id or "").lower() != me]
-            new = await self.db.record_sightings([{
-                "auction_id": a.id, "card_id": card_id, "title": a.title, "rarity": a.rarity,
-                "is_shiny": int(a.shiny), "base_amount": a.base_amount, "current_bid": a.current_bid,
-                "end_at": a.end_at.isoformat(), "seen_at": now.isoformat()} for a in on_sale])
-            seen += len(on_sale)
-            for a in on_sale:
-                if a.id in new:
-                    self.log.info("marché : %s (%s%s) en vente, départ %d WB, mise %s, fin %s", a.title, a.rarity,
-                                  " ✨" if a.shiny else "", a.base_amount, a.current_bid or "aucune",
-                                  f"{a.end_at.astimezone(PARIS):%d/%m %H:%M}")
-        self._watch_due = next_watch(utcnow(), s)
-        week = await self.db.sightings_since(utcnow() - timedelta(days=7))
-        cards = {r["card_id"] for r in week}
-        self._watch_summary = (f"Marché des cartes à {s.value_watch_min} WB ou plus (7 j) : {len(week)} vente(s) "
-                               f"repérée(s) pour {len(cards)}/{len(titles)} carte(s)")
-        self.log.info("surveillance du marché : %d carte(s) cherchée(s), %d vente(s) en cours%s ; %s", len(titles),
-                      seen, f", {failed} recherche(s) en échec" if failed else "", self._watch_summary)
-
-    async def _rivals(self, cards: list[Valuable]) -> dict[str, tuple[int, int | None]]:
-        """Ventes en cours de chaque carte (autres vendeurs, même rareté, pas shiny) : (nombre, moins chère)."""
-        me = (self.api.user_id or "").lower()
-        now = utcnow()
-        out: dict[str, tuple[int, int | None]] = {}
-        for v in cards:
-            try:
-                auctions, _ = await self.api.market_page(sort="ending_soon", q=v.title, limit=50)
-            except ApiError as exc:
-                self.log.debug("ventes de %s illisibles (%s)", v.title, exc)
-                continue
-            prices = [a.min_bid for a in auctions if a.catalog_id == v.card_id and a.rarity == v.rarity
-                      and not a.shiny and a.status == "active" and a.end_at > now
-                      and (a.seller_id or "").lower() != me]
-            out[v.key] = (len(prices), min(prices) if prices else None)
-        return out
-
-    def send_report(self, fresh: list[Valuable], rivals: dict[str, tuple[int, int | None]], priced: int,
-                    total: int) -> None:
-        s = self.settings
-        lines = [line(v, rivals.get(v.key), s.auto_list) for v in fresh[:MAX_LINES]]
-        if len(fresh) > MAX_LINES:
-            lines.append(f"… et {len(fresh) - MAX_LINES} autre(s) : `python -m src.main value`")
-        coverage = f"{priced}/{total} cartes cotées"
-        if self._queue:
-            coverage += f", {len(self._queue)} encore à coter (analyse en cours)"
-        coverage += ". Rien n'est vendu automatiquement, sauf les doublons par la vente auto."
-        self.notifier.info(f"{len(fresh)} carte(s) de valeur dans ton inventaire", "\n".join(lines),
-                           sections=[("Cotes", coverage)], important=True)
-
-    def recap(self) -> list[str]:
-        if self._cycle is not None:
-            lines = [f"Analyse en cours : {self._looked_up} cote(s) demandée(s), {len(self._queue)} restante(s), "
-                     f"une toutes les {self._spacing:.0f} s au mieux"]
-        else:
-            lines = [self._summary or "Pas encore d'analyse"]
-        return lines + ([self._watch_summary] if self._watch_summary else [])
-
-
-# ------------------------------------------------------------------- CLI
-async def cli(ctx: Context, lookups: int) -> str:
-    """Toutes les cartes de valeur de l'inventaire, d'après les cotes en cache (+ `lookups` demandées au site)."""
-    worker = ValueScan(ctx)
-    await worker.setup()
-    await worker.start_cycle(utcnow())
-    worker._queue = worker._queue[:lookups]
-    while worker._queue:
-        if (paused := ctx.client.route_paused_for(ROUTE)) > 0:
-            await asyncio.sleep(paused + 1)
-        await worker.lookup()  # espacées par le client, comme toute requête
-    found, priced, unpriced = await worker.analyse()
-    s = ctx.settings
-    head = (f"{priced}/{priced + len(unpriced)} cartes libres cotées, {len(found)} à {s.value_scan_min_value} WB "
-            "ou plus :")
-    return "\n".join([head, *(line(replace(v, url=None), None, s.auto_list).replace("**", "") for v in found)])
+            quotes = await self.ctx.prices.quotes(cid, max_age=self._max_age, fetch=False)
+            priced += any(q.average is not None for q in quotes.values())
+            await self._maybe_freeze(cid, quotes)
+        self._last_start, self._cycle = cycle.started, None
+        self._next_run = cycle.started + timedelta(hours=self.settings.value_scan_hours)
+        await self.db.kv_set(KV_KEY, {"started_at": cycle.started.isoformat()})
+        self.log.info("cotes de la collection : %d/%d cartes cotées ; %d cote(s) demandée(s) au site, %d figée(s)",
+                      priced, len(cycle.candidates), self._looked_up, self._frozen_now)

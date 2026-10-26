@@ -248,20 +248,19 @@ class Settings(BaseSettings):
     discard_max_value: int = 2
     discard_keep_copies: int = 1
     discard_unknown_price_is_worthless: bool = False
-    # Raretés défaussées même en dernier exemplaire (la carte quitte la collection), si l'analyse de valeur l'a cotée
-    # et qu'aucune vente connue ne dépasse DISCARD_MAX_VALUE (ou qu'elle n'en a aucune). Vide = jamais.
+    # Raretés défaussées même en dernier exemplaire (la carte quitte la collection), si le module I (VALUE_SCAN_*) l'a
+    # cotée et qu'aucune vente connue ne dépasse DISCARD_MAX_VALUE (ou qu'elle n'en a aucune). Vide = jamais.
     discard_last_copy_rarities: CsvList = Field(default_factory=list)
     discard_max_per_run: int = 250  # exemplaires défaussés par passage au plus (0 = sans limite)
     achievement_milestones: IntList = Field(default_factory=list)
     achievement_count_mode: Literal["total", "unique"] = "total"
     achievement_margin: int = 50
 
-    # --- Module I : cartes de valeur dans l'inventaire ------------------------------
-    # Toutes les N heures, toute la collection est cotée, derniers exemplaires compris (la vente automatique ne
-    # vend que des doublons), et les cartes cotées au moins VALUE_SCAN_MIN_VALUE sont signalées sur Discord.
+    # --- Module I : cotes de toute la collection (défausse des derniers exemplaires) ------
+    # Toutes les N heures, toute la collection est cotée, derniers exemplaires compris (la vente automatique ne cote
+    # que des doublons) : la défausse de DISCARD_LAST_COPY_RARITIES s'en sert. Aucun message.
     enable_value_scan: bool = True
     value_scan_hours: float = 12.0
-    value_scan_min_value: int = 100
     # Cotes demandées au site par passage (0 = toutes), au plus une toutes les N s, et seulement quand aucune autre
     # requête n'attend. La route des cotes est limitée (18/10 : refusée 3 fois en 4 min au seul sniper) : refusée,
     # le rythme ralentit de moitié, puis réaccélère. Une cote de moins de VALUE_SCAN_MAX_AGE_DAYS jours est gardée ;
@@ -273,22 +272,6 @@ class Settings(BaseSettings):
     # Une carte cotée sous N WB (toutes ses raretés possédées) garde cette cote pour toujours : jamais redemandée,
     # ni par l'analyse ni par la vente des doublons (0 = jamais figée).
     value_scan_freeze_below: int = 50
-    # Les cartes cotées au moins VALUE_WATCH_MIN sont cherchées sur le marché toutes les VALUE_WATCH_MINUTES, en
-    # requêtes de fond : leurs ventes en cours sont gardées (table value_sightings), pour savoir si elles passent
-    # vraiment sur le marché et à quel prix. 0 = pas de surveillance. La nuit (NIGHT_START-NIGHT_END), moins de monde
-    # sur le site et moins de ventes à relire pour le sniper : toutes les VALUE_WATCH_NIGHT_MINUTES (0 = comme le jour).
-    value_watch_min: int = 500
-    value_watch_minutes: float = 120.0
-    value_watch_night_minutes: float = 30.0
-    # Vente des cartes de valeur : une carte surveillée (VALUE_WATCH_MIN) cotée au moins VALUE_SELL_MIN est mise en
-    # vente pour VALUE_SELL_MINUTES, une seule à la fois, à VALUE_SELL_SHARE de sa cote (jamais sous la plus haute
-    # mise vue sur le marché), dernier exemplaire et exemplaire étiqueté compris. Une place de vente lui est gardée ;
-    # les reventes et les doublons se partagent les autres. Jamais un favori, un shiny, une carte achetée par le bot
-    # ni un titre de VALUE_SELL_EXCLUDE. 0 = jamais.
-    value_sell_min: int = 1000
-    value_sell_share: float = 0.6
-    value_sell_minutes: int = 60
-    value_sell_exclude: CsvList = Field(default_factory=list)
 
     # --- Module G : collection (cartes gardées, jamais revendues) ---------------------
     collection_sets: CsvList = Field(default_factory=list)    # « jours » = les 366 jours de l'année

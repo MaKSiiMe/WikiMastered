@@ -74,13 +74,6 @@ CREATE INDEX IF NOT EXISTS idx_observed_card ON observed_sales (card_id, ended_a
 -- Plus haut prix observé de chaque carte parmi les ventes purgées (OBSERVED_KEEP_DAYS) : la défausse ne doit pas
 -- oublier qu'une carte s'est déjà vendue cher.
 CREATE TABLE IF NOT EXISTS observed_max (card_id TEXT PRIMARY KEY, price INTEGER NOT NULL);
-
--- Ventes en cours des cartes de valeur de l'inventaire (VALUE_WATCH_MIN) : la carte passe-t-elle sur le marché ?
-CREATE TABLE IF NOT EXISTS value_sightings (
-    auction_id TEXT PRIMARY KEY, card_id TEXT NOT NULL, title TEXT, rarity TEXT, is_shiny INTEGER NOT NULL DEFAULT 0,
-    base_amount INTEGER, current_bid INTEGER, end_at TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_sightings_card ON value_sightings (card_id, end_at);
 """
 
 
@@ -113,10 +106,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("observed_sales", "seen_gap", "INTEGER"),
 ]
 # Vestiges d'anciennes versions, supprimés au démarrage d'une base existante.
-# Paquets (ouverts par l'extension depuis le 16/10) et tendances (arrêtées le 19/10) : retirés le 25/10.
+# Paquets (ouverts par l'extension depuis le 16/10) et tendances (arrêtées le 19/10) : retirés le 25/10. Ventes en
+# cours des cartes de valeur (surveillance du marché) : retirées le 26/10.
 OBSOLETE = ["DROP TABLE IF EXISTS trend_alerts", "DROP INDEX IF EXISTS idx_auctions_title",
             *(f"DROP TABLE IF EXISTS {t}" for t in ("pulls", "pack_opens", "pack_checks", "trend_signals", "trend_terms",
-                                                     "pageviews"))]
+                                                     "pageviews", "value_sightings"))]
 # Ventes observées gardées N jours (estimations, ventes factices, commandes hours et gifs).
 OBSERVED_KEEP_DAYS = 60
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
@@ -553,24 +547,6 @@ class Database:
         row = await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE status = 'scheduled'{extra}")
         return int(row["n"]) if row else 0
 
-    async def open_listings_count(self, reason: str) -> int:
-        """Ventes pas encore réglées (programmées, en cours, incertaines) dont le motif commence par `reason`."""
-        row = await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE reason LIKE ? AND status IN {LISTING_OPEN}",
-                              (f"{reason}%",))
-        return int(row["n"]) if row else 0
-
-    async def last_listed(self, reason: str) -> dict[str, datetime]:
-        """carte|rareté -> dernière mise en vente programmée dont le motif commence par `reason`."""
-        rows = await self._all("SELECT card_id, rarity, MAX(created_at) AS at FROM listings WHERE reason LIKE ? "
-                               "GROUP BY card_id, rarity", (f"{reason}%",))
-        return {f"{r['card_id']}|{r['rarity']}": datetime.fromisoformat(r["at"]) for r in rows}
-
-    async def best_sighting_bid(self, card_id: str, rarity: str, since: datetime) -> int | None:
-        """Plus haute mise vue depuis `since` sur une vente en cours de cette carte (même rareté, pas shiny)."""
-        row = await self._one("SELECT MAX(current_bid) AS bid FROM value_sightings WHERE card_id = ? AND rarity = ? "
-                              "AND is_shiny = 0 AND last_seen >= ?", (card_id, rarity, iso(since)))
-        return int(row["bid"]) if row and row["bid"] is not None else None
-
     async def scheduled_owned_ids(self) -> set[str]:
         rows = await self._all("SELECT owned_card_id FROM listings WHERE status IN ('scheduled', 'waiting', 'posted', "
                                "'uncertain')")
@@ -602,25 +578,6 @@ class Database:
             rows,
         )
         await self.db.commit()
-
-    async def record_sightings(self, rows: list[dict[str, Any]]) -> set[str]:
-        """Ventes en cours d'une carte de valeur ; renvoie celles vues pour la première fois."""
-        if not rows:
-            return set()
-        known = {r["auction_id"] for r in await self._all(
-            f"SELECT auction_id FROM value_sightings WHERE auction_id IN ({','.join('?' * len(rows))})",
-            [r["auction_id"] for r in rows])}
-        await self.db.executemany(
-            "INSERT INTO value_sightings (auction_id, card_id, title, rarity, is_shiny, base_amount, current_bid, "
-            "end_at, first_seen, last_seen) VALUES (:auction_id, :card_id, :title, :rarity, :is_shiny, :base_amount, "
-            ":current_bid, :end_at, :seen_at, :seen_at) ON CONFLICT(auction_id) DO UPDATE SET "
-            "current_bid = excluded.current_bid, end_at = excluded.end_at, last_seen = excluded.last_seen", rows)
-        await self.db.commit()
-        return {r["auction_id"] for r in rows} - known
-
-    async def sightings_since(self, since: datetime) -> list[aiosqlite.Row]:
-        return await self._all("SELECT * FROM value_sightings WHERE end_at >= ? ORDER BY card_id, end_at",
-                               (iso(since),))
 
     async def harvest_ended_auctions(self, before: datetime, max_gap_seconds: float = 120) -> int:
         """Transforme les enchères vues juste avant leur fin en ventes observées.
@@ -835,7 +792,6 @@ class Database:
             "price_history": ("observed_at < ?", before(60)),
             "price_cache": ("fetched_at < ?", before(30)),
             "observed_sales": ("ended_at < ?", before(OBSERVED_KEEP_DAYS)),
-            "value_sightings": ("end_at < ?", before(120)),
         }
         removed: dict[str, int] = {}
         for table, (where, value) in rules.items():
