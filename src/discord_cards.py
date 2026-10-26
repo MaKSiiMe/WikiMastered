@@ -15,12 +15,13 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any
 
 import discord
 from discord import app_commands
 
-from src import keeps, overrides, pauses, snipes
+from src import account, keeps, overrides, pauses, snipes
 from src.core.database import FIRE_SALE_REASON
 from src.core.models import OwnedCard
 from src.core.timeutils import utcnow
@@ -123,6 +124,31 @@ def card_lines(copies: list[OwnedCard], excluded: set[str], kept: list[keeps.Kee
         got = f"obtenue le {paris(c.obtained_at)}" if c.obtained_at else ""
         lines.append(f"**{c.rarity or '?'}** {got}" + (f" · {' · '.join(notes)}" if notes else ""))
     return lines
+
+
+def value_embed(value: dict, snapshot: dict) -> discord.Embed:
+    """/valeur : le total en gros, puis d'où il vient, la collection par rareté et les cartes les plus chères."""
+    lines = [f"## {wb(value['total'])} WB"]
+    if value["previous"]:
+        day, before = value["previous"]
+        lines.append(f"{wb(value['total'] - before, True)} WB depuis le {day[8:10]}/{day[5:7]}")
+    unknown = f" · {snapshot['unknown']} sans estimation" if snapshot["unknown"] else ""
+    lines += ["", f"💰 Solde : **{wb(value['balance'])} WB**",
+              f"🃏 Cartes : **{wb(value['cards'])} WB** ({wb(snapshot['copies'])} exemplaires{unknown})",
+              f"🏷️ En vente : **{wb(value['selling'])} WB** ({value['listings']} vente(s), au prix de départ)",
+              f"⏳ Mises en tête : **{wb(value['bids'])} WB** ({value['leading']} enchère(s))"]
+    embed = discord.Embed(title="Valeur du compte", description="\n".join(lines), color=COLOR)
+    rarities = [f"**{r}** {wb(n)} · {wb(v)} WB" for r, (n, v) in snapshot["by_rarity"].items() if n]
+    if rarities:
+        embed.add_field(name="Cartes par rareté", value="\n".join(rarities)[:1024], inline=True)
+    if snapshot["top"]:
+        embed.add_field(name="Les plus chères", inline=True, value="\n".join(
+            f"**{rarity}**{' ✨' if shiny else ''} {title[:30]} · {wb(v)} WB"
+            for v, title, rarity, shiny in snapshot["top"])[:1024])
+    counted = datetime.fromisoformat(snapshot["at"])
+    embed.set_footer(text=f"Collection comptée il y a {ago(utcnow() - counted)} · estimation du bot (ventes "
+                          "observées, cote du site)")
+    return embed
 
 
 def sellable(copies: list[OwnedCard], excluded: set[str], rarity: str = "") -> tuple[OwnedCard | None, str]:
@@ -386,6 +412,24 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         if sniper is not None:
             buttons.append(("🎯 Demander…", discord.ButtonStyle.secondary, snipe_pressed))
         await interaction.followup.send(embed=embed, view=Buttons(owner, buttons))
+
+    # ------------------------------------------------------------ valeur du compte
+    async def value_message(refresh: bool) -> tuple[discord.Embed, Buttons]:
+        snapshot = await account.collection_snapshot(ctx, refresh=refresh)
+        embed = value_embed(await account.account_value(ctx, snapshot), snapshot)
+        return embed, Buttons(owner, [("🔄 Recompter la collection", discord.ButtonStyle.secondary, recount)])
+
+    async def recount(interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(content="⏳ Je relis toute ta collection (2-3 min, le sniper passe "
+                                                        "avant)…", view=None)
+        embed, view = await value_message(True)
+        await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+    @tree.command(name="valeur", description="Valeur du compte : solde + cartes + ventes en cours + mises en tête")
+    async def valeur(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        embed, view = await value_message(False)
+        await interaction.followup.send(embed=embed, view=view)
 
     # ------------------------------------------------------------ ventes suivies
     @tree.command(name="opportunites", description="Ventes suivies par le sniper et son plafond pour chacune")

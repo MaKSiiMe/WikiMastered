@@ -118,7 +118,7 @@ async def test_discord_commands_are_registered(tmp_path):
     names = {c.name for c in bot.tree.get_commands()}  # type: ignore[attr-defined]
     assert names == {"bilan", "roi", "solde", "positions", "ventes", "prix", "collection", "sniper", "snipe",
                      "snipes", "annuler", "etat", "verif-faite", "pause", "reprise", "garder", "gardees", "liberer",
-                     "vendre", "plafond-collection", "carte", "opportunites", "defausse", "doublons"}
+                     "vendre", "plafond-collection", "carte", "opportunites", "defausse", "doublons", "valeur"}
     assert src.main.roi_status  # les fonctions appelées par les commandes existent
     embed, file = text_embed("t", "ligne\n" * 1000)
     assert file is not None and len(embed.description) < 4096

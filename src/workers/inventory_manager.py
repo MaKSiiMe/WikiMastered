@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 
 from src import keeps
+from src.account import store_collection
 from src.config import RARITY_RANK, Settings
 from src.core.api import COLLECTION_PAGE_SIZE
 from src.core.client import ApiError, RateLimited, UncertainMutation
@@ -432,6 +433,7 @@ class InventoryManager(Worker):
     async def snapshot(self, lookups: int | None = None
                        ) -> tuple[dict[str, list[OwnedCard]], set[str], dict[str, dict[str, Quote]], int]:
         rows = await self.api.load_collection()
+        await store_collection(self.ctx, rows)  # valeur du compte (/valeur), sans autre lecture
         groups = group_by_card(rows)
         excluded = await excluded_copies(self.ctx, rows)
         keep = min(self.settings.sell_keep_copies, max(1, self.settings.discard_keep_copies))
