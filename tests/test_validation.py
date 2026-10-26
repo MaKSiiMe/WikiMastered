@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -692,4 +693,48 @@ async def test_waiting_position_duration_chosen_when_posted(tmp_path, monkeypatc
     await InventoryManager(ctx).post_due_listings()
     row = await db._one("SELECT duration_minutes, status FROM listings WHERE title = 'Bordeaux'")
     assert row["status"] == "simulated" and row["duration_minutes"] == 720
+    await db.close()
+
+
+def test_fire_sale_lasts_at_least_three_hours():
+    """26/10 à 23:23 (Paris), Mark Wahlberg ✨ n'avait qu'1 h (seule durée finissant à 00-03 h) : au moins 3 h, quitte
+    à viser la fenêtre de 06-09 h."""
+    from src.workers.inventory_manager import plan_fire_sale
+
+    now = datetime(2026, 10, 26, 23, 23, tzinfo=PARIS)
+    options = [10, 30, 60, 180, 360, 720, 1440]
+    post_at, minutes, end = plan_fire_sale(now, options, 360, random.Random(1), min_minutes=180)
+    assert minutes >= 180 and post_at >= now
+    assert 0 <= end.hour < 3 or 6 <= end.hour < 9
+    _, short, _ = plan_fire_sale(now, options, 360, random.Random(1))
+    assert short <= 60  # sans durée minimale : comme avant
+
+
+def test_expensive_positions_reach_the_fire_sale_sooner():
+    from src.config import Settings
+    from src.workers.inventory_manager import relist_limits
+
+    s = Settings(_env_file=None)
+    assert relist_limits(6119, s) == (1, 2)  # une remise à -10 %, puis 1 WB au 2e invendu
+    assert relist_limits(400, s) == (2, 3)
+    assert relist_limits(6119, Settings(_env_file=None, position_fire_sale_after=0)) == (1, 0)
+    assert relist_limits(6119, Settings(_env_file=None, position_expensive_from=0)) == (2, 3)
+
+
+@pytest.mark.asyncio
+async def test_expensive_position_fire_sale_after_two_unsold(tmp_path):
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_expensive_from=100)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    inv = InventoryManager(ctx)
+    await simulated_position(db, 400)  # achetée 100 : « chère » avec POSITION_EXPENSIVE_FROM=100
+    await seed_observed(db, "c1", [300, 310, 290])
+    await inv.settle_listings()  # 1er invendu : une remise à -10 %
+    row = await db._one("SELECT base_amount, relist_count FROM listings ORDER BY id DESC LIMIT 1")
+    assert (row["base_amount"], row["relist_count"]) == (360, 1)
+    await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = 2",
+                   ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
+    await inv.settle_listings()  # 2e invendu : revente à 1 WB, au moins 3 h
+    row = await db._one("SELECT base_amount, duration_minutes, reason FROM listings ORDER BY id DESC LIMIT 1")
+    assert row["base_amount"] == 1 and row["duration_minutes"] >= 180 and row["reason"].startswith("liquidation")
     await db.close()

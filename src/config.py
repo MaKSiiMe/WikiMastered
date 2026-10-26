@@ -234,6 +234,15 @@ class Settings(BaseSettings):
     # à 00-03 h ou 06-09 h, contre ×0,81 et 22 % sous la moitié à 18-21 h. 0 = jamais.
     position_fire_sale_after: int = 3
     position_fire_sale_minutes: int = 360
+    # Durée minimale d'une revente à 1 WB : le 26/10, Mark Wahlberg ✨ (achetée 6119) n'est restée qu'1 h en vente
+    # (seule durée qui finissait dans la fenêtre 00-03 h), vendue 5000. Plus courte, elle vise la fenêtre suivante.
+    position_fire_sale_min_minutes: int = 180
+    # Positions chères (achetées ≥ POSITION_EXPENSIVE_FROM WB) : moins de remises avant la revente à 1 WB, le capital
+    # et la place de vente ne restent pas bloqués 2 jours (Mark Wahlberg : 7037, 6333, 5700, 5508 en 48 h, toutes
+    # invendues, puis 5000 à 1 WB). 0 = mêmes règles pour toutes.
+    position_expensive_from: int = 1000
+    position_expensive_max_relists: int = 1
+    position_expensive_fire_sale_after: int = 2
 
     # --- Module C : inventaire --------------------------------------------------
     inventory_interval_minutes: float = 360.0
