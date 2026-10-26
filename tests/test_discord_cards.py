@@ -153,3 +153,25 @@ async def test_unsold_resale_message_offers_buttons_for_the_new_listing(tmp_path
     assert relist["base_amount"] == 360
     assert sent == [("Revente sans acheteur", {"kind": "relist", "listing": relist["id"]})]
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_turning_off_duplicate_sales_cancels_queued_duplicates_only(tmp_path):
+    from src.core.database import MANUAL_SALE_REASON
+
+    client, notifier = make_client(tmp_path, trades)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    common = {"card_id": "c", "title": "Ada", "rarity": "C", "base_amount": 20, "duration_minutes": 360,
+              "post_at": now, "target_end": now + timedelta(hours=6)}
+    dup = await db.schedule_listing(owned_card_id="d", reason="cote 25", **common)
+    manual = await db.schedule_listing(owned_card_id="m", reason=f"{MANUAL_SALE_REASON} (Discord)", **common)
+    assert await db.cancel_scheduled_duplicates() == 1
+    assert (await db.get_listing(dup))["status"] == "cancelled"
+    assert (await db.get_listing(manual))["status"] == "scheduled"
+    await overrides.set_value(ctx, "auto_discard", False)
+    ctx.settings.auto_discard = True
+    await overrides.load(ctx)
+    assert ctx.settings.auto_discard is False
+    await db.close()

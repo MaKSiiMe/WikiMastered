@@ -95,12 +95,14 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | `/annuler <carte>` | Ne plus demander une carte |
 | `/etat` | Santé du bot : session, vérification anti-bot, routes du site en pause, chaque worker. Boutons : vérification faite, pause / reprise du sniper, actualiser |
 | `/verif-faite` | Vérification anti-bot faite dans le navigateur : la prochaine mise part tout de suite pour la tester |
-| `/pause [quoi] [durée]` | Met en pause le sniper (par défaut), les ventes ou tout (sauf la garde), 1 h par défaut ou jusqu'à `/reprise`. Gardée après un redémarrage |
+| `/pause [quoi] [durée]` | Met en pause le sniper (par défaut), les ventes (reventes du sniper comprises), les cotes ou tout (sauf la garde), 1 h par défaut ou jusqu'à `/reprise`. Gardée après un redémarrage |
 | `/reprise [quoi]` | Reprend ce qui est en pause |
 
 | `/garder <carte> [rareté]` | Ne jamais vendre ni défausser cette carte ; arrête sa revente si le bot la revendait |
 | `/gardees`, `/liberer <carte>` | Voir les cartes gardées, en libérer une |
 | `/vendre <carte> <prix> [rareté]` | Vendre ton exemplaire le plus récent (hors favori, shiny, gardé) à ce prix, à la première place libre, avant les autres ventes. Confirmée par un bouton |
+| `/defausse [activer\|désactiver]` | Défausse automatique ; coupée, le worker `cotes` (qui ne sert qu'à elle) est mis en pause. Les reventes continuent |
+| `/doublons [activer\|désactiver]` | Vente automatique des doublons ; coupée, les doublons programmés sont annulés |
 | `/plafond-collection [wb]` | Voir ou changer la mise maximale d'une carte de collection manquante, sans redéployer |
 | `/carte <carte>` | Tes exemplaires, les ventes observées, ce que le bot en fait. Boutons : garder, vendre, demander au sniper |
 | `/opportunites` | Les ventes que le sniper surveille et son plafond pour chacune |
