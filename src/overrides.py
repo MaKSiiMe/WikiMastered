@@ -8,7 +8,7 @@ from typing import Any
 from src.workers.base import Context
 
 KV_KEY = "overrides"
-ALLOWED = {"collection_max_price"}
+ALLOWED = {"collection_max_price", "auto_discard", "auto_list"}
 
 
 async def load(ctx: Context) -> dict[str, Any]:

@@ -596,6 +596,14 @@ class Database:
         row = await self._one(f"SELECT COUNT(*) AS n FROM listings WHERE status = 'scheduled'{extra}")
         return int(row["n"]) if row else 0
 
+    async def cancel_scheduled_duplicates(self) -> int:
+        """Annule les doublons programmés pas encore publiés (/doublons désactiver) ; pas les ventes manuelles."""
+        cur = await self.db.execute(
+            "UPDATE listings SET status = 'cancelled', settled_at = ? WHERE bid_id IS NULL "
+            f"AND status IN ('scheduled', 'waiting') AND reason NOT LIKE '{MANUAL_SALE_REASON}%'", (iso(utcnow()),))
+        await self.db.commit()
+        return cur.rowcount
+
     async def waiting_duplicates_count(self) -> int:
         """Doublons programmés, pas encore publiés (ils attendent une place de vente)."""
         row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE bid_id IS NULL AND status = 'scheduled'")

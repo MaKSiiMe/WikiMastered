@@ -20,7 +20,7 @@ from typing import Any
 import discord
 from discord import app_commands
 
-from src import keeps, overrides, snipes
+from src import keeps, overrides, pauses, snipes
 from src.core.database import FIRE_SALE_REASON
 from src.core.models import OwnedCard
 from src.core.timeutils import utcnow
@@ -279,6 +279,50 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         log.info("Discord : plafond de collection %s -> %d WB", old, wb_max)
         await interaction.response.send_message(f"📅 Plafond de collection : {old} → **{wb_max} WB**, tout de suite "
                                                 "et après les redémarrages (remplace COLLECTION_MAX_PRICE).")
+
+    switch = [app_commands.Choice(name="activer", value=1), app_commands.Choice(name="désactiver", value=0)]
+
+    @tree.command(name="defausse", description="Activer ou couper la défausse automatique (sans toucher aux reventes)")
+    @app_commands.describe(etat="sans valeur : affiche l'état actuel")
+    @app_commands.choices(etat=switch)
+    async def defausse(interaction: discord.Interaction, etat: app_commands.Choice[int] | None = None) -> None:
+        if etat is None:
+            paused = "cotes" in ctx.pauses
+            await interaction.response.send_message(
+                f"Défausse automatique : **{'activée' if s.auto_discard else 'coupée'}**"
+                + (" · worker cotes en pause" if paused else ""))
+            return
+        on = bool(etat.value)
+        await overrides.set_value(ctx, "auto_discard", on)
+        # Le worker cotes ne sert qu'à la défausse des derniers exemplaires : en pause avec elle, ses requêtes
+        # (route des cotes, limitée) restent au sniper.
+        if on:
+            await pauses.resume(ctx, ["cotes"])
+        else:
+            await pauses.pause(ctx, ["cotes"], None)
+        log.info("Discord : défausse %s", "activée" if on else "coupée")
+        await interaction.response.send_message(
+            "🗑️ Défausse automatique **activée**, worker cotes repris." if on else
+            "🗑️ Défausse automatique **coupée** et worker cotes en pause (il ne servait qu'à elle). Les reventes du "
+            "sniper et tes ventes continuent. Gardé après les redémarrages ; `/defausse activer` pour reprendre.")
+
+    @tree.command(name="doublons", description="Activer ou couper la vente automatique des doublons")
+    @app_commands.describe(etat="sans valeur : affiche l'état actuel")
+    @app_commands.choices(etat=switch)
+    async def doublons(interaction: discord.Interaction, etat: app_commands.Choice[int] | None = None) -> None:
+        if etat is None:
+            await interaction.response.send_message(
+                f"Vente automatique des doublons : **{'activée' if s.auto_list else 'coupée'}**")
+            return
+        on = bool(etat.value)
+        await overrides.set_value(ctx, "auto_list", on)
+        log.info("Discord : vente des doublons %s", "activée" if on else "coupée")
+        cancelled = 0 if on else await ctx.db.cancel_scheduled_duplicates()
+        extra = f" {cancelled} doublon(s) programmé(s) annulé(s)." if cancelled else ""
+        await interaction.response.send_message(
+            ("💰 Vente automatique des doublons **activée**." if on else
+             "💰 Vente automatique des doublons **coupée** : les places de vente restent aux reventes du sniper et "
+             "à tes ventes.") + extra + " Gardé après les redémarrages.")
 
     # ------------------------------------------------------------ fiche d'une carte
     @tree.command(name="carte", description="Tes exemplaires d'une carte, sa cote et ce que le bot en fait")

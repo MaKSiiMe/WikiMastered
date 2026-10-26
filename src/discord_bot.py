@@ -41,7 +41,9 @@ CONFIRM_SECONDS = 120
 RARITIES = ["C", "PC", "R", "SR", "UR", "L"]
 COLOR, GREEN, ORANGE, RED, GREY = 0x5865F2, 0x57F287, 0xFEE75C, 0xED4245, 0x99AAB5
 # /pause et /reprise : ce qui est mis en pause (None : tous les workers, sauf la garde des sanctions).
-PAUSE_TARGETS = {"sniper": ["sniper"], "ventes": ["inventory"], "tout": None}
+# « ventes » arrête aussi la revente des positions du sniper : pour la défausse ou les doublons seuls, /defausse et
+# /doublons.
+PAUSE_TARGETS = {"sniper": ["sniper"], "ventes": ["inventory"], "cotes": ["cotes"], "tout": None}
 PAUSE_MINUTES = [("30 min", 30), ("1 h", 60), ("2 h", 120), ("6 h", 360), ("jusqu'à /reprise", 0)]
 VERIFY_ID = "wm:verif-faite"  # bouton du message privé, encore actif après un redémarrage du bot
 WATCH_SECONDS = 15  # vérification anti-bot demandée : vue au plus tard après ce délai
