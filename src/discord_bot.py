@@ -6,11 +6,11 @@ ne fait que répondre, et seulement à DISCORD_OWNER_ID.
 
 - Lecture : /bilan, /roi, /solde, /positions, /ventes, /prix, /collection, /sniper.
 - Actions : /snipe (confirmée par un bouton), /snipes, /annuler. Voir src/snipes.py.
-- Pilotage : /etat (avec boutons), /pause, /reprise (src/pauses.py), /verif-faite. Une vérification anti-bot
-  demandée par le site arrive aussi en message privé, avec un bouton « C'est fait ».
+- Pilotage : /etat (avec boutons), /pause, /reprise (src/pauses.py), /verif-faite. L'alerte « vérification
+  anti-bot demandée » arrive avec un bouton « C'est fait » ; levée, elle le dit.
 - Cartes : /garder, /vendre, /carte, /opportunites, /top… et les boutons des messages de vente (src/discord_cards.py).
-- Connecté, le bot envoie lui-même les messages de vente à boutons (dans le salon de leur webhook) et les alertes
-  critiques en message privé ; déconnecté, tout repart par les webhooks.
+- Connecté, le bot envoie lui-même les messages à boutons, dans le salon de leur webhook ; déconnecté, ou sans accès
+  à ce salon, ils repartent par le webhook, sans boutons. Jamais de message privé (choix du 28/10).
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ COLOR, GREEN, ORANGE, RED, GREY = 0x5865F2, 0x57F287, 0xFEE75C, 0xED4245, 0x99AA
 # /doublons.
 PAUSE_TARGETS = {"sniper": ["sniper"], "ventes": ["inventory"], "cotes": ["cotes"], "tout": None}
 PAUSE_MINUTES = [("30 min", 30), ("1 h", 60), ("2 h", 120), ("6 h", 360), ("jusqu'à /reprise", 0)]
-VERIFY_ID = "wm:verif-faite"  # bouton du message privé, encore actif après un redémarrage du bot
+VERIFY_ID = "wm:verif-faite"  # bouton de l'alerte anti-bot, encore actif après un redémarrage du bot
 WATCH_SECONDS = 15  # vérification anti-bot demandée : vue au plus tard après ce délai
 # Boutons en mémoire : actifs jusqu'au redémarrage du bot (ceux de /etat, /valeur et des ventes survivent à un
 # redémarrage : src/discord_cards.py, MessageButton). Une confirmation expire, elle (CONFIRM_SECONDS).
@@ -136,13 +136,6 @@ def state_embed(ctx: Context, workers: list[Worker], started_at: datetime) -> di
     return embed
 
 
-def antibot_embed(since: datetime, missed: int) -> discord.Embed:
-    return discord.Embed(title="🛑 Vérification anti-bot demandée", color=RED, description=(
-        f"Le site refuse les mises depuis {paris(since)}" + (f" ({missed} non placée(s))" if missed else "") +
-        ".\nFais-la dans ton navigateur (mise à la main sur le marché, ou page Paquets si elle la demande), "
-        "puis appuie sur **C'est fait** : la prochaine mise part tout de suite pour la tester."))
-
-
 Action = Callable[[discord.Interaction], Awaitable[None]]
 
 
@@ -163,7 +156,7 @@ class Buttons(discord.ui.View):
 
 
 class VerifyButton(discord.ui.View):
-    """Bouton « C'est fait » du message privé anti-bot : identifiant fixe, encore actif après un redémarrage."""
+    """Bouton « C'est fait » de l'alerte anti-bot : identifiant fixe, encore actif après un redémarrage."""
 
     def __init__(self, owner_id: int, action: Action):
         super().__init__(timeout=None)
@@ -333,62 +326,54 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         log.info("Discord : sniper repris")
         await refresh(interaction, "▶️ Sniper repris.")
 
+    antibot_alerts: list[discord.Message] = []  # alertes anti-bot à boutons, modifiées quand elle est levée
+
     async def watch_antibot() -> None:
-        """Vérification anti-bot demandée : message privé avec « C'est fait » ; levée, le message le dit."""
+        """Vérification levée (une mise est passée) : les alertes anti-bot le disent et perdent leur bouton."""
         await client.wait_until_ready()
-        alerted: datetime | None = None
-        message: discord.Message | None = None
         while not client.is_closed():
-            since = sniper.antibot_since if sniper is not None else None
-            try:
-                if sniper is not None and since is not None and since != alerted:
-                    alerted = since
-                    owner = await client.fetch_user(s.discord_owner_id)
-                    message = await owner.send(embed=antibot_embed(since, sniper.antibot_missed),
-                                               view=VerifyButton(s.discord_owner_id, verify_pressed))
-                elif since is None and alerted is not None:
-                    alerted = None
-                    if message is not None:
-                        await message.edit(embed=discord.Embed(
-                            title="✅ Vérification levée", color=GREEN,
-                            description=f"Les mises passent de nouveau ({paris(utcnow())})."), view=None)
-                    message = None
-            except discord.HTTPException as exc:  # messages privés fermés… : l'alerte du webhook reste
-                log.warning("Discord : message privé anti-bot impossible (%s)", exc)
+            if antibot_alerts and (sniper is None or sniper.antibot_since is None):
+                done = discord.Embed(title="✅ Vérification levée", color=GREEN,
+                                     description=f"Les mises passent de nouveau ({paris(utcnow())}).")
+                for message in antibot_alerts:
+                    try:
+                        await message.edit(content=None, embed=done, view=None)
+                    except discord.HTTPException as exc:  # message supprimé… : rien à modifier
+                        log.warning("Discord : alerte anti-bot non modifiée (%s)", exc)
+                antibot_alerts.clear()
             await asyncio.sleep(WATCH_SECONDS)
 
-    channels: dict[str, discord.abc.Messageable] = {}
+    channels: dict[str, discord.abc.Messageable | None] = {}
 
-    async def owner_dm() -> discord.User:
-        return client.get_user(s.discord_owner_id) or await client.fetch_user(s.discord_owner_id)
-
-    async def channel_for(url: str) -> discord.abc.Messageable:
-        """Salon d'un webhook (lu une fois) ; inaccessible au bot (salon privé…) : ton message privé."""
+    async def channel_for(url: str) -> discord.abc.Messageable | None:
+        """Salon d'un webhook (lu une fois) ; None : inaccessible au bot (salon privé…), le webhook l'envoie."""
         if url not in channels:
             try:
                 hook = await discord.Webhook.from_url(url, client=client).fetch()
                 channel = client.get_channel(hook.channel_id) or await client.fetch_channel(hook.channel_id)
                 channels[url] = channel  # type: ignore[assignment]
             except (discord.HTTPException, ValueError) as exc:
-                log.warning("Discord : salon du webhook illisible (%s), messages à boutons en privé", exc)
-                channels[url] = await owner_dm()
+                log.warning("Discord : salon du webhook illisible (%s), messages par le webhook sans boutons", exc)
+                channels[url] = None
         return channels[url]
 
-    async def with_buttons(actions: dict, embed: dict, url: str) -> bool:
-        view = message_view(actions)
-        if view is None or not client.is_ready():
+    async def with_buttons(actions: dict, embed: dict, url: str, mention: str = "") -> bool:
+        antibot = actions.get("kind") == "antibot"
+        view = VerifyButton(s.discord_owner_id, verify_pressed) if antibot else message_view(actions)
+        if view is None or not url or not client.is_ready():
             return False
-        target = await channel_for(url) if url else await owner_dm()
+        target = await channel_for(url)
+        if target is None:
+            return False
         try:
-            await target.send(embed=discord.Embed.from_dict(embed), view=view)
-        except discord.Forbidden:  # le bot ne peut pas écrire dans ce salon : en privé
-            channels[url] = await owner_dm()
-            await channels[url].send(embed=discord.Embed.from_dict(embed), view=view)
+            message = await target.send(content=mention or None, embed=discord.Embed.from_dict(embed), view=view)
+        except discord.Forbidden:  # le bot ne peut pas écrire dans ce salon : le webhook, sans boutons
+            log.warning("Discord : pas le droit d'écrire dans le salon du webhook, messages sans boutons")
+            channels[url] = None
+            return False
+        if antibot:
+            antibot_alerts.append(message)
         return True
-
-    async def direct(embed: dict) -> None:
-        if client.is_ready():
-            await (await owner_dm()).send(embed=discord.Embed.from_dict(embed))
 
     from src.discord_cards import message_view, persistent_view, register  # importe ce module : déjà chargé
 
@@ -406,7 +391,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                  "sur le serveur" if guild else "(globales : jusqu'à 1 h avant d'apparaître)")
         if sniper is not None:
             client.watch_task = asyncio.create_task(watch_antibot())  # type: ignore[attr-defined]
-        ctx.notifier.with_buttons, ctx.notifier.direct = with_buttons, direct
+        ctx.notifier.with_buttons = with_buttons
     client.setup_hook = setup_hook  # type: ignore[method-assign]
 
     @tree.command(name="etat", description="Santé du bot : session, vérification anti-bot, workers, pauses")
@@ -621,6 +606,6 @@ async def run_discord(ctx: Context, workers: list[Worker], cli: ModuleType, star
         try:
             await client.start(ctx.settings.discord_bot_token)
         finally:
-            ctx.notifier.with_buttons = ctx.notifier.direct = None  # messages de nouveau par les webhooks seuls
+            ctx.notifier.with_buttons = None  # messages de nouveau par les webhooks seuls
             if task := getattr(client, "watch_task", None):
                 task.cancel()

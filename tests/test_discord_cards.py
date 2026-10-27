@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime, timedelta
 
@@ -78,32 +79,30 @@ async def test_manual_sale_goes_first_and_keeping_cancels_a_resale(tmp_path):
 
 @pytest.mark.asyncio
 async def test_messages_with_buttons_go_through_the_bot_else_the_webhook(tmp_path):
-    posted, buttons, direct = [], [], []
+    posted, buttons = [], []
 
     def webhook(request):
-        posted.append(request.url.path)
+        posted.append(json.loads(request.content).get("content"))
         return httpx.Response(204)
 
-    notifier = DiscordNotifier("https://discord.test/api/webhooks/1/a", dry_run=False)
+    notifier = DiscordNotifier("https://discord.test/api/webhooks/1/a", dry_run=False, mention="<@1>")
     notifier._http = httpx.AsyncClient(transport=httpx.MockTransport(webhook))
 
-    async def with_buttons(actions, embed, url):
-        buttons.append((actions["kind"], embed["title"], url))
+    async def with_buttons(actions, embed, url, mention):
+        buttons.append((actions["kind"], embed["title"], url, mention))
         return actions["kind"] != "unknown"
 
-    async def dm(embed):
-        direct.append(embed["title"])
-
-    notifier.with_buttons, notifier.direct = with_buttons, dm
+    notifier.with_buttons = with_buttons
     notifier.start()
     notifier.info("Revente sans acheteur", "Ada", actions={"kind": "relist", "listing": 3})
     notifier.info("Autre", "x", actions={"kind": "unknown"})  # le bot n'en veut pas : le webhook
     notifier.critical("Session perdue", "cookie")
-    notifier.critical("Vérification anti-bot", "", dm=False)
+    notifier.critical("Vérification anti-bot", "", actions={"kind": "antibot"})
     await notifier.close()
-    assert buttons[0] == ("relist", "Revente sans acheteur", "https://discord.test/api/webhooks/1/a")
-    assert len(posted) == 3  # tout sauf le message à boutons
-    assert direct == ["Session perdue"]
+    assert buttons[0] == ("relist", "Revente sans acheteur", "https://discord.test/api/webhooks/1/a", "")
+    # Une alerte critique à bouton garde la mention ; jamais de message privé.
+    assert buttons[-1] == ("antibot", "Vérification anti-bot", "https://discord.test/api/webhooks/1/a", "<@1>")
+    assert posted == [None, "<@1>"]  # « Autre » et « Session perdue » par le webhook
 
 
 @pytest.mark.asyncio

@@ -61,9 +61,8 @@ class _Message:
     url: str | None = None
     important: bool | None = None  # True : salon principal ; False : activité ; None : selon le niveau
     # Boutons proposés par le bot Discord (DISCORD_BOT_TOKEN) : {"kind": "relist", "listing": 12}… ; sans bot, le
-    # message part par le webhook, sans boutons.
+    # message part par le webhook, sans boutons. Jamais de message privé : tout va dans les salons.
     actions: dict[str, Any] | None = None
-    dm: bool | None = None  # aussi en message privé (bot Discord) ; None : les alertes critiques seulement
 
     @property
     def main_channel(self) -> bool:
@@ -97,9 +96,8 @@ class DiscordNotifier:
         self._http = httpx.AsyncClient(timeout=15)
         self._task: asyncio.Task[None] | None = None
         # Branchés par le bot Discord quand il est connecté (src/discord_bot.py) :
-        # with_buttons(actions, embed, url du webhook) -> envoyé ? ; direct(embed) : message privé.
-        self.with_buttons: Callable[[dict[str, Any], dict[str, Any], str], Awaitable[bool]] | None = None
-        self.direct: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        # with_buttons(actions, embed, url du webhook, mention) -> envoyé par le bot dans le salon du webhook ?
+        self.with_buttons: Callable[[dict[str, Any], dict[str, Any], str, str], Awaitable[bool]] | None = None
 
     def start(self) -> None:
         if self._task is None:
@@ -117,7 +115,7 @@ class DiscordNotifier:
     def send(self, level: Level, title: str, description: str = "", *, live: bool = False,
              topic: Topic = Topic.SYSTEM, sections: list[tuple[str, str]] | None = None,
              thumbnail: str | None = None, url: str | None = None, important: bool | None = None,
-             actions: dict[str, Any] | None = None, dm: bool | None = None, **fields: Any) -> None:
+             actions: dict[str, Any] | None = None, **fields: Any) -> None:
         log_fn = log.warning if level in (Level.WARNING, Level.CRITICAL) else log.info
         # Les logs reprennent tout le message (champs et blocs), pas seulement le titre.
         parts = [description] if description else []
@@ -125,7 +123,7 @@ class DiscordNotifier:
         parts += [f"{name} : {body}" for name, body in sections or []]
         log_fn("[%s] %s %s", level.name, title, " | ".join(p for p in parts if p).replace("\n", " | "))
         msg = _Message(level, title, description, fields, live, topic, sections or [], thumbnail, url, important,
-                       actions, dm)
+                       actions)
         if not self._webhook_for(msg):
             return
         try:
@@ -205,20 +203,16 @@ class DiscordNotifier:
     async def _deliver(self, msg: _Message) -> None:
         url = self._webhook_for(msg)
         embed = self.embed(msg)
-        if (msg.dm if msg.dm is not None else msg.level is Level.CRITICAL) and self.direct:
-            try:
-                await self.direct(embed)
-            except Exception:  # noqa: BLE001 - le salon reçoit le message quand même
-                log.exception("Message privé impossible : %s", msg.title)
+        mention = self._mention if msg.level is Level.CRITICAL else ""
         if msg.actions and self.with_buttons:
             try:
-                if await self.with_buttons(msg.actions, embed, url):
+                if await self.with_buttons(msg.actions, embed, url, mention):
                     return
             except Exception:  # noqa: BLE001 - repli : le webhook, sans boutons
                 log.exception("Message à boutons impossible : %s", msg.title)
         payload: dict[str, Any] = {"username": "WikiMastered", "embeds": [embed]}
-        if msg.level is Level.CRITICAL and self._mention:
-            payload["content"] = self._mention
+        if mention:
+            payload["content"] = mention
         for _ in range(5):
             resp = await self._http.post(url, json=payload)
             if resp.status_code == 429:
