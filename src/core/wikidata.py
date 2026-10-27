@@ -5,7 +5,7 @@ le service SPARQL de Wikidata dit quelles classes cherchées chaque élément at
 - natures : « est un » (P31) puis « sous-classe de » (P279) en chaîne, ou l'élément est lui-même une sous-classe
   (« Marteau », « Pizza » sont des classes) ;
 - métiers (P106, puis P279 en chaîne) et taxons parents (P171 en chaîne : lion -> … -> Animalia) ;
-- et, pour les personnes : sexe (P21), année de naissance (P569), décès (P570), description en français.
+- et la description en français.
 
 Aucune requête au site du jeu : rien ne compte pour la vérification anti-bot. Requêtes espacées d'au moins
 SPACING secondes (le service SPARQL limite le temps de calcul par minute) ; une erreur remonte (ApiError), le lot
@@ -31,7 +31,6 @@ SPARQL = "https://query.wikidata.org/sparql"
 USER_AGENT = f"WikiMastered/1.0 (https://github.com/MaKSiiMe/WikiMastered) httpx/{httpx.__version__}"
 BATCH = 50
 SPACING = 1.0
-FEMALE = {"Q6581072", "Q1052281"}  # féminin, femme trans
 
 
 @dataclass
@@ -42,9 +41,6 @@ class Facts:
     natures: set[str] = field(default_factory=set)  # classes cherchées atteintes par P31/P279* ou P279+
     jobs: set[str] = field(default_factory=set)     # métiers cherchés atteints par P106/P279*
     taxa: set[str] = field(default_factory=set)     # taxons cherchés atteints par P171*
-    female: bool = False
-    birth_year: int | None = None
-    dead: bool = False
     description: str = ""
 
     def to_json(self) -> dict[str, Any]:
@@ -56,9 +52,7 @@ class Facts:
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Facts:
         return cls(qid=data.get("qid"), natures=set(data.get("natures") or ()), jobs=set(data.get("jobs") or ()),
-                   taxa=set(data.get("taxa") or ()), female=bool(data.get("female")),
-                   birth_year=data.get("birth_year"), dead=bool(data.get("dead")),
-                   description=str(data.get("description") or ""))
+                   taxa=set(data.get("taxa") or ()), description=str(data.get("description") or ""))
 
 
 def _qid(uri: str) -> str:
@@ -136,21 +130,13 @@ class Wikidata:
                     facts.jobs.add(target)
                 elif via == "t" and target in taxa:
                     facts.taxa.add(target)
-            rows = await self._sparql(f"""SELECT ?item ?sex ?birth ?death ?desc WHERE {{
+            rows = await self._sparql(f"""SELECT ?item ?desc WHERE {{
   VALUES ?item {{ {chunk} }}
-  OPTIONAL {{ ?item wdt:P21 ?sex }} OPTIONAL {{ ?item wdt:P569 ?birth }} OPTIONAL {{ ?item wdt:P570 ?death }}
-  OPTIONAL {{ ?item schema:description ?desc FILTER(lang(?desc) = "fr") }}
+  ?item schema:description ?desc FILTER(lang(?desc) = "fr")
 }}""")
             for row in rows:
-                facts = out[_qid(row["item"]["value"])]
-                if "sex" in row and _qid(row["sex"]["value"]) in FEMALE:
-                    facts.female = True
-                if "birth" in row and row["birth"]["value"][:4].isdigit():
-                    year = int(row["birth"]["value"][:4])
-                    facts.birth_year = min(facts.birth_year or year, year)
-                facts.dead = facts.dead or "death" in row
                 if "desc" in row:
-                    facts.description = row["desc"]["value"]
+                    out[_qid(row["item"]["value"])].description = row["desc"]["value"]
         return out
 
     async def lookup(self, titles: list[str], natures: set[str], jobs: set[str], taxa: set[str]) -> dict[str, Facts]:

@@ -63,10 +63,6 @@ class Theme:
 @dataclass(frozen=True)
 class Rules:
     themes: tuple[Theme, ...]
-    babie: str = ""
-    babie_born_from: int = 0
-    babie_alive: bool = True
-    babie_words: tuple[str, ...] = ()
     corrections: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
@@ -82,7 +78,7 @@ class Rules:
 
     @property
     def names(self) -> list[str]:
-        return [t.name for t in self.themes] + ([self.babie] if self.babie else [])
+        return [t.name for t in self.themes]
 
 
 def _words(value: Any) -> tuple[str, ...]:
@@ -95,10 +91,7 @@ def load_rules(path: Path | None = None) -> Rules:
                          frozenset(map(str, spec.get("taxons") or ())), frozenset(map(str, spec.get("metiers") or ())),
                          _words(spec.get("description")), tuple(map(str, spec.get("sauf") or ())), bool(spec.get("seul")))
                    for name, spec in (raw.get("themes") or {}).items())
-    babie = raw.get("babie") or {}
-    return Rules(themes, str(babie.get("etiquette") or "").strip(), int(babie.get("nee_apres") or 0),
-                 bool(babie.get("vivante", True)), _words(babie.get("description")),
-                 {str(t): tuple(map(str, v or ())) for t, v in (raw.get("corrections") or {}).items()})
+    return Rules(themes, {str(t): tuple(map(str, v or ())) for t, v in (raw.get("corrections") or {}).items()})
 
 
 def describes(description: str, words: tuple[str, ...]) -> bool:
@@ -120,12 +113,7 @@ def themes_of(facts: Facts, rules: Rules) -> list[str]:
         elif person and (describes(facts.description, theme.words) if facts.description else facts.jobs & theme.jobs):
             found.append(theme.name)
     kept = [name for name in found if not set(next(t for t in rules.themes if t.name == name).unless) & set(found)]
-    kept = [name for name in kept if not next(t for t in rules.themes if t.name == name).alone or len(kept) == 1]
-    if (rules.babie and person and facts.female and describes(facts.description, rules.babie_words)
-            and facts.birth_year is not None and facts.birth_year >= rules.babie_born_from
-            and not (rules.babie_alive and facts.dead)):
-        kept.append(rules.babie)
-    return kept
+    return [name for name in kept if not next(t for t in rules.themes if t.name == name).alone or len(kept) == 1]
 
 
 async def classify(ctx: Context, wikidata: Wikidata, titles: set[str], rules: Rules,

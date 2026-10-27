@@ -18,9 +18,8 @@ from tests.test_integration import make_client, make_context
 RULES = load_rules()
 
 
-def person(description: str, *, female: bool = False, born: int | None = 1990, dead: bool = False,
-           jobs: set[str] = frozenset()) -> Facts:
-    return Facts("Q1", {"Q5", "Q729"}, set(jobs), set(), female, born, dead, description)
+def person(description: str, *, jobs: set[str] = frozenset()) -> Facts:
+    return Facts("Q1", {"Q5", "Q729"}, set(jobs), set(), description)
 
 
 def test_tag_names_ignore_emojis_hash_and_case():
@@ -49,19 +48,15 @@ def test_description_words():
 
 
 @pytest.mark.parametrize(("facts", "expected"), [
-    # Une actrice jeune : Personne, Cinéma, Babie (pas Animal : l'être humain est un animal pour Wikidata).
-    (person("actrice, productrice et mannequin israélienne", female=True, born=1985),
-     ["Personne", "Cinéma / Série", "Babie"]),
+    # Une actrice : Personne, Cinéma (pas Animal : l'être humain est un animal pour Wikidata ; pas Babie : posée à
+    # la main).
+    (person("actrice, productrice et mannequin israélienne"), ["Personne", "Cinéma / Série"]),
     # Métiers secondaires de Wikidata ignorés : la description fait foi (Camus, gardien de but étant jeune).
     (person("écrivain, philosophe et journaliste français", jobs={"Q2066131", "Q33999"}), ["Personne"]),
     # Sans description : les métiers.
     (person("", jobs={"Q2066131"}), ["Personne", "Sport"]),
     (person("rappeur et chanteur français"), ["Personne", "Musique"]),
-    # Babie : femme, née après 1960, vivante.
-    (person("actrice américaine", female=True, born=1950), ["Personne", "Cinéma / Série"]),
-    (person("princesse de Galles", female=True, born=1961, dead=True), ["Personne"]),
-    (person("femme politique française", female=True, born=1980), ["Personne"]),
-    (person("streameuse française", female=True, born=1993), ["Personne", "Babie"]),
+    (person("femme politique française"), ["Personne"]),
     # Un pays est aussi une île et une entité territoriale : Pays seul.
     (Facts("Q17", {"Q6256", "Q23442", "Q56061", "Q271669"}), ["Pays"]),
     (Facts("Q140", set(), taxa={"Q729"}), ["Animal"]),
@@ -156,7 +151,7 @@ async def test_pass_tags_kept_copy_marks_duplicates_and_unmarks_kept_copy(tmp_pa
     assert state["counts"] == {"Pays": 2, "Objet": 1}
     assert state["untagged"] == ["Xyz inconnu"]
     # Objet n'existe pas sur le site : signalé, ignoré.
-    assert "Objet" in state["missing_tags"] and "Babie" in state["missing_tags"]
+    assert "Objet" in state["missing_tags"]
     assert writes == [
         ("DELETE", {"user_card_id": "eq.f-only", "tag_id": "eq.2"}),
         ("POST", {"user_card_id": "j-old", "tag_id": 1}),
