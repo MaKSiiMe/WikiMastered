@@ -8,7 +8,7 @@ ne fait que répondre, et seulement à DISCORD_OWNER_ID.
 - Actions : /snipe (confirmée par un bouton), /snipes, /annuler. Voir src/snipes.py.
 - Pilotage : /etat (avec boutons), /pause, /reprise (src/pauses.py), /verif-faite. Une vérification anti-bot
   demandée par le site arrive aussi en message privé, avec un bouton « C'est fait ».
-- Cartes : /garder, /vendre, /carte, /opportunites… et les boutons des messages de vente (src/discord_cards.py).
+- Cartes : /garder, /vendre, /carte, /opportunites, /top… et les boutons des messages de vente (src/discord_cards.py).
 - Connecté, le bot envoie lui-même les messages de vente à boutons (dans le salon de leur webhook) et les alertes
   critiques en message privé ; déconnecté, tout repart par les webhooks.
 """

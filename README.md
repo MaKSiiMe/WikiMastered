@@ -109,6 +109,7 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | `/plafond-collection [wb]` | Voir ou changer la mise maximale d'une carte de collection manquante, sans redéployer |
 | `/carte <carte>` | Tes exemplaires, les ventes observées, ce que le bot en fait. Boutons : garder, vendre, demander au sniper |
 | `/opportunites` | Les ventes que le sniper surveille et son plafond pour chacune |
+| `/top [nombre] [shiny]` | Les 10, 25 ou 50 cartes les plus chères en moyenne sur les ventes observées des 7 derniers jours (au moins 3 ventes), normales ou shiny |
 
 Quand le site demande la vérification anti-bot, le bot t'envoie aussi un **message privé** avec un bouton « C'est fait ». Le message indique ensuite quand les mises repassent.
 
