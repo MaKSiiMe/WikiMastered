@@ -494,6 +494,29 @@ async def test_outbid_bid_settled_at_the_end_won_becomes_a_position(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_win_rebid_by_hand_costs_the_final_price(tmp_path):
+    """27/10 : FC Barcelone, mise du bot 2574 surenchérie, remisée à la main et gagnée à 3116. La position coûte
+    3116 : la revente part de ce prix, pas de 2574 (elle était remise en vente à 3130, à perte après commission)."""
+    sniper, db, _ = await start(tmp_path, {"w": ended("w", "FC Barcelone", winner=ME, final=3116)}, [])
+    await outbid_bid(db, "w", "FC Barcelone", 2574)
+    await sniper._settle()
+    won = await db.last_bid("w")
+    assert (won["status"], won["amount"], won["final_price"]) == ("won", 3116, 3116)
+    assert "2574" in won["note"]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_won_bid_below_final_price_is_repaired_on_startup(tmp_path):
+    sniper, db, _ = await start(tmp_path, {}, [])
+    bid_id = await outbid_bid(db, "w", "FC Barcelone", 2574)
+    await db.update_bid(bid_id, status="won", final_price=3116)
+    await db.connect()
+    assert (await db.last_bid("w"))["amount"] == 3116
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_old_or_vanished_outbid_bids_settle_quietly(tmp_path):
     # Historique ancien : pas relu. Disparue du site : close comme perdue, sans alerte « Mise à vérifier ».
     sniper, db, notifier = await start(tmp_path, {"old": ended("old", "Arte", winner=ME, final=400)}, [])
