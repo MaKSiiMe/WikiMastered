@@ -93,3 +93,34 @@ async def test_value_worker_reads_the_collection_only_when_nobody_did(tmp_path):
     assert pages == ["0"]
     assert list((await ctx.db.kv_get(account.HISTORY_KEY)).values()) == [50]  # valeur du jour notée
     await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_evening_report_shows_the_account_value_only_from_a_recent_count(tmp_path):
+    from src.main import daily_report_parts
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 1000})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": []})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    _, _, sections = await daily_report_parts(ctx)
+    assert "Compte" not in dict(sections)  # collection jamais comptée : pas de valeur inventée
+    await seed_observed(db, "ada", [500, 520, 480], rarity="L")
+    await account.store_collection(ctx, [owned("o1", "ada", "L")])
+    await db.kv_set(account.HISTORY_KEY, {"2000-01-01": 1000})
+    _, _, sections = await daily_report_parts(ctx)
+    assert sections[0][0] == "Compte"
+    assert sections[0][1].startswith("**1 500 WB** (+500 WB depuis le 01/01)")
+    assert "Solde 1 000 · cartes 500" in sections[0][1]
+    snapshot = await db.kv_get(account.KV_KEY)
+    snapshot["at"] = (datetime.now(UTC) - timedelta(hours=30)).isoformat()
+    await db.kv_set(account.KV_KEY, snapshot)
+    _, _, sections = await daily_report_parts(ctx)
+    assert "Compte" not in dict(sections)  # comptée il y a plus de 24 h
+    await db.close()

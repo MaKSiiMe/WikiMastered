@@ -32,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta
 from logging.handlers import RotatingFileHandler
 
+from src.account import bilan_text as account_bilan
 from src.config import RARITY_RANK, Settings, get_settings
 from src.core import timeutils
 from src.core.api import WikiMastersAPI
@@ -122,6 +123,13 @@ async def daily_report_parts(ctx: Context) -> tuple[dict, str, list[tuple[str, s
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         extra.append(summary_line(await ctx.db.kv_get("collection"), targets(ctx)))
     sections += [as_section(text) for text in extra]
+    try:
+        value = await account_bilan(ctx, stats["balance"] if isinstance(stats["balance"], int) else None)
+    except Exception:  # noqa: BLE001 - le bilan part sans la valeur du compte
+        log.exception("Valeur du compte indisponible pour le bilan")
+        value = None
+    if value:
+        sections.insert(0, ("Compte", value))
     return stats, description, sections
 
 
