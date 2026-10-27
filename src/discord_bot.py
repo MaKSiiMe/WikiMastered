@@ -47,7 +47,9 @@ PAUSE_TARGETS = {"sniper": ["sniper"], "ventes": ["inventory"], "cotes": ["cotes
 PAUSE_MINUTES = [("30 min", 30), ("1 h", 60), ("2 h", 120), ("6 h", 360), ("jusqu'à /reprise", 0)]
 VERIFY_ID = "wm:verif-faite"  # bouton du message privé, encore actif après un redémarrage du bot
 WATCH_SECONDS = 15  # vérification anti-bot demandée : vue au plus tard après ce délai
-BUTTON_SECONDS = 600
+# Boutons en mémoire : actifs jusqu'au redémarrage du bot (ceux de /etat, /valeur et des ventes survivent à un
+# redémarrage : src/discord_cards.py, MessageButton). Une confirmation expire, elle (CONFIRM_SECONDS).
+BUTTON_SECONDS: float | None = None
 
 
 def paris(value: str | datetime | None) -> str:
@@ -300,30 +302,31 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         worker = next((w for w in workers if w.name == name), None)
         return (worker.paused if worker else None) or ""
 
-    def state_view() -> Buttons:
-        buttons: list[tuple[str, discord.ButtonStyle, Action]] = []
+    def state_view() -> discord.ui.View:
+        """Boutons de /etat, encore actifs après un redémarrage du bot."""
+        buttons: list[tuple[str, int, str, discord.ButtonStyle]] = []
         if sniper is not None and sniper.antibot_since:
-            buttons.append(("✅ Vérification faite", discord.ButtonStyle.success, verify_and_refresh))
+            buttons.append(("etatverif", 0, "✅ Vérification faite", discord.ButtonStyle.success))
         if sniper is not None:
-            buttons.append(("▶️ Reprendre le sniper", discord.ButtonStyle.primary, resume_sniper)
+            buttons.append(("etatreprise", 0, "▶️ Reprendre le sniper", discord.ButtonStyle.primary)
                            if pause_label("sniper") else
-                           ("⏸️ Pause sniper 1 h", discord.ButtonStyle.secondary, pause_sniper))
-        buttons.append(("🔄 Actualiser", discord.ButtonStyle.secondary, refresh))
-        return Buttons(s.discord_owner_id, buttons)
+                           ("etatpause", 0, "⏸️ Pause sniper 1 h", discord.ButtonStyle.secondary))
+        buttons.append(("etat", 0, "🔄 Actualiser", discord.ButtonStyle.secondary))
+        return persistent_view(buttons)
 
     async def refresh(interaction: discord.Interaction, note: str = "") -> None:
         await interaction.response.edit_message(content=note or None, embed=state_embed(ctx, workers, started),
                                                 view=state_view())
 
-    async def verify_and_refresh(interaction: discord.Interaction) -> None:
+    async def verify_and_refresh(interaction: discord.Interaction, _ref: int = 0) -> None:
         await refresh(interaction, verify())
 
-    async def pause_sniper(interaction: discord.Interaction) -> None:
+    async def pause_sniper(interaction: discord.Interaction, _ref: int = 0) -> None:
         await pauses.pause(ctx, ["sniper"], utcnow() + timedelta(hours=1))
         log.info("Discord : sniper en pause 1 h")
         await refresh(interaction, "⏸️ Sniper en pause 1 h.")
 
-    async def resume_sniper(interaction: discord.Interaction) -> None:
+    async def resume_sniper(interaction: discord.Interaction, _ref: int = 0) -> None:
         await pauses.resume(ctx, ["sniper"])
         log.info("Discord : sniper repris")
         await refresh(interaction, "▶️ Sniper repris.")
@@ -385,9 +388,12 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         if client.is_ready():
             await (await owner_dm()).send(embed=discord.Embed.from_dict(embed))
 
-    from src.discord_cards import message_view, register  # importe ce module : chargé une fois défini
+    from src.discord_cards import message_view, persistent_view, register  # importe ce module : déjà chargé
 
     register(client, tree, ctx, workers)
+    client.wm_handlers.update({  # type: ignore[attr-defined]  # boutons de /etat (persistants)
+        "etat": lambda interaction, _ref: refresh(interaction), "etatverif": verify_and_refresh,
+        "etatpause": pause_sniper, "etatreprise": resume_sniper})
 
     async def setup_hook() -> None:
         client.add_view(VerifyButton(s.discord_owner_id, verify_pressed))  # boutons envoyés avant un redémarrage
