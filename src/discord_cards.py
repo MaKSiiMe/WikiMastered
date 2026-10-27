@@ -25,7 +25,7 @@ from src import account, keeps, overrides, pauses, snipes
 from src.core.database import FIRE_SALE_REASON
 from src.core.models import OwnedCard
 from src.core.timeutils import utcnow
-from src.discord_bot import COLOR, GREY, RARITIES, Buttons, ago, paris
+from src.discord_bot import COLOR, CONFIRM_SECONDS, GREY, RARITIES, Buttons, ago, paris
 from src.roi import wb
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
@@ -296,7 +296,8 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             await button.response.edit_message(content="Annulé.", embed=None, view=None)
 
         await interaction.followup.send(embed=embed, view=Buttons(owner, [
-            ("Vendre", discord.ButtonStyle.success, confirm), ("Annuler", discord.ButtonStyle.secondary, cancel)]))
+            ("Vendre", discord.ButtonStyle.success, confirm), ("Annuler", discord.ButtonStyle.secondary, cancel)],
+            timeout=CONFIRM_SECONDS))
 
     # ------------------------------------------------------------ réglages
     @tree.command(name="plafond-collection", description="Mise maximale d'une carte de collection manquante")
@@ -422,12 +423,12 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         await interaction.followup.send(embed=embed, view=Buttons(owner, buttons))
 
     # ------------------------------------------------------------ valeur du compte
-    async def value_message(refresh: bool) -> tuple[discord.Embed, Buttons]:
+    async def value_message(refresh: bool) -> tuple[discord.Embed, discord.ui.View]:
         snapshot = await account.collection_snapshot(ctx, refresh=refresh)
         embed = value_embed(await account.account_value(ctx, snapshot), snapshot)
-        return embed, Buttons(owner, [("🔄 Recompter la collection", discord.ButtonStyle.secondary, recount)])
+        return embed, persistent_view([("recount", 0, "🔄 Recompter la collection", discord.ButtonStyle.secondary)])
 
-    async def recount(interaction: discord.Interaction) -> None:
+    async def recount(interaction: discord.Interaction, _ref: int = 0) -> None:
         await interaction.response.edit_message(content="⏳ Je relis toute ta collection (2-3 min, le sniper passe "
                                                         "avant)…", view=None)
         embed, view = await value_message(True)
@@ -519,9 +520,19 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             await close_buttons(submit, await sell(row["title"], price, row["rarity"] or ""))
         await interaction.response.send_modal(PriceModal(f"Revendre {row['title']}", priced, row["base_amount"]))
 
-    handlers = {"price": change_price, "cheap": cheap, "keep": keep_from_listing, "resell": resell}
+    handlers = {"price": change_price, "cheap": cheap, "keep": keep_from_listing, "resell": resell,
+                "recount": recount}
     client.wm_handlers = handlers  # type: ignore[attr-defined]
     client.add_dynamic_items(MessageButton)
+
+
+def persistent_view(buttons: list[tuple[str, int, str, discord.ButtonStyle]]) -> discord.ui.View:
+    """Boutons (action, référence, libellé, style) encore actifs après un redémarrage du bot (`MessageButton`) ;
+    l'action doit être branchée dans `client.wm_handlers`."""
+    view = discord.ui.View(timeout=None)
+    for action, ref, label, style in buttons:
+        view.add_item(MessageButton(action, ref, label, style))
+    return view
 
 
 def message_view(actions: dict[str, Any]) -> discord.ui.View | None:
@@ -529,8 +540,5 @@ def message_view(actions: dict[str, Any]) -> discord.ui.View | None:
     buttons = MESSAGE_BUTTONS.get(actions.get("kind", ""))
     if not buttons or not actions.get("listing"):
         return None
-    view = discord.ui.View(timeout=None)
-    for action, label, style in buttons:
-        view.add_item(MessageButton(action, int(actions["listing"]), label, style))
-    return view
+    return persistent_view([(action, int(actions["listing"]), label, style) for action, label, style in buttons])
 
