@@ -439,6 +439,23 @@ class Database:
             f"WHERE l.bid_id = b.id AND l.status IN {LISTING_OPEN}) ORDER BY settled_at"
         )
 
+    async def waiting_sales(self, dry_run: bool) -> list[aiosqlite.Row]:
+        """Ventes qui attendent une place de vente : positions détenues pas encore en vente et mises de positions pas
+        encore réglées (`amount`, `reference_price` ; `reason` de leur vente programmée s'il y en a une), puis doublons
+        programmés (`amount` NULL, `base_amount`). `dry_run` : simulées ou réelles."""
+        return await self._all(
+            "SELECT b.amount, b.reference_price, l.reason, NULL AS base_amount FROM bids b "
+            "LEFT JOIN listings l ON l.bid_id = b.id AND l.status IN ('scheduled', 'waiting') "
+            "WHERE b.reason NOT LIKE 'collection%' AND b.dry_run = ? "
+            "AND ((b.status IN ('won', 'sim_won') AND b.closed = 0) "
+            "OR (b.status IN ('placed', 'simulated', 'uncertain') "
+            "AND b.id = (SELECT MAX(id) FROM bids WHERE auction_id = b.auction_id))) "
+            "AND NOT EXISTS (SELECT 1 FROM listings p WHERE p.bid_id = b.id "
+            "AND p.status IN ('posted', 'simulated', 'uncertain')) "
+            "UNION ALL SELECT NULL, NULL, reason, base_amount FROM listings "
+            "WHERE bid_id IS NULL AND status IN ('scheduled', 'waiting') AND dry_run = ?",
+            (int(dry_run), int(dry_run)))
+
     async def close_position(self, bid_id: int, sale_price: int | None) -> None:
         await self.update_bid(bid_id, closed=1, sale_price=sale_price, sold_at=utcnow())
 
