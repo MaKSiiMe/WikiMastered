@@ -36,6 +36,7 @@ from datetime import UTC, datetime, time, timedelta
 from src.config import Settings
 from src.core import timeutils
 from src.core.client import ApiError, RateLimited, UncertainMutation
+from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
 from src.core.models import Auction, BidResult, Card, OwnedCard
 from src.core.notifier import Topic
 from src.core.pricing import Quote, combine, trusted
@@ -159,6 +160,7 @@ class Portfolio:
     sale_room: int = 5            # places de vente libres pour le bot
     queue_min_profit: int = 0     # bénéfice exigé pour une position qui devra attendre
     real_available: int = 0       # pour une mise réelle : vrai solde moins la réserve (le simulé n'y touche pas)
+    waiting: tuple[float, ...] = ()  # bénéfice attendu des ventes qui attendent une place (voir waiting_profits)
 
     @property
     def can_open(self) -> bool:
@@ -167,7 +169,23 @@ class Portfolio:
     @property
     def required_profit(self) -> int:
         """Une position qui aura une place de vente tout de suite, ou qui devra attendre."""
-        return self.min_profit if self.open_positions < self.sale_room else max(self.min_profit, self.queue_min_profit)
+        return self.min_profit if self.open_positions < self.sale_room else self.queue_profit()
+
+    def queue_profit(self, opened: tuple[float, ...] = ()) -> int:
+        """Bénéfice exigé quand les places de vente sont prises. Une place libérée va à la vente la plus rentable
+        (Database.due_listings) : une position qui rapporte plus que toutes les ventes en attente sauf moins de
+        `sale_room` passe devant elles, et n'attend que la prochaine place, au bénéfice minimum. Sinon, elle attendrait
+        vraiment : PORTFOLIO_QUEUE_PROFIT_RATIO du budget. Le 26/10, 5 à 9 positions détenues, ce seuil (~3900 WB)
+        écartait les 23 bonnes affaires du top 100 des L (+1000 à +2500), devant des ventes en attente à +440-2500.
+        `opened` : positions ouvertes plus tôt dans le passage."""
+        queued = max(self.min_profit, self.queue_min_profit)
+        if self.sale_room <= 0:  # places toutes prises par tes ventes : rien ne dit quand l'une se libère
+            return queued
+        ahead = sorted((*self.waiting, *opened), reverse=True)
+        if len(ahead) < self.sale_room:
+            return self.min_profit
+        beat = ahead[self.sale_room - 1]  # infinie : liquidation ou vente demandée, toujours servie d'abord
+        return queued if beat >= queued else max(self.min_profit, math.floor(beat) + 1)
 
 
 def position_cap(s: Settings, sale_slots: int | None, manual_sales: int) -> tuple[int, int]:
@@ -183,7 +201,8 @@ def position_cap(s: Settings, sale_slots: int | None, manual_sales: int) -> tupl
 
 def portfolio_state(s: Settings, *, balance: int, held_count: int, held_real_cost: int, held_sim_cost: int,
                     engaged_real: int, engaged_sim: int, bot_engaged_count: int,
-                    max_positions: int | None = None, sale_room: int | None = None) -> Portfolio:
+                    max_positions: int | None = None, sale_room: int | None = None,
+                    waiting: tuple[float, ...] = ()) -> Portfolio:
     # Les mises réelles et positions réelles ont déjà quitté le solde : on les rajoute au capital.
     capital = balance + held_real_cost + engaged_real
     available = balance - held_sim_cost - engaged_sim - s.sniper_min_balance_reserve
@@ -193,7 +212,23 @@ def portfolio_state(s: Settings, *, balance: int, held_count: int, held_real_cos
                      s.portfolio_max_positions if max_positions is None else max_positions,
                      s.portfolio_slots if sale_room is None else sale_room,
                      int(budget * s.portfolio_queue_profit_ratio),
-                     max(0, balance - s.sniper_min_balance_reserve))
+                     max(0, balance - s.sniper_min_balance_reserve), waiting)
+
+
+def waiting_profits(rows, fee: float) -> tuple[float, ...]:
+    """Bénéfice attendu de chaque vente qui attend une place (Database.waiting_sales) : estimation à l'achat moins
+    la mise pour une position, tout son prix pour un doublon (coût nul). Revente à 1 WB ou vente demandée sur
+    Discord : toujours servies d'abord."""
+    out = []
+    for r in rows:
+        reason = r["reason"] or ""
+        if reason.startswith((FIRE_SALE_REASON, MANUAL_SALE_REASON)):
+            out.append(math.inf)
+        elif r["amount"] is None:
+            out.append((r["base_amount"] or 0) * (1 - fee))
+        else:
+            out.append((r["reference_price"] or 0) * (1 - fee) - r["amount"])
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -823,6 +858,7 @@ class AuctionSniper(Worker):
         candidates.sort(key=lambda c: c[0], reverse=True)
         free = self.free_slots(now)
         opened = 0
+        opened_profits: list[float] = []  # positions ouvertes dans ce passage : elles attendront aussi une place
         collection_cards: set[str] = set()
         for _, auction, decision in candidates:
             if decision.collection:
@@ -844,7 +880,7 @@ class AuctionSniper(Worker):
                         continue
                     # Les achats précédents du passage ont pris les places libres : celle-ci attendra.
                     queued = open_now >= portfolio.sale_room
-                    if queued and (decision.profit or 0) < max(portfolio.min_profit, portfolio.queue_min_profit):
+                    if queued and (decision.profit or 0) < portfolio.queue_profit(tuple(opened_profits)):
                         self._outcome(auction, "file d'attente : bénéfice trop faible")
                         continue
             # Le temps a passé depuis la lecture du marché (cotes, solde…) : on revérifie juste avant de miser.
@@ -869,6 +905,8 @@ class AuctionSniper(Worker):
                 if not rebid:
                     free -= 1
                     opened += 1
+                    if not decision.collection:
+                        opened_profits.append(decision.profit or 0.0)
             else:
                 self._outcome(auction, "mise refusée : vérification anti-bot" if self._antibot_since
                               else "mise refusée par le site")
@@ -894,19 +932,19 @@ class AuctionSniper(Worker):
                               push=s.sniper_bid_push)
             if decision is not None and not decision.collection:
                 candidates.append((decision.profit or 0.0, auction, decision))
-        opened = spent = 0
+        spent = 0
+        opened: list[float] = []
         for _, auction, decision in sorted(candidates, key=lambda c: c[0], reverse=True):
-            open_now = portfolio.open_positions + opened
+            open_now = portfolio.open_positions + len(opened)
             if auction.seconds_left() <= s.sniper_min_seconds_left:
                 continue
-            if open_now >= portfolio.sale_room and \
-                    (decision.profit or 0) < max(portfolio.min_profit, portfolio.queue_min_profit):
+            if open_now >= portfolio.sale_room and (decision.profit or 0) < portfolio.queue_profit(tuple(opened)):
                 continue
             if decision.amount > portfolio.available - spent:  # solde simulé : réel moins les engagements simulés
                 continue
             if await self._bid(auction, decision, shadow, simulate=True):
                 self._outcomes[auction.id] = SHADOW_PLACED
-                opened += 1
+                opened.append(decision.profit or 0.0)
                 spent += decision.amount
 
     async def portfolio(self, now: datetime) -> Portfolio:
@@ -924,6 +962,7 @@ class AuctionSniper(Worker):
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"],
             engaged_real=engaged_real, engaged_sim=pending["sim_cost"], bot_engaged_count=engaged_count,
             max_positions=cap, sale_room=room,
+            waiting=waiting_profits(await self.db.waiting_sales(dry_run=not live), self.settings.sale_fee_pct),
         )
         # Même capital pour le sniper de test : son bénéfice minimum est le même.
         self._min_profit = state.min_profit
@@ -939,6 +978,7 @@ class AuctionSniper(Worker):
             held_real_cost=held["real_cost"], held_sim_cost=held["sim_cost"], engaged_real=engaged_real,
             engaged_sim=pending["sim_cost"], bot_engaged_count=pending["positions"] - pending["real_positions"],
             max_positions=sys.maxsize, sale_room=self.settings.portfolio_slots,
+            waiting=waiting_profits(await self.db.waiting_sales(dry_run=True), self.settings.sale_fee_pct),
         )
 
     async def _current_balance(self) -> int:

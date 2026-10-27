@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import random
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -18,7 +19,7 @@ from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
 from src.tools.parse_curl import parse_curl, to_endpoint
 from src.workers.auction_sniper import (
-    decide, in_snipe_window, portfolio_state, position_cap, refusal, snipe_params,
+    decide, in_snipe_window, portfolio_state, position_cap, refusal, snipe_params, waiting_profits,
 )
 from src.workers.inventory_manager import (
     achievement_guard, group_by_card, plan_listing_time, select_for_discard, select_for_sale,
@@ -171,14 +172,42 @@ def test_queued_positions_need_a_better_deal():
     card = {"id": "c", "wikipedia_title": "x", "rarity": "C"}
     quote = Quote(400.0, 5)
 
-    def pf(open_positions: int):
+    def pf(open_positions: int, waiting=(300.0,)):  # une vente plus rentable attend déjà
         return portfolio_state(s, balance=3000, held_count=open_positions, held_real_cost=0, held_sim_cost=0,
-                               engaged_real=0, engaged_sim=0, bot_engaged_count=0, max_positions=11, sale_room=1)
+                               engaged_real=0, engaged_sim=0, bot_engaged_count=0, max_positions=11, sale_room=1,
+                               waiting=waiting)
 
-    assert pf(1).required_profit == 270                                   # 50 % du budget de 540
+    assert pf(2).required_profit == 270                                   # 50 % du budget de 540
     assert decide(auction(card=card, base_amount=200), params, quote, 3, pf(0))      # place libre : +200 suffit
-    assert decide(auction(card=card, base_amount=200), params, quote, 3, pf(1)) is None  # attendrait : +200 < 270
-    assert decide(auction(card=card, base_amount=120), params, quote, 3, pf(1))      # +280 : vaut l'attente
+    assert decide(auction(card=card, base_amount=200), params, quote, 3, pf(2)) is None  # attendrait : +200 < 270
+    assert decide(auction(card=card, base_amount=120), params, quote, 3, pf(2))      # +280 : vaut l'attente
+
+
+def test_queued_position_jumps_less_profitable_waiting_sales():
+    """Une place libérée va à la vente la plus rentable : une position qui bat les ventes en attente sauf moins de
+    `sale_room` n'attend que la prochaine place, au bénéfice minimum ; sinon, PORTFOLIO_QUEUE_PROFIT_RATIO."""
+    s = settings(portfolio_min_profit=30)
+
+    def pf(waiting, sale_room=2):
+        return portfolio_state(s, balance=3000, held_count=6, held_real_cost=0, held_sim_cost=0, engaged_real=0,
+                               engaged_sim=0, bot_engaged_count=0, max_positions=12, sale_room=sale_room,
+                               waiting=waiting)
+
+    assert pf(()).required_profit == 135                  # tout est en vente : la prochaine place sera la sienne
+    assert pf((200.0,)).required_profit == 135            # une seule vente en attente pour 2 places
+    assert pf((200.0, 90.0, 500.0)).required_profit == 201  # passer devant la 2e plus rentable (200) suffit
+    assert pf((900.0, 800.0, 700.0)).required_profit == 270  # jamais plus que l'ancien seuil (50 % du budget)
+    assert pf((math.inf, math.inf)).required_profit == 270   # liquidations, ventes demandées : toujours devant
+    assert pf((200.0, 90.0)).queue_profit((300.0,)) == 201   # une position ouverte dans le passage compte aussi
+    assert pf((), sale_room=0).required_profit == 270        # places prises par tes ventes : vraie attente
+
+
+def test_waiting_profits_follow_the_sale_queue():
+    rows = [{"amount": 3000, "reference_price": 4500.0, "reason": None, "base_amount": None},
+            {"amount": None, "reference_price": None, "reason": "cote 1400", "base_amount": 1407},
+            {"amount": 800, "reference_price": 1000.0, "reason": "liquidation après 3 invendus", "base_amount": None}]
+    assert waiting_profits(rows, 0.0) == (1500.0, 1407.0, math.inf)
+    assert waiting_profits(rows[:1], 0.1) == (4500 * 0.9 - 3000,)
 
 
 def test_portfolio_counts_engaged_capital():
