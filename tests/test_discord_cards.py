@@ -266,3 +266,35 @@ async def test_buying_a_discord_sale_to_one_wb_picks_a_late_ending_for_at_least_
     row = await db.get_listing(lid)
     assert row["base_amount"] == 1 and row["duration_minutes"] >= 180 and row["reason"].startswith("liquidation")
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_top_ranks_cards_by_average_recent_price(tmp_path):
+    from src.discord_cards import top_embed
+    from src.roi import wb
+
+    client, notifier = make_client(tmp_path, trades)
+    ctx = await make_context(tmp_path, client, notifier)
+    now = datetime.now(UTC)
+    sales = [  # (carte, titre, shiny, prix, jours)
+        *[("a", "Ada", 0, p, 1) for p in (900, 1000, 1100)],
+        *[("b", "Bob", 0, p, 1) for p in (2000, 2100, 2200)],
+        ("c", "Cid", 0, 9000, 1), ("c", "Cid", 0, 9000, 1),  # 2 ventes seulement : pas classée
+        *[("d", "Dan", 0, 5000, 10) for _ in range(3)],      # trop anciennes
+        *[("a", "Ada", 1, p, 1) for p in (7000, 8000, 9000)],
+    ]
+    await ctx.db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
+        "VALUES (?, ?, ?, 'L', ?, ?, ?)",
+        [(f"s{i}", card, title, shiny, price, (now - timedelta(days=days)).isoformat())
+         for i, (card, title, shiny, price, days) in enumerate(sales)])
+    await ctx.db.db.commit()
+
+    embed = await top_embed(ctx, 10, False)
+    assert embed.title == "Top 10 des cartes normales les plus chères"
+    lines = embed.description.splitlines()
+    assert len(lines) == 2 and "Ada" in lines[1]
+    assert f"**Bob** (L) · **{wb(2100)}** · 3 ventes · {wb(2000)}–{wb(2200)}" in lines[0]
+    shiny = await top_embed(ctx, 10, True)
+    assert f"**Ada** (L) · **{wb(8000)}**" in shiny.description and "Bob" not in shiny.description
+    await ctx.db.close()
