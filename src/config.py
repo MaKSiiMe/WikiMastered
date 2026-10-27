@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     timezone: str = "Europe/Paris"
     data_dir: Path = Path("data")
+    # Sauvegarde quotidienne de la base (src/backup.py) dans un volume à part ; BACKUP_KEEP archives gardées.
+    enable_backup: bool = True
+    backup_dir: Path = Path("backups")
+    backup_time: time = time(4, 30)
+    backup_keep: int = 7
     endpoints_file: Path = Path("config/endpoints.yaml")
 
     # --- Session WikiMasters ---------------------------------------------------

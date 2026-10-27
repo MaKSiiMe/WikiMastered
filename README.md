@@ -97,6 +97,7 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | `/annuler <carte>` | Ne plus demander une carte |
 | `/etat` | Santé du bot : session, vérification anti-bot, routes du site en pause, chaque worker. Boutons : vérification faite, pause / reprise du sniper, actualiser |
 | `/verif-faite` | Vérification anti-bot faite dans le navigateur : la prochaine mise part tout de suite pour la tester |
+| `/sauvegarde` | Sauvegarde la base maintenant (une est faite chaque nuit à 04:30, 7 gardées : [restauration](docs/PORTAINER.md)) |
 | `/pause [quoi] [durée]` | Met en pause le sniper (par défaut), les ventes (reventes du sniper comprises), les cotes ou tout (sauf la garde), 1 h par défaut ou jusqu'à `/reprise`. Gardée après un redémarrage |
 | `/reprise [quoi]` | Reprend ce qui est en pause |
 

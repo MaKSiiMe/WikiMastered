@@ -25,7 +25,7 @@ from types import ModuleType
 import discord
 from discord import app_commands
 
-from src import pauses, snipes
+from src import backup, pauses, snipes
 from src.core import timeutils
 from src.core.timeutils import utcnow
 from src.recap import STALE_AFTER
@@ -122,6 +122,7 @@ def state_embed(ctx: Context, workers: list[Worker], started_at: datetime) -> di
                      f"{sniper.antibot_missed} mise(s) non placée(s). Fais-la dans ton navigateur, puis "
                      "« Vérification faite ».")
         color = RED if color == RED else ORANGE
+    lines.append(f"💾 Sauvegarde : {backup.describe(ctx.last_backup)}")
     if routes := client.paused_routes():
         lines.append("⏳ Routes du site en pause : " + ", ".join(f"{name} ({ago(timedelta(seconds=left))})"
                                                                for name, left in sorted(routes.items())))
@@ -410,6 +411,22 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @tree.command(name="etat", description="Santé du bot : session, vérification anti-bot, workers, pauses")
     async def etat(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(embed=state_embed(ctx, workers, started), view=state_view())
+
+    @tree.command(name="sauvegarde", description="Sauvegarder la base maintenant (avant un gros changement)")
+    async def sauvegarde(interaction: discord.Interaction) -> None:
+        if not s.enable_backup:
+            await interaction.response.send_message("Sauvegardes désactivées (ENABLE_BACKUP).")
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            result = await backup.run_backup(ctx)
+        except Exception as exc:  # noqa: BLE001 - l'erreur est dite à l'utilisateur
+            log.exception("Sauvegarde demandée impossible")
+            await interaction.followup.send(f"❌ Sauvegarde impossible : {type(exc).__name__} : {exc}"[:1900])
+            return
+        await interaction.followup.send(f"💾 **{result.path.name}** : {result.size >> 20} Mo (base "
+                                        f"{result.db_size >> 20} Mo) en {result.seconds:.0f} s. "
+                                        f"{s.backup_keep} sauvegardes gardées au plus.")
 
     @tree.command(name="verif-faite", description="Vérification anti-bot faite : les mises reprennent sans attendre")
     async def verif_faite(interaction: discord.Interaction) -> None:

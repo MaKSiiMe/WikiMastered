@@ -1,6 +1,7 @@
 .env
 data/*
 !data/.gitkeep
+backups/
 config/endpoints.local.yaml
 __pycache__/
 *.pyc

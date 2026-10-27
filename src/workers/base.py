@@ -29,6 +29,7 @@ class Context:
     prices: PriceService
     # Workers en pause (/pause sur Discord) : nom -> fin, ou None jusqu'à /reprise. Voir src/pauses.py.
     pauses: dict[str, datetime | None] = field(default_factory=dict)
+    last_backup: dict = field(default_factory=dict)  # dernière sauvegarde de la base (src/backup.py), pour /etat
 
 
 class Worker:

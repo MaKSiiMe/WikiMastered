@@ -33,6 +33,7 @@ from datetime import datetime, time, timedelta
 from logging.handlers import RotatingFileHandler
 
 from src.account import bilan_text as account_bilan
+from src.backup import backup_loop
 from src.config import RARITY_RANK, Settings, get_settings
 from src.core import timeutils
 from src.core.api import WikiMastersAPI
@@ -481,6 +482,8 @@ async def run_bot(settings: Settings) -> None:
             jobs.append(("recap", lambda: recap_loop(ctx, workers, started_at)))
         if settings.enable_sniper and settings.sniper_report_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
+        if settings.enable_backup and settings.backup_keep > 0:
+            jobs.append(("sauvegarde", lambda: backup_loop(ctx)))
         if settings.discord_bot_token and settings.discord_owner_id <= 0:
             ctx.notifier.warning("Commandes Discord inactives", "DISCORD_OWNER_ID manquant ou pas un nombre : il faut "
                                  "ton identifiant utilisateur (Mode développeur, clic droit sur ton pseudo > Copier "
