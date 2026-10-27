@@ -140,6 +140,11 @@ def snipe_params(s: Settings, night: bool) -> SnipeParams:
     )
 
 
+def min_sales(s: Settings, shiny: bool) -> int:
+    """Ventes observées minimum avant d'acheter pour revendre : plus pour un shiny (SNIPER_SHINY_MIN_SALES)."""
+    return max(s.price_min_sales, s.sniper_shiny_min_sales) if shiny else s.price_min_sales
+
+
 def unsteady(quote: Quote, params: SnipeParams) -> str | None:
     """Pourquoi les dernières ventes ne suffisent pas à acheter : trop peu disputées, ou trop dispersées."""
     if quote.contested is not None and quote.contested < params.min_contested:
@@ -654,7 +659,7 @@ class AuctionSniper(Worker):
             return None
         observed = trusted(await self.db.observed_by_rarity(a.catalog_id, self.settings.price_recent_sales, a.shiny))
         quote = combine(*observed.get(a.rarity or "", ([], 0)), None)
-        if not quote.reliable(self.settings.price_min_sales):
+        if not quote.reliable(min_sales(self.settings, a.shiny)):
             return None
         return math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
 
@@ -757,7 +762,7 @@ class AuctionSniper(Worker):
         quote = await self._against_rivals(
             a, await self.ctx.prices.quote(a.catalog_id, a.rarity, shiny=a.shiny, fetch=False))
         # Shiny : la cote du site n'entre pas dans l'estimation, rien à attendre d'elle.
-        why = hopeless(a, params, quote, self.settings.price_min_sales, self.settings.sale_fee_pct,
+        why = hopeless(a, params, quote, min_sales(self.settings, a.shiny), self.settings.sale_fee_pct,
                        self._min_profit, a.shiny or await self.ctx.prices.is_cached(a.catalog_id))
         if why is None:
             return False
@@ -928,8 +933,8 @@ class AuctionSniper(Worker):
             quote = await self._against_rivals(
                 auction, await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny,
                                                      fetch=False))
-            decision = decide(auction, shadow, quote, s.price_min_sales, portfolio, s.sale_fee_pct, resale=True,
-                              push=s.sniper_bid_push)
+            decision = decide(auction, shadow, quote, min_sales(s, auction.shiny), portfolio, s.sale_fee_pct,
+                              resale=True, push=s.sniper_bid_push)
             if decision is not None and not decision.collection:
                 candidates.append((decision.profit or 0.0, auction, decision))
         spent = 0
@@ -1148,13 +1153,13 @@ class AuctionSniper(Worker):
         snipe = self._snipe_for(auction)  # demandée sur Discord : gardée, jamais achetée pour la revente
         # Sa mise maximale est choisie à la demande : SNIPER_MAX_BID ne la réduit pas.
         decision = decide(auction, params if snipe is None else replace(params, max_bid=0), quote,
-                          self.settings.price_min_sales, portfolio, self.settings.sale_fee_pct,
+                          min_sales(self.settings, auction.shiny), portfolio, self.settings.sale_fee_pct,
                           collection_cap=collection_cap, resale=resale and snipe is None, push=push)
         if decision is not None and snipe is not None:
             decision = replace(decision, reason=f"{SNIPE_REASON} ≤ {decision.ceiling}")
         if decision is None:
             self._outcome(auction, "collection : trop chère" if collection_cap is not None else
-                          refusal(auction, params, quote, self.settings.price_min_sales, portfolio,
+                          refusal(auction, params, quote, min_sales(self.settings, auction.shiny), portfolio,
                                   self.settings.sale_fee_pct, resale, push))
         return decision
 

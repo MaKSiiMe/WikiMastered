@@ -32,6 +32,8 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta
 from logging.handlers import RotatingFileHandler
 
+from src.account import bilan_text as account_bilan
+from src.backup import backup_loop
 from src.config import RARITY_RANK, Settings, get_settings
 from src.core import timeutils
 from src.core.api import WikiMastersAPI
@@ -123,6 +125,13 @@ async def daily_report_parts(ctx: Context) -> tuple[dict, str, list[tuple[str, s
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         extra.append(summary_line(await ctx.db.kv_get("collection"), targets(ctx)))
     sections += [as_section(text) for text in extra]
+    try:
+        value = await account_bilan(ctx, stats["balance"] if isinstance(stats["balance"], int) else None)
+    except Exception:  # noqa: BLE001 - le bilan part sans la valeur du compte
+        log.exception("Valeur du compte indisponible pour le bilan")
+        value = None
+    if value:
+        sections.insert(0, ("Compte", value))
     return stats, description, sections
 
 
@@ -476,6 +485,8 @@ async def run_bot(settings: Settings) -> None:
             jobs.append(("recap", lambda: recap_loop(ctx, workers, started_at)))
         if settings.enable_sniper and settings.sniper_report_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
+        if settings.enable_backup and settings.backup_keep > 0:
+            jobs.append(("sauvegarde", lambda: backup_loop(ctx)))
         if settings.discord_bot_token and settings.discord_owner_id <= 0:
             ctx.notifier.warning("Commandes Discord inactives", "DISCORD_OWNER_ID manquant ou pas un nombre : il faut "
                                  "ton identifiant utilisateur (Mode développeur, clic droit sur ton pseudo > Copier "

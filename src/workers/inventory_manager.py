@@ -32,7 +32,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 
-from src import keeps
+from src import keeps, orders
 from src.account import store_collection
 from src.config import RARITY_RANK, Settings
 from src.core.api import COLLECTION_PAGE_SIZE
@@ -67,6 +67,8 @@ SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une r
 # collection à chaque passage de la défausse (INVENTORY_INTERVAL_MINUTES).
 MANUAL_CHECK = timedelta(minutes=15)
 MANUAL_PAGES = 2
+STALE_KV = "stale_positions"  # positions déjà signalées « Position qui traîne » (une seule alerte chacune)
+STALE_CHECK = timedelta(minutes=30)
 MANUAL_KV = "manual_resale"  # exemplaires déjà repris, et ceux dont l'achat est introuvable (prévenu une fois)
 # Ton achat d'un exemplaire : fini au plus N avant son arrivée dans la collection (ou juste après, horloges).
 MANUAL_BOUGHT_BEFORE = timedelta(days=2)
@@ -401,6 +403,7 @@ class InventoryManager(Worker):
         self._next_scan = utcnow() + timedelta(minutes=2)
         self._next_sale_check = utcnow() + timedelta(minutes=2)
         self._next_manual = utcnow() + timedelta(minutes=2)
+        self._next_stale = utcnow() + timedelta(minutes=5)
         # Doublons à vendre, du mieux coté au moins coté : relus au plus toutes les INVENTORY_INTERVAL_MINUTES
         # (lire la collection coûte ~175 requêtes), consommés à chaque place libérée.
         self._sale_queue: list[SaleCandidate] = []
@@ -425,6 +428,9 @@ class InventoryManager(Worker):
         if s.manual_resale_tag.strip() and now >= self._next_manual:
             self._next_manual = now + MANUAL_CHECK
             await self.adopt_manual(await self._recent_copies())
+        if now >= self._next_stale:
+            self._next_stale = now + STALE_CHECK
+            await self.warn_stale_positions()
         if s.auto_list and now >= self._next_sale_check:
             self._next_sale_check = now + timedelta(minutes=s.sell_check_minutes)
             await self.fill_free_slots()
@@ -763,6 +769,48 @@ class InventoryManager(Worker):
                 break
         return mine(await self.api.collection_page(0, sort="added"))
 
+    async def warn_stale_positions(self) -> int:
+        """Alerte une fois chaque position réelle détenue depuis plus de POSITION_STALE_HOURS (au-delà de l'échelle
+        de remises, quelque chose bloque : pas de place de vente, exemplaire introuvable, favori…), avec l'état de sa
+        vente et, sur Discord, les boutons « Brader » et « Garder ». Renvoie le nombre d'alertes."""
+        hours = self.settings.position_stale_hours
+        if hours <= 0:
+            return 0
+        now = utcnow()
+        held = [r for r in await self.db.held_positions() if not r["dry_run"]]
+        alerted = set(await self.db.kv_get(STALE_KV, []))
+        new = 0
+        for r in held:
+            age = now - datetime.fromisoformat(r["settled_at"] or r["placed_at"])
+            if r["id"] in alerted or age < timedelta(hours=hours):
+                continue
+            if r["listing_status"] in ("posted", "uncertain"):
+                end = datetime.fromisoformat(r["listing_end"]).astimezone(now_local().tzinfo) \
+                    if r["listing_end"] else None
+                state = f"en vente à {r['listing_price']} WB" + (f", fin {end:%d/%m à %H:%M}" if end else "")
+            elif r["listing_status"]:
+                state = f"vente programmée à {r['listing_price']} WB, elle attend une place de vente"
+            else:
+                state = "aucune vente prévue (exemplaire introuvable ou en favori ?)"
+            label = f"{r['title']} ({r['rarity']}{' ✨' if r['is_shiny'] else ''})"
+            self.notifier.warning("Position qui traîne", f"{label} : achetée {r['amount']} WB il y a "
+                                  f"{int(age.total_seconds() // 3600)} h, {state}.", important=True,
+                                  actions={"kind": "stale", "bid": r["id"]})
+            alerted.add(r["id"])
+            new += 1
+        await self.db.kv_set(STALE_KV, sorted(alerted & {r["id"] for r in held}))
+        return new
+
+    async def liquidate(self, listing_id: int) -> None:
+        """Vente pas encore publiée passée à 1 WB, sur la durée et la fin d'une revente à 1 WB (comme `_fire_sale`)."""
+        s = self.settings
+        post_at, minutes, end = plan_fire_sale(now_local(), s.listing_duration_options, s.position_fire_sale_minutes,
+                                               min_minutes=s.position_fire_sale_min_minutes)
+        await self.db.update_listing(listing_id, base_amount=1, reason=f"{FIRE_SALE_REASON} (Discord)",
+                                     post_at=post_at, duration_minutes=minutes, target_end=end)
+        self.log.info("vente %d passée à 1 WB (Discord) : publication %s, fin %s", listing_id,
+                      f"{post_at:%d/%m %H:%M}", f"{end:%d/%m %H:%M}")
+
     # ------------------------------------------------ demandes Discord (/vendre, /garder)
     async def sell_copy(self, copy: OwnedCard, price: int) -> int | None:
         """Vente demandée sur Discord : publiée à la première place libre, avant les autres ventes, pour la durée
@@ -1018,9 +1066,19 @@ class InventoryManager(Worker):
         216) et Les Feux de l'amour, gardées après 3 essais, se sont vendues à la main (250 et 330)."""
         if not bid:
             return
+        if bid["closed"]:  # gardée sur Discord pendant que sa vente était publiée : pas de remise en vente
+            self.log.info("%s invendue, position déjà close : carte gardée", label)
+            return
         unsold = row["relist_count"] + 1
+        order = await orders.take(self.db, bid["id"])
+        if order == orders.KEEP:
+            await self.db.close_position(bid["id"], None)
+            self.log.info("%s invendue : gardée comme demandé sur Discord", label)
+            self.notifier.info("Carte gardée", f"{label} : invendue, elle reste dans ta collection (demandé sur "
+                               "Discord).", important=True)
+            return
         max_relists, fire_after = relist_limits(bid["amount"], self.settings)
-        if 0 < fire_after <= unsold:
+        if order == orders.FIRE or 0 < fire_after <= unsold:
             await self._fire_sale(await self._returned_copy(row, bid), bid, unsold)
             return
         # Plancher de la prochaine mise en vente : le prix d'achat, puis un peu dessous après POSITION_LOSS_AFTER

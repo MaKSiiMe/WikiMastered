@@ -12,17 +12,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import discord
 from discord import app_commands
 
-from src import account, keeps, overrides, pauses, snipes
-from src.core.database import FIRE_SALE_REASON
+from src import account, keeps, orders, overrides, pauses, snipes
+from src.charts import number, value_line
 from src.core.models import OwnedCard
 from src.core.timeutils import utcnow
 from src.discord_bot import COLOR, CONFIRM_SECONDS, GREY, RARITIES, Buttons, ago, paris
@@ -43,6 +45,8 @@ MESSAGE_BUTTONS = {
     "fire_sale": [("price", "✏️ Changer le prix", discord.ButtonStyle.primary),
                   ("keep", "🔒 Garder", discord.ButtonStyle.secondary)],
     "kept": [("resell", "💰 Remettre en vente…", discord.ButtonStyle.primary)],
+    "stale": [("stalefire", "⚡ Brader", discord.ButtonStyle.primary),
+              ("stalekeep", "🔒 Garder", discord.ButtonStyle.secondary)],
 }
 
 Handler = Callable[[discord.Interaction, int], Awaitable[None]]
@@ -426,7 +430,22 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     async def value_message(refresh: bool) -> tuple[discord.Embed, discord.ui.View]:
         snapshot = await account.collection_snapshot(ctx, refresh=refresh)
         embed = value_embed(await account.account_value(ctx, snapshot), snapshot)
-        return embed, persistent_view([("recount", 0, "🔄 Recompter la collection", discord.ButtonStyle.secondary)])
+        return embed, persistent_view([("valuehist", 0, "📈 Évolution", discord.ButtonStyle.primary),
+                                       ("recount", 0, "🔄 Recompter la collection", discord.ButtonStyle.secondary)])
+
+    async def value_history(interaction: discord.Interaction, _ref: int = 0) -> None:
+        points = sorted((await ctx.db.kv_get(account.HISTORY_KEY, {})).items())[-30:]
+        if len(points) < 2:
+            await interaction.response.send_message(
+                "Pas encore d'historique : la valeur du compte est notée une fois par jour, il en faut au moins "
+                "deux. Reviens demain.", ephemeral=True)
+            return
+        await interaction.response.defer(thinking=True)
+        values = [float(v) for _, v in points]
+        png = await asyncio.to_thread(
+            value_line, [date.fromisoformat(d) for d, _ in points], values, "Valeur du compte",
+            f"{number(values[-1] - values[0], True)} WB sur {len(points)} jours")
+        await interaction.followup.send(file=discord.File(io.BytesIO(png), filename="valeur.png"))
 
     async def recount(interaction: discord.Interaction, _ref: int = 0) -> None:
         # L'ancienne valeur disparaît pendant la relecture : on ne la prend pas pour la nouvelle.
@@ -498,9 +517,54 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         row = await listing_or_reply(interaction, listing_id)
         if row is None:
             return
-        await ctx.db.update_listing(listing_id, base_amount=1, reason=f"{FIRE_SALE_REASON} (Discord)")
+        if inventory is None:
+            await interaction.response.send_message("Ventes désactivées (ENABLE_INVENTORY).", ephemeral=True)
+            return
+        await inventory.liquidate(listing_id)
+        current = await ctx.db.get_listing(listing_id)
         log.info("Discord : vente %d bradée à 1 WB", listing_id)
-        await close_buttons(interaction, "⚡ Bradée : remise en vente à **1 WB**, à la première place libre.")
+        await close_buttons(interaction, f"⚡ Bradée : **1 WB**, publiée {paris(current['post_at'])} pour "
+                                         f"{current['duration_minutes'] // 60} h, fin {paris(current['target_end'])}.")
+
+    async def position_state(interaction: discord.Interaction, bid_id: int):
+        """(position, ventes pas encore publiées, ventes publiées) ; répond et renvoie None si elle est déjà close."""
+        bid = await ctx.db.get_bid(bid_id)
+        if bid is None or bid["closed"]:
+            await close_buttons(interaction, "Cette position est déjà close (vendue ou gardée).")
+            return None
+        rows = await ctx.db.open_listings_for_bid(bid_id)
+        scheduled = [r for r in rows if r["status"] in OPEN_STATUSES]
+        return bid, scheduled, [r for r in rows if r not in scheduled]
+
+    async def stale_fire(interaction: discord.Interaction, bid_id: int) -> None:
+        state = await position_state(interaction, bid_id)
+        if state is None:
+            return
+        _, scheduled, _ = state
+        if scheduled and inventory is not None:
+            await inventory.liquidate(scheduled[0]["id"])
+            current = await ctx.db.get_listing(scheduled[0]["id"])
+            note = (f"⚡ Bradée à **1 WB**, publiée {paris(current['post_at'])} pour "
+                    f"{current['duration_minutes'] // 60} h, fin {paris(current['target_end'])}.")
+        else:
+            await orders.give(ctx.db, bid_id, orders.FIRE)
+            note = "⚡ Noté : si la vente en cours reste invendue, la carte part tout de suite à **1 WB**."
+        log.info("Discord : position %d bradée", bid_id)
+        await close_buttons(interaction, note)
+
+    async def stale_keep(interaction: discord.Interaction, bid_id: int) -> None:
+        state = await position_state(interaction, bid_id)
+        if state is None:
+            return
+        _, _, posted = state
+        if posted:  # déjà publiée : le bot ne peut pas la retirer du site, il garde la carte à sa fin
+            await orders.give(ctx.db, bid_id, orders.KEEP)
+            note = "🔒 Noté : si la vente en cours reste invendue, la carte reste dans ta collection."
+        else:
+            await stop_resale(ctx, bid_id)
+            note = "🔒 Gardée : plus de revente, la carte reste dans ta collection."
+        log.info("Discord : position %d gardée", bid_id)
+        await close_buttons(interaction, note)
 
     async def keep_from_listing(interaction: discord.Interaction, listing_id: int) -> None:
         row = await listing_or_reply(interaction, listing_id)
@@ -525,7 +589,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         await interaction.response.send_modal(PriceModal(f"Revendre {row['title']}", priced, row["base_amount"]))
 
     handlers = {"price": change_price, "cheap": cheap, "keep": keep_from_listing, "resell": resell,
-                "recount": recount}
+                "recount": recount, "valuehist": value_history, "stalefire": stale_fire, "stalekeep": stale_keep}
     client.wm_handlers = handlers  # type: ignore[attr-defined]
     client.add_dynamic_items(MessageButton)
 
@@ -542,7 +606,8 @@ def persistent_view(buttons: list[tuple[str, int, str, discord.ButtonStyle]]) ->
 def message_view(actions: dict[str, Any]) -> discord.ui.View | None:
     """Boutons d'un message de vente (notifier, `actions`) ; None si la sorte de message n'en a pas."""
     buttons = MESSAGE_BUTTONS.get(actions.get("kind", ""))
-    if not buttons or not actions.get("listing"):
+    ref = actions.get("listing") or actions.get("bid")  # la vente, ou la position (alerte « Position qui traîne »)
+    if not buttons or not ref:
         return None
-    return persistent_view([(action, int(actions["listing"]), label, style) for action, label, style in buttons])
+    return persistent_view([(action, int(ref), label, style) for action, label, style in buttons])
 

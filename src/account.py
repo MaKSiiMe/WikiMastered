@@ -16,6 +16,7 @@ from src.config import RARITY_RANK
 from src.core.models import OwnedCard
 from src.core.pricing import combine, trusted
 from src.core.timeutils import now_local, utcnow
+from src.roi import wb
 from src.workers.base import Context
 
 KV_KEY = "collection_value"
@@ -75,10 +76,11 @@ async def collection_snapshot(ctx: Context, *, refresh: bool = False) -> dict:
     return snapshot
 
 
-async def account_value(ctx: Context, snapshot: dict) -> dict:
+async def account_value(ctx: Context, snapshot: dict, balance: int | None = None) -> dict:
     """Solde, collection, cartes en vente (au prix de départ) et mises en tête (WB bloqués), puis le total, gardé
-    par jour pour l'évolution."""
-    balance = await ctx.api.balance()
+    par jour pour l'évolution. `balance` : déjà lu par l'appelant (bilan du soir), sinon lu sur le site."""
+    if balance is None:
+        balance = await ctx.api.balance()
     listings = [r for r in await ctx.db.open_listings() if r["status"] in ("posted", "uncertain")]
     me = (ctx.client.user_id or "").lower()
     leading = [a for a in await ctx.api.my_bids()
@@ -93,3 +95,18 @@ async def account_value(ctx: Context, snapshot: dict) -> dict:
     await ctx.db.kv_set(HISTORY_KEY, dict(sorted(history.items())[-HISTORY_DAYS:]))
     return {**parts, "total": total, "listings": len(listings), "leading": len(leading),
             "previous": previous[-1] if previous else None}
+
+
+async def bilan_text(ctx: Context, balance: int | None) -> str | None:
+    """Bloc « Compte » du bilan du soir : total et évolution, d'après la dernière collection comptée (jamais relue
+    pour le bilan : None si elle a plus de 24 h ou n'existe pas)."""
+    snapshot = await ctx.db.kv_get(KV_KEY)
+    if not snapshot or utcnow() - datetime.fromisoformat(snapshot["at"]) > timedelta(hours=24):
+        return None
+    value = await account_value(ctx, snapshot, balance)
+    change = ""
+    if value["previous"]:
+        day, before = value["previous"]
+        change = f" ({wb(value['total'] - before, True)} WB depuis le {day[8:10]}/{day[5:7]})"
+    return (f"**{wb(value['total'])} WB**{change}\nSolde {wb(value['balance'])} · cartes {wb(value['cards'])} · "
+            f"en vente {wb(value['selling'])} · mises en tête {wb(value['bids'])}")

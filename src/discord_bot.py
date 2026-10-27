@@ -25,7 +25,8 @@ from types import ModuleType
 import discord
 from discord import app_commands
 
-from src import pauses, snipes
+from src import backup, pauses, snipes
+from src.charts import number, profit_bars
 from src.core import timeutils
 from src.core.timeutils import utcnow
 from src.recap import STALE_AFTER
@@ -122,6 +123,7 @@ def state_embed(ctx: Context, workers: list[Worker], started_at: datetime) -> di
                      f"{sniper.antibot_missed} mise(s) non placée(s). Fais-la dans ton navigateur, puis "
                      "« Vérification faite ».")
         color = RED if color == RED else ORANGE
+    lines.append(f"💾 Sauvegarde : {backup.describe(ctx.last_backup)}")
     if routes := client.paused_routes():
         lines.append("⏳ Routes du site en pause : " + ", ".join(f"{name} ({ago(timedelta(seconds=left))})"
                                                                for name, left in sorted(routes.items())))
@@ -411,6 +413,22 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     async def etat(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(embed=state_embed(ctx, workers, started), view=state_view())
 
+    @tree.command(name="sauvegarde", description="Sauvegarder la base maintenant (avant un gros changement)")
+    async def sauvegarde(interaction: discord.Interaction) -> None:
+        if not s.enable_backup:
+            await interaction.response.send_message("Sauvegardes désactivées (ENABLE_BACKUP).")
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            result = await backup.run_backup(ctx)
+        except Exception as exc:  # noqa: BLE001 - l'erreur est dite à l'utilisateur
+            log.exception("Sauvegarde demandée impossible")
+            await interaction.followup.send(f"❌ Sauvegarde impossible : {type(exc).__name__} : {exc}"[:1900])
+            return
+        await interaction.followup.send(f"💾 **{result.path.name}** : {result.size >> 20} Mo (base "
+                                        f"{result.db_size >> 20} Mo) en {result.seconds:.0f} s. "
+                                        f"{s.backup_keep} sauvegardes gardées au plus.")
+
     @tree.command(name="verif-faite", description="Vérification anti-bot faite : les mises reprennent sans attendre")
     async def verif_faite(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(verify())
@@ -476,11 +494,20 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @tree.command(name="roi", description="Bénéfice et ROI des reventes, jour par jour")
     @app_commands.describe(jours="nombre de jours, aujourd'hui compris (7 par défaut)")
     async def roi(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 60] = 7) -> None:
-        head, days = roi_discord(await cli.roi_report(ctx, jours))
+        report = await cli.roi_report(ctx, jours)
+        head, days = roi_discord(report)
         embed = discord.Embed(title=f"ROI des reventes · {jours} jour(s)", description=head, color=COLOR)
         for i, value in enumerate(fields(days)):
             embed.add_field(name="Par jour" if i == 0 else "\u200b", value=value, inline=False)
-        await interaction.response.send_message(embed=embed)
+        files = []
+        if len(report.days) >= 2:  # une barre par jour, sous le texte
+            png = await asyncio.to_thread(
+                profit_bars, [d.day for d in report.days], [d.profit for d in report.days],
+                "Bénéfice des reventes par jour",
+                f"{number(report.totals.profit, True)} WB · {number(report.per_day, True)} / jour")
+            files = [discord.File(io.BytesIO(png), filename="roi.png")]
+            embed.set_image(url="attachment://roi.png")
+        await interaction.response.send_message(embed=embed, files=files)
 
     @tree.command(name="solde", description="Solde du compte et capital immobilisé dans les positions")
     async def solde(interaction: discord.Interaction) -> None:

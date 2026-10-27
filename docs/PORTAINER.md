@@ -107,6 +107,16 @@ Chaque changement : stack > *Environment variables* > **Update the stack**.
 
 Une session reste valable tant qu'elle n'est pas révoquée : déconnexion de toutes les sessions, changement de mot de passe, ou jeton consommé par un autre appareil.
 
+**Sauvegardes.** Chaque nuit à 04:30 (`BACKUP_TIME`), le bot copie la base à chaud, vérifie la copie, la compresse (≈ 75 Mo pour 175 Mo, 8 s) et garde les 7 plus récentes (`BACKUP_KEEP`) dans le volume `wikimastered_wikimastered_backups`, séparé de celui des données. `/sauvegarde` sur Discord en fait une tout de suite (avant un gros changement) ; `/etat` montre la dernière. Elles sont sur la même machine : pour en avoir une ailleurs, `ssh wm-logs db > copie.db.gz` la récupère déjà sur ton PC.
+
+Pour **restaurer** (base perdue ou abîmée), sur le serveur, avec la stack arrêtée (Portainer : *Stop this stack*) :
+```sh
+docker volume ls | grep wikimastered                      # les noms exacts des deux volumes
+docker run --rm -v wikimastered_wikimastered_backups:/b -v wikimastered_wikimastered_data:/d alpine sh -c \
+  'ls /b; gunzip -c /b/wikimastered-AAAA-MM-JJ-HHMM.db.gz > /d/wikimastered.db && rm -f /d/wikimastered.db-wal /d/wikimastered.db-shm && chown 1000:1000 /d/wikimastered.db'
+```
+(remplace le nom de l'archive par l'une de celles que `ls /b` affiche), puis *Start this stack*. Les réglages changés sur Discord, les pauses et les cartes gardées sont dans la base : ils reviennent avec elle.
+
 **Données.** Volume `wikimastered_wikimastered_data` (*Volumes*) : base SQLite, logs et session. Il survit aux redéploiements et à la suppression du conteneur ; il n'est effacé que si tu supprimes le volume lui-même.
 
 **Arrêter.** Stack > *Stop*. Le bot termine proprement et envoie « Bot arrêté ».

@@ -17,6 +17,8 @@ services:
     volumes:
       # Volume nommé : survit aux redéploiements et hérite des droits de l'image (UID 1000).
       - wikimastered_data:/app/data
+      # Sauvegardes de la base : un volume à part, pour qu'elles survivent à la perte du volume des données.
+      - wikimastered_backups:/app/backups
     stop_grace_period: 20s
     mem_limit: 256m
     logging:
@@ -27,3 +29,4 @@ services:
 
 volumes:
   wikimastered_data:
+  wikimastered_backups:

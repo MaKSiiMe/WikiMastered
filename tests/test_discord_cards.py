@@ -116,7 +116,7 @@ async def test_message_buttons_survive_a_restart():
     assert all(re.fullmatch(template, i) for i in ids)
     assert not re.fullmatch(template, "wm:verif-faite")  # le bouton anti-bot garde le sien
     assert message_view({"kind": "relist"}) is None and message_view({"kind": "autre", "listing": 1}) is None
-    assert set(MESSAGE_BUTTONS) == {"relist", "fire_sale", "kept"}
+    assert set(MESSAGE_BUTTONS) == {"relist", "fire_sale", "kept", "stale"}
 
 
 @pytest.mark.asyncio
@@ -174,4 +174,95 @@ async def test_turning_off_duplicate_sales_cancels_queued_duplicates_only(tmp_pa
     ctx.settings.auto_discard = True
     await overrides.load(ctx)
     assert ctx.settings.auto_discard is False
+    await db.close()
+
+
+async def held_position(db, *, hours_ago: float, dry_run: bool = False, amount: int = 3000) -> int:
+    bid = await db.record_bid(auction_id=f"a{hours_ago}{dry_run}", card_id="c1", title="Ada", rarity="L",
+                              is_shiny=False, amount=amount, reference_price=4000, reason="revente", night=False,
+                              dry_run=dry_run, status="sim_won" if dry_run else "won", end_at=datetime.now(UTC))
+    await db._exec("UPDATE bids SET settled_at = ? WHERE id = ?",
+                   ((datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat(), bid))
+    return bid
+
+
+@pytest.mark.asyncio
+async def test_stale_position_is_signalled_once_with_buttons(tmp_path):
+    from src.workers.inventory_manager import InventoryManager
+
+    client, notifier = make_client(tmp_path, trades)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    sent = []
+    notifier.send = lambda level, title, description="", **fields: sent.append((title, description,
+                                                                                  fields.get("actions")))
+    stale = await held_position(db, hours_ago=60)
+    await held_position(db, hours_ago=10)  # récente
+    await held_position(db, hours_ago=90, dry_run=True)  # simulée : jamais signalée
+    inv = InventoryManager(ctx)
+    assert await inv.warn_stale_positions() == 1
+    title, description, actions = sent[0]
+    assert title == "Position qui traîne" and "il y a 60 h" in description and "aucune vente prévue" in description
+    assert actions == {"kind": "stale", "bid": stale}
+    assert await inv.warn_stale_positions() == 0  # une seule alerte
+    assert len(sent) == 1
+    view = message_view(actions)
+    assert [i.custom_id for i in view.children] == [f"wm:stalefire:{stale}", f"wm:stalekeep:{stale}"]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_orders_apply_when_the_published_sale_ends_unsold(tmp_path):
+    """« Garder » ou « Brader » sur une vente déjà publiée : appliqué à sa fin ; une position close n'est jamais
+    remise en vente (carte gardée sur Discord pendant que sa vente était publiée)."""
+    from src import orders
+    from src.workers.inventory_manager import InventoryManager
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"collection": []}))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    inv = InventoryManager(ctx)
+    now = datetime.now(UTC)
+
+    async def unsold_listing(bid_id: int):
+        lid = await db.schedule_listing(owned_card_id=f"o{bid_id}", card_id="c1", title="Ada", rarity="L",
+                                        base_amount=4000, duration_minutes=360, post_at=now,
+                                        target_end=now + timedelta(hours=6), reason="position", bid_id=bid_id)
+        await db.update_listing(lid, status="unsold")
+        return await db.get_listing(lid)
+
+    keep = await held_position(db, hours_ago=60)
+    await orders.give(db, keep, orders.KEEP)
+    await inv._unsold(await unsold_listing(keep), await db.get_bid(keep), "Ada (L)")
+    assert (await db.get_bid(keep))["closed"] == 1 and await orders.take(db, keep) is None
+    assert not await db._all("SELECT * FROM listings WHERE status = 'scheduled'")
+
+    fire = await held_position(db, hours_ago=61)
+    await orders.give(db, fire, orders.FIRE)
+    await inv._unsold(await unsold_listing(fire), await db.get_bid(fire), "Ada (L)")
+    row = await db._one("SELECT base_amount, reason FROM listings WHERE bid_id = ? AND status = 'scheduled'", (fire,))
+    assert row["base_amount"] == 1 and row["reason"].startswith("liquidation")
+
+    closed = await held_position(db, hours_ago=62)
+    await db.close_position(closed, None)  # gardée pendant que sa vente était publiée
+    await inv._unsold(await unsold_listing(closed), await db.get_bid(closed), "Ada (L)")
+    assert not await db._all("SELECT * FROM listings WHERE bid_id = ? AND status = 'scheduled'", (closed,))
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_buying_a_discord_sale_to_one_wb_picks_a_late_ending_for_at_least_three_hours(tmp_path):
+    from src.workers.inventory_manager import InventoryManager
+
+    client, notifier = make_client(tmp_path, trades)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    bid = await held_position(db, hours_ago=60)
+    lid = await db.schedule_listing(owned_card_id="o", card_id="c1", title="Ada", rarity="L", base_amount=4000,
+                                    duration_minutes=720, post_at=now, target_end=now + timedelta(hours=12),
+                                    reason="position", bid_id=bid)
+    await InventoryManager(ctx).liquidate(lid)
+    row = await db.get_listing(lid)
+    assert row["base_amount"] == 1 and row["duration_minutes"] >= 180 and row["reason"].startswith("liquidation")
     await db.close()

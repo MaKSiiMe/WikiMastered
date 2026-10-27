@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     timezone: str = "Europe/Paris"
     data_dir: Path = Path("data")
+    # Sauvegarde quotidienne de la base (src/backup.py) dans un volume à part ; BACKUP_KEEP archives gardées.
+    enable_backup: bool = True
+    backup_dir: Path = Path("backups")
+    backup_time: time = time(4, 30)
+    backup_keep: int = 7
     endpoints_file: Path = Path("config/endpoints.yaml")
 
     # --- Session WikiMasters ---------------------------------------------------
@@ -138,6 +143,9 @@ class Settings(BaseSettings):
     # --- Cotes ------------------------------------------------------------------
     price_cache_ttl_minutes: float = 180.0
     price_min_sales: int = 2     # ventes observées minimum avant d'acheter une carte
+    # Un shiny en demande plus : son marché est maigre (Mark Wahlberg ✨, achetée 6119 le 24/10 sur 3 ventes de 3400,
+    # 7797 et 8000, revendue 5000). Seules ses propres ventes comptent, la cote du site n'entre pas dans l'estimation.
+    sniper_shiny_min_sales: int = 4
     price_recent_sales: int = 5  # estimation = médiane des N dernières ventes observées
     # Achat d'une position : parmi ces N ventes, au moins tant de ventes disputées (plus d'une mise), et la plus
     # haute pas plus de X fois la plus basse (0 = sans limite). Le 18/10, l'éclipse XXIe était achetée 882 sur une
@@ -242,6 +250,10 @@ class Settings(BaseSettings):
     # Positions chères (achetées ≥ POSITION_EXPENSIVE_FROM WB) : moins de remises avant la revente à 1 WB, le capital
     # et la place de vente ne restent pas bloqués 2 jours (Mark Wahlberg : 7037, 6333, 5700, 5508 en 48 h, toutes
     # invendues, puis 5000 à 1 WB). 0 = mêmes règles pour toutes.
+    # Position détenue depuis plus de N heures : alerte « Position qui traîne » avec boutons (une fois). Au-delà de
+    # l'échelle de remises (≈ 24-40 h), quelque chose bloque : pas de place de vente, exemplaire introuvable, favori.
+    # 0 = jamais.
+    position_stale_hours: float = 48.0
     position_expensive_from: int = 1000
     position_expensive_max_relists: int = 1
     position_expensive_fire_sale_after: int = 2

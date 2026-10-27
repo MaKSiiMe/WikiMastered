@@ -388,3 +388,19 @@ async def test_ended_feed_reads_next_page_when_targets_lie_beyond(tmp_path):
 
 
 _EPOCH_TEST = datetime.min.replace(tzinfo=UTC)
+
+
+def test_shiny_needs_more_observed_sales_before_a_resale_purchase():
+    """Mark Wahlberg ✨ (24/10) : achetée sur 3 ventes shiny, revendue 1119 WB sous son prix d'achat."""
+    from src.workers.auction_sniper import min_sales
+
+    s = Settings(_env_file=None, sniper_min_bid_share=0, sniper_min_contested_sales=0, sniper_max_price_spread=0)
+    params = snipe_params(s, night=False)
+    shiny = Auction.model_validate({**sale("x", "Mark", "L", 15, base=100), "is_shiny": True})
+    plain = Auction.model_validate(sale("y", "Mark", "L", 15, base=100))
+    assert (min_sales(s, True), min_sales(s, False)) == (4, 2)
+    three, four = Quote(7797, 3), Quote(7797, 4)
+    assert decide(shiny, params, three, min_sales(s, shiny.shiny)) is None
+    assert decide(shiny, params, four, min_sales(s, shiny.shiny)) is not None
+    assert decide(plain, params, three, min_sales(s, plain.shiny)) is not None  # une carte ordinaire : 2 ventes
+    assert Settings(_env_file=None, sniper_shiny_min_sales=1).sniper_shiny_min_sales == 1

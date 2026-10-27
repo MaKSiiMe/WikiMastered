@@ -13,7 +13,7 @@ RUN pip install -r requirements.txt
 
 # Utilisateur non-root ; l'UID 1000 correspond en général au premier utilisateur Debian,
 # ce qui évite les problèmes de droits sur le volume ./data.
-RUN useradd --create-home --uid 1000 bot && mkdir -p /app/data && chown bot:bot /app/data
+RUN useradd --create-home --uid 1000 bot && mkdir -p /app/data /app/backups && chown bot:bot /app/data /app/backups
 
 COPY --chown=bot:bot src ./src
 COPY --chown=bot:bot config ./config
