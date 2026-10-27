@@ -429,9 +429,13 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         return embed, persistent_view([("recount", 0, "🔄 Recompter la collection", discord.ButtonStyle.secondary)])
 
     async def recount(interaction: discord.Interaction, _ref: int = 0) -> None:
-        await interaction.response.edit_message(content="⏳ Je relis toute ta collection (2-3 min, le sniper passe "
-                                                        "avant)…", view=None)
+        # L'ancienne valeur disparaît pendant la relecture : on ne la prend pas pour la nouvelle.
+        await interaction.response.edit_message(content=None, view=None, embed=discord.Embed(
+            title="Valeur du compte", color=GREY,
+            description="⏳ Je relis toute ta collection (2-3 min, le sniper passe avant)…"))
+        started = utcnow()
         embed, view = await value_message(True)
+        log.info("Discord : collection recomptée en %s", ago(utcnow() - started))
         await interaction.edit_original_response(content=None, embed=embed, view=view)
 
     @tree.command(name="valeur", description="Valeur du compte : solde + cartes + ventes en cours + mises en tête")
