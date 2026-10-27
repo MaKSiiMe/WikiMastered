@@ -116,6 +116,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
 OBSOLETE = ["DROP TABLE IF EXISTS trend_alerts", "DROP INDEX IF EXISTS idx_auctions_title",
             *(f"DROP TABLE IF EXISTS {t}" for t in ("pulls", "pack_opens", "pack_checks", "trend_signals", "trend_terms",
                                                      "pageviews", "value_sightings"))]
+# Victoire remisée à la main avant la correction du 27/10 : le prix payé est le prix final, pas la mise du bot.
+REPAIRS = ["UPDATE bids SET amount = final_price WHERE status = 'won' AND dry_run = 0 AND final_price > amount"]
 # Ventes observées gardées N jours (estimations, ventes factices, commandes hours et gifs).
 OBSERVED_KEEP_DAYS = 60
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
@@ -190,7 +192,7 @@ class Database:
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_observed_pair ON observed_sales (seller_id, buyer_id)")
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_seen_card ON auctions_seen (card_id, end_at)")
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_seen_end ON auctions_seen (end_at)")
-        for statement in OBSOLETE:
+        for statement in (*OBSOLETE, *REPAIRS):
             await self._db.execute(statement)
         await self._db.commit()
 

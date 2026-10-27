@@ -1469,6 +1469,12 @@ class AuctionSniper(Worker):
         # Un achat « collection » est gardé : ce n'est pas une position à revendre.
         closed = int(won and str(row["reason"] or "").startswith(COLLECTION_PREFIX))
         await self.db.update_bid(row["id"], status=status, settled_at=utcnow(), closed=closed, final_price=final)
+        amount = row["amount"]
+        if won and not simulated and final and final > amount:
+            # Remisée à la main au-dessus de la mise du bot : le compte a payé le prix final, la revente part de là
+            # (le 27/10, FC Barcelone gagnée à 3116 après une mise du bot à 2574 était remise en vente à 3130).
+            amount = final
+            await self.db.update_bid(row["id"], amount=amount, note=f"remisée à la main (mise du bot : {row['amount']})")
         self._leading.pop(row["auction_id"], None)
         self._engaged.pop(row["auction_id"], None)
         if not won:
@@ -1492,13 +1498,15 @@ class AuctionSniper(Worker):
                 self.log.info("%s : %s", title, row["title"])
                 return
             notify(title, f"{name}, gardée dans la collection", topic=Topic.COLLECTION, **look,
-                   rareté=row["rarity"] or "?", prix=f"{row['amount']} WB")
+                   rareté=row["rarity"] or "?", prix=f"{amount} WB")
             return
         ref = row["reference_price"]
-        fields = {"rareté": row["rarity"] or "?", "mise": f"{row['amount']} WB"}
+        fields = {"rareté": row["rarity"] or "?", "mise": f"{amount} WB"}
+        if amount != row["amount"]:
+            fields["mise"] += f" (remisée à la main, bot : {row['amount']} WB)"
         if ref:
             fields["revente visée"] = f"~{ref:.0f} WB"
-            fields["bénéfice attendu"] = f"~{ref - row['amount']:.0f} WB"
+            fields["bénéfice attendu"] = f"~{ref - amount:.0f} WB"
         fields["nuit"] = "oui" if row["night"] else "non"
         if simulated:
             if self.settings.notify_simulated:
