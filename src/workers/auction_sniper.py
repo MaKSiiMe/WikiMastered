@@ -1210,7 +1210,8 @@ class AuctionSniper(Worker):
             "Sniper : vérification anti-bot toujours en attente",
             f"Mises refusées depuis {since:%d/%m %H:%M} ({minutes // 60} h {minutes % 60:02d}) : "
             f"{self._antibot_missed} mise(s) non placée(s) depuis. Fais la vérification dans ton navigateur "
-            "(mise à la main sur le marché, ou page Paquets) : les mises repartent dès qu'elle est faite.")
+            "(mise à la main sur le marché, ou page Paquets) : les mises repartent dès qu'elle est faite.",
+            actions={"kind": "antibot"})
 
     @property
     def antibot_since(self) -> datetime | None:
@@ -1354,7 +1355,7 @@ class AuctionSniper(Worker):
                     f"Le site refuse les mises tant qu'elle n'est pas faite ({label} : {decision.amount} WB "
                     "refusée). Fais-la toi-même dans ton navigateur : mise à la main sur le marché, ou page "
                     f"Paquets si elle la demande. En attendant, le bot {retry_text(retry)} et te prévient dès "
-                    "qu'une mise repasse.", dm=False)  # message privé à part, avec le bouton « C'est fait »
+                    "qu'une mise repasse.", actions={"kind": "antibot"})  # bouton « C'est fait » (bot Discord)
             return False
         if not retried and isinstance(server_min, int) and decision.amount < server_min <= decision.ceiling:
             # Un rival a misé entre la lecture et la mise : une position repart au-dessus du nouveau minimum.

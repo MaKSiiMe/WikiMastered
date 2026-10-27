@@ -111,10 +111,8 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | `/opportunites` | Les ventes que le sniper surveille et son plafond pour chacune |
 | `/top [nombre] [shiny]` | Les 10, 25 ou 50 cartes les plus chères en moyenne sur les ventes observées des 7 derniers jours (au moins 3 ventes), normales ou shiny |
 
-Quand le site demande la vérification anti-bot, le bot t'envoie aussi un **message privé** avec un bouton « C'est fait ». Le message indique ensuite quand les mises repassent.
-
-Avec le bot Discord connecté :
-- les **alertes critiques** arrivent aussi en message privé ;
+Le bot n'envoie jamais de message privé : tout arrive dans les salons des webhooks. Avec le bot Discord connecté :
+- « Vérification anti-bot demandée » (et son rappel toutes les heures) arrive dans le salon des alertes avec la mention et le bouton **C'est fait** ; quand une mise repasse, le message devient « ✅ Vérification levée » ;
 - « Revente sans acheteur » arrive avec les boutons **Changer le prix**, **Brader à 1 WB** et **Garder** (tant que la remise en vente n'est pas publiée) ;
 - « Revente à 1 WB » arrive avec **Changer le prix** et **Garder** ;
 - « Position invendue » et « Vente sans acheteur » arrivent avec **Remettre en vente…**.
