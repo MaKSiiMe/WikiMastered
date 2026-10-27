@@ -369,7 +369,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         is_kept = any(k.matches(carte, None) and not k.rarity for k in kept)
         embed = discord.Embed(title=copies[0].title if copies else carte, color=COLOR)
         lines = card_lines(copies, excluded, kept, await ctx.db.scheduled_owned_ids(),
-                           {t.casefold() for t in s.protected_tags})
+                           s.protected_tag_keys)
         embed.add_field(name=f"Tes exemplaires ({len(copies)})", value="\n".join(lines)[:1024] or "aucun",
                         inline=False)
         card_ids = {c.catalog_id for c in copies} | {r["card_id"] for r in await ctx.db.observed_for_title(carte)}

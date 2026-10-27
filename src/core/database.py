@@ -74,6 +74,11 @@ CREATE INDEX IF NOT EXISTS idx_observed_card ON observed_sales (card_id, ended_a
 -- Plus haut prix observé de chaque carte parmi les ventes purgées (OBSERVED_KEEP_DAYS) : la défausse ne doit pas
 -- oublier qu'une carte s'est déjà vendue cher.
 CREATE TABLE IF NOT EXISTS observed_max (card_id TEXT PRIMARY KEY, price INTEGER NOT NULL);
+-- Ce que Wikidata dit de l'article de chaque carte (étiquettes de thème) ; `rules` : empreinte des classes cherchées
+-- (relu quand config/etiquettes.yaml change) ; `facts` NULL : pas d'élément Wikidata.
+CREATE TABLE IF NOT EXISTS card_facts (
+    title TEXT PRIMARY KEY, facts TEXT, rules TEXT NOT NULL, fetched_at TEXT NOT NULL
+);
 """
 
 
@@ -223,6 +228,20 @@ class Database:
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (key, json.dumps(value, default=str), iso(utcnow())),
         )
+
+    # ------------------------------------------------------- faits Wikidata
+    async def card_facts(self) -> dict[str, tuple[dict | None, str, datetime]]:
+        """Titre -> (faits Wikidata ou None, empreinte des règles, date de lecture)."""
+        return {r["title"]: (json.loads(r["facts"]) if r["facts"] else None, r["rules"], parse_iso(r["fetched_at"]))
+                for r in await self._all("SELECT title, facts, rules, fetched_at FROM card_facts")}  # type: ignore[misc]
+
+    async def card_facts_put(self, facts: dict[str, dict | None], rules: str) -> None:
+        now = iso(utcnow())
+        await self.db.executemany(
+            "INSERT INTO card_facts (title, facts, rules, fetched_at) VALUES (?, ?, ?, ?) ON CONFLICT(title) DO UPDATE "
+            "SET facts = excluded.facts, rules = excluded.rules, fetched_at = excluded.fetched_at",
+            [(t, json.dumps(f, ensure_ascii=False) if f is not None else None, rules, now) for t, f in facts.items()])
+        await self.db.commit()
 
     # ---------------------------------------------------------------- cotes
     async def price_get(self, card_id: str) -> tuple[datetime, dict[str, tuple[float | None, int | None]]] | None:

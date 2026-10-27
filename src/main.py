@@ -55,6 +55,7 @@ from src.workers.achievements import AchievementsWorker
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
 from src.workers.collection import CollectionWorker, progress_lines, summary_line, targets, unknown_text
+from src.workers.themes import ThemeTagger
 from src.workers.collection import refresh as refresh_collection
 from src.workers.inventory_manager import InventoryManager
 from src.workers.inventory_manager import cli as inventory_cli
@@ -444,6 +445,8 @@ async def run_bot(settings: Settings) -> None:
             workers.append(InventoryManager(ctx))
         if settings.collection_sets or settings.collection_titles:
             workers.append(CollectionWorker(ctx))
+        if settings.enable_theme_tags:
+            workers.append(ThemeTagger(ctx))
         if settings.enable_achievements:
             workers.append(AchievementsWorker(ctx))
         if settings.enable_value_scan:
@@ -551,6 +554,26 @@ async def collection_status(ctx: Context) -> None:
         print(f"Étiquettes : {state['tag_error']}")
 
 
+async def themes_status(ctx: Context) -> None:
+    """Classe toute la collection par thème (Wikidata) et montre ce que le worker étiquettes poserait, sans rien
+    écrire. Les faits lus sur Wikidata sont gardés en base, comme par le worker."""
+    from src.core.wikidata import Wikidata
+    from src.workers import themes
+
+    wikidata = Wikidata()
+    try:
+        state = await themes.run_pass(ctx, wikidata, write=False)
+    finally:
+        await wikidata.close()
+    print(themes.summary(state))
+    if state["untagged"]:
+        print("Sans thème (corrections possibles dans config/etiquettes.yaml) : " + ", ".join(state["untagged"]))
+    print(f"À poser : {state['to_add']} ; « {ctx.settings.theme_duplicate_tag} » à retirer : {state['to_remove']}")
+    if state["missing_tags"]:
+        print("Étiquettes à créer sur le site : " + ", ".join(state["missing_tags"]))
+    print("Champ « category » des cartes : " + ", ".join(f"{k} ({n})" for k, n in state["categories"].items()))
+
+
 async def market_status(ctx: Context, pages: int, sort: str, rarity: str) -> None:
     """Lit quelques pages du marché (50 enchères, 3 s d'écart) et montre où sont les fins imminentes,
     avec les en-têtes de cache de la réponse (une réponse en cache peut dater de plusieurs secondes)."""
@@ -630,6 +653,7 @@ def main(argv: list[str] | None = None) -> None:
     ins = sub.add_parser("inspect", help="capture les vraies réponses JSON (lecture seule)")
     ins.add_argument("--out", default=None)
     sub.add_parser("collection", help="collection à compléter : possédées / manquantes (lecture seule)")
+    sub.add_parser("etiquettes", help="thèmes de toute la collection (Wikidata) et étiquettes à poser (sans écrire)")
     mk = sub.add_parser("market", help="où sont les fins imminentes dans le marché (lecture seule)")
     mk.add_argument("--pages", type=int, default=4)
     mk.add_argument("--sort", default="ending_soon")
@@ -680,6 +704,7 @@ def main(argv: list[str] | None = None) -> None:
         "report": daily_report,
         "inspect": lambda ctx: inspect(ctx, args.out),
         "collection": collection_status,
+        "etiquettes": themes_status,
         "market": lambda ctx: market_status(ctx, max(1, min(args.pages, 10)), args.sort, args.rarity.upper()),
         "gifs": gifs_status,
         "profile": profile_status,

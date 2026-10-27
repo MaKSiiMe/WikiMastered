@@ -16,6 +16,7 @@ from urllib.parse import quote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from src.core.text import tag_key
 from src.core.timeutils import utcnow
 
 log = logging.getLogger(__name__)
@@ -90,8 +91,8 @@ class OwnedCard(_Model):
         names = set()
         for tag in self.tags:
             name = tag.get("name") if isinstance(tag, dict) else tag
-            if isinstance(name, str) and name.strip():
-                names.add(name.strip().casefold())
+            if isinstance(name, str) and tag_key(name):
+                names.add(tag_key(name))
         return names
 
     @property
