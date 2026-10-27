@@ -353,11 +353,18 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
             sold = f", revendue {b['sale_price']}" if b["sale_price"] else ""
             ref = f"{b['reference_price']:.0f}" if b["reference_price"] else "?"
             lines.append(f"  {paris(b['placed_at'])}  {b['rarity']}  {kind} : {b['amount']} WB, estimée ~{ref}{sold}")
-    lines.append(f"\nEn vente maintenant ({len(selling)}) :" if selling else "\nEn vente maintenant : aucune")
+    heading = f"En vente maintenant ({len(selling)})" if selling else "En vente maintenant : aucune"
+    lines.append(f"\n**{heading}**" if md else f"\n{heading}" + (" :" if selling else ""))
     for a in sorted(selling, key=lambda a: a.min_bid):
         price = f"mise actuelle {a.current_bid}" if a.current_bid else f"départ {a.base_amount}, aucune mise"
         mine = "  (toi)" if me and (a.seller_id or "").lower() == me.lower() else ""
         left = int(a.seconds_left(now) // 60)
+        if md:
+            amount = f"**{a.current_bid} WB** (mise)" if a.current_bid else \
+                f"**{a.base_amount} WB** (départ, aucune mise)"
+            lines.append(f"`fin dans {left // 60} h {left % 60:02d}` **{a.rarity or '?'}**{' ✨' if a.shiny else ''} "
+                         f"{amount}{' · toi' if mine else ''}")
+            continue
         lines.append(f"  {a.rarity or '?':<3}{' ✨' if a.shiny else ''} {price}, fin dans {left // 60} h "
                      f"{left % 60:02d}{mine}")
     return "\n".join(lines)

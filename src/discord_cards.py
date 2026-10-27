@@ -107,7 +107,10 @@ async def close_buttons(interaction: discord.Interaction, note: str) -> None:
         await interaction.response.edit_message(embed=embed, view=None)
 
 
-def card_lines(copies: list[OwnedCard], excluded: set[str], kept: list[keeps.Keep]) -> list[str]:
+def card_lines(copies: list[OwnedCard], excluded: set[str], kept: list[keeps.Keep], selling: set[str],
+               protected_tags: set[str]) -> list[str]:
+    """Une ligne par exemplaire, avec ce qui l'empêche d'être vendu : en vente (`selling` : programmée ou publiée),
+    étiquette protégée, gardé, sinon un échange en attente (seule raison restante d'`excluded`)."""
     lines = []
     for c in sorted(copies, key=lambda c: (c.rarity or "", c.obtained_at or utcnow())):
         notes = []
@@ -115,10 +118,14 @@ def card_lines(copies: list[OwnedCard], excluded: set[str], kept: list[keeps.Kee
             notes.append("✨ shiny")
         if c.starred:
             notes.append("⭐ favori")
+        if c.id in selling:
+            notes.append("🏷️ en vente")
         if any(k.matches(c.title, c.rarity) for k in kept):
             notes.append("🔒 gardée")
-        elif c.id in excluded:
-            notes.append("en vente, en échange ou protégée")
+        if c.tag_names & protected_tags:
+            notes.append("🛡️ étiquette protégée")
+        elif c.id in excluded and c.id not in selling and not any(k.matches(c.title, c.rarity) for k in kept):
+            notes.append("🤝 en échange")
         if c.tag_names:
             notes.append("étiquettes : " + ", ".join(sorted(c.tag_names)))
         got = f"obtenue le {paris(c.obtained_at)}" if c.obtained_at else ""
@@ -360,7 +367,8 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         kept = await keeps.load(ctx.db)
         is_kept = any(k.matches(carte, None) and not k.rarity for k in kept)
         embed = discord.Embed(title=copies[0].title if copies else carte, color=COLOR)
-        lines = card_lines(copies, excluded, kept)
+        lines = card_lines(copies, excluded, kept, await ctx.db.scheduled_owned_ids(),
+                           {t.casefold() for t in s.protected_tags})
         embed.add_field(name=f"Tes exemplaires ({len(copies)})", value="\n".join(lines)[:1024] or "aucun",
                         inline=False)
         card_ids = {c.catalog_id for c in copies} | {r["card_id"] for r in await ctx.db.observed_for_title(carte)}

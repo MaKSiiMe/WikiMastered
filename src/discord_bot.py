@@ -430,6 +430,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
 
         async def resume_now(button_interaction: discord.Interaction) -> None:
             resumed = await pauses.resume(ctx, paused)
+            log.info("Discord : reprise de %s (bouton)", ", ".join(resumed) or "rien")
             await button_interaction.response.edit_message(
                 content=f"▶️ Repris : {', '.join(resumed) or 'déjà repris'}.", view=None)
 
