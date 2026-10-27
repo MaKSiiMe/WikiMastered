@@ -598,6 +598,11 @@ class Database:
         await self.db.commit()
         return cur.rowcount
 
+    async def open_listings_for_bid(self, bid_id: int) -> list[aiosqlite.Row]:
+        """Ventes programmées ou en cours de cette position."""
+        return await self._all(f"SELECT * FROM listings WHERE bid_id = ? AND status IN {LISTING_OPEN} ORDER BY id",
+                               (bid_id,))
+
     async def held_for_title(self, title: str) -> list[aiosqlite.Row]:
         """Positions détenues de cette carte (titre exact, casse ignorée)."""
         return await self._all(f"SELECT * FROM bids WHERE {HELD} AND lower(title) = lower(?)", (title,))

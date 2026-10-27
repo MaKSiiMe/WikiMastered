@@ -240,6 +240,10 @@ class Settings(BaseSettings):
     # Positions chères (achetées ≥ POSITION_EXPENSIVE_FROM WB) : moins de remises avant la revente à 1 WB, le capital
     # et la place de vente ne restent pas bloqués 2 jours (Mark Wahlberg : 7037, 6333, 5700, 5508 en 48 h, toutes
     # invendues, puis 5000 à 1 WB). 0 = mêmes règles pour toutes.
+    # Position détenue depuis plus de N heures : alerte « Position qui traîne » avec boutons (une fois). Au-delà de
+    # l'échelle de remises (≈ 24-40 h), quelque chose bloque : pas de place de vente, exemplaire introuvable, favori.
+    # 0 = jamais.
+    position_stale_hours: float = 48.0
     position_expensive_from: int = 1000
     position_expensive_max_relists: int = 1
     position_expensive_fire_sale_after: int = 2
