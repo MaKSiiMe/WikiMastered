@@ -195,19 +195,10 @@ themes:
       - Q11514315  # période historique
       - Q839954    # site archéologique
 
-# Babie : une personne de sexe féminin, née en NEE_APRES ou après, vivante, dont la description commence un mot
-# par l'un de ceux-ci (« actrice, productrice et mannequin israélienne »).
-babie:
-  etiquette: Babie
-  nee_apres: 1960
-  vivante: true
-  description: [actrice, mannequin, chanteuse, rappeuse, animatrice, présentatrice, youtubeuse, vidéaste,
-                streameuse, influenceuse, tiktokeuse, instagrameuse, créatrice de contenu, personnalité médiatique,
-                personnalité de la télévision, personnalité télévisuelle, télé-réalité, miss,
-                reine de beauté, top model, top-model, danseuse, princesse, playmate, comédienne]
+# Babie : posée à la main sur le site, le bot ne la pose pas (et n'enlève jamais un thème).
 
 # Corrections à la main, prioritaires sur Wikidata : titre exact de la carte -> ses thèmes (remplacent ceux trouvés ;
 # [] : aucun thème).
 corrections:
-  Ingrid Alexandra de Norvège: [Personne, Babie]
+  Ingrid Alexandra de Norvège: [Personne]
   Marteau: [Objet]
