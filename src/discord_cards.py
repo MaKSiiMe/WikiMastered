@@ -12,16 +12,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import discord
 from discord import app_commands
 
 from src import account, keeps, orders, overrides, pauses, snipes
+from src.charts import number, value_line
 from src.core.models import OwnedCard
 from src.core.timeutils import utcnow
 from src.discord_bot import COLOR, CONFIRM_SECONDS, GREY, RARITIES, Buttons, ago, paris
@@ -427,7 +430,22 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     async def value_message(refresh: bool) -> tuple[discord.Embed, discord.ui.View]:
         snapshot = await account.collection_snapshot(ctx, refresh=refresh)
         embed = value_embed(await account.account_value(ctx, snapshot), snapshot)
-        return embed, persistent_view([("recount", 0, "🔄 Recompter la collection", discord.ButtonStyle.secondary)])
+        return embed, persistent_view([("valuehist", 0, "📈 Évolution", discord.ButtonStyle.primary),
+                                       ("recount", 0, "🔄 Recompter la collection", discord.ButtonStyle.secondary)])
+
+    async def value_history(interaction: discord.Interaction, _ref: int = 0) -> None:
+        points = sorted((await ctx.db.kv_get(account.HISTORY_KEY, {})).items())[-30:]
+        if len(points) < 2:
+            await interaction.response.send_message(
+                "Pas encore d'historique : la valeur du compte est notée une fois par jour, il en faut au moins "
+                "deux. Reviens demain.", ephemeral=True)
+            return
+        await interaction.response.defer(thinking=True)
+        values = [float(v) for _, v in points]
+        png = await asyncio.to_thread(
+            value_line, [date.fromisoformat(d) for d, _ in points], values, "Valeur du compte",
+            f"{number(values[-1] - values[0], True)} WB sur {len(points)} jours")
+        await interaction.followup.send(file=discord.File(io.BytesIO(png), filename="valeur.png"))
 
     async def recount(interaction: discord.Interaction, _ref: int = 0) -> None:
         # L'ancienne valeur disparaît pendant la relecture : on ne la prend pas pour la nouvelle.
@@ -571,7 +589,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         await interaction.response.send_modal(PriceModal(f"Revendre {row['title']}", priced, row["base_amount"]))
 
     handlers = {"price": change_price, "cheap": cheap, "keep": keep_from_listing, "resell": resell,
-                "recount": recount, "stalefire": stale_fire, "stalekeep": stale_keep}
+                "recount": recount, "valuehist": value_history, "stalefire": stale_fire, "stalekeep": stale_keep}
     client.wm_handlers = handlers  # type: ignore[attr-defined]
     client.add_dynamic_items(MessageButton)
 

@@ -84,9 +84,9 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | Commande | Réponse |
 |---|---|
 | `/bilan` | Le bilan du jour, sans attendre 23:00 |
-| `/roi [jours]` | Bénéfice et ROI des reventes, jour par jour (7 jours par défaut) |
+| `/roi [jours]` | Bénéfice et ROI des reventes, jour par jour (7 jours par défaut), avec un graphique en barres |
 | `/solde` | Solde, capital dans les positions, total |
-| `/valeur` | Valeur du compte : solde + cartes possédées (estimation du bot) + cartes en vente (prix de départ) + mises en tête, l'évolution depuis la veille, la collection par rareté et les cartes les plus chères. Bouton : recompter la collection |
+| `/valeur` | Valeur du compte : solde + cartes possédées (estimation du bot) + cartes en vente (prix de départ) + mises en tête, l'évolution depuis la veille, la collection par rareté et les cartes les plus chères. Boutons : 📈 évolution (courbe de la valeur, notée chaque jour), 🔄 recompter la collection |
 | `/positions` | Cartes achetées pour la revente, et où en est leur vente |
 | `/ventes` | Ventes programmées et en cours |
 | `/prix <carte>` | Ventes observées, estimation du bot, ventes en cours |

@@ -26,6 +26,7 @@ import discord
 from discord import app_commands
 
 from src import backup, pauses, snipes
+from src.charts import number, profit_bars
 from src.core import timeutils
 from src.core.timeutils import utcnow
 from src.recap import STALE_AFTER
@@ -493,11 +494,20 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @tree.command(name="roi", description="Bénéfice et ROI des reventes, jour par jour")
     @app_commands.describe(jours="nombre de jours, aujourd'hui compris (7 par défaut)")
     async def roi(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 60] = 7) -> None:
-        head, days = roi_discord(await cli.roi_report(ctx, jours))
+        report = await cli.roi_report(ctx, jours)
+        head, days = roi_discord(report)
         embed = discord.Embed(title=f"ROI des reventes · {jours} jour(s)", description=head, color=COLOR)
         for i, value in enumerate(fields(days)):
             embed.add_field(name="Par jour" if i == 0 else "\u200b", value=value, inline=False)
-        await interaction.response.send_message(embed=embed)
+        files = []
+        if len(report.days) >= 2:  # une barre par jour, sous le texte
+            png = await asyncio.to_thread(
+                profit_bars, [d.day for d in report.days], [d.profit for d in report.days],
+                "Bénéfice des reventes par jour",
+                f"{number(report.totals.profit, True)} WB · {number(report.per_day, True)} / jour")
+            files = [discord.File(io.BytesIO(png), filename="roi.png")]
+            embed.set_image(url="attachment://roi.png")
+        await interaction.response.send_message(embed=embed, files=files)
 
     @tree.command(name="solde", description="Solde du compte et capital immobilisé dans les positions")
     async def solde(interaction: discord.Interaction) -> None:
