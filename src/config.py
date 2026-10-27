@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     # --- Cotes ------------------------------------------------------------------
     price_cache_ttl_minutes: float = 180.0
     price_min_sales: int = 2     # ventes observées minimum avant d'acheter une carte
+    # Un shiny en demande plus : son marché est maigre (Mark Wahlberg ✨, achetée 6119 le 24/10 sur 3 ventes de 3400,
+    # 7797 et 8000, revendue 5000). Seules ses propres ventes comptent, la cote du site n'entre pas dans l'estimation.
+    sniper_shiny_min_sales: int = 4
     price_recent_sales: int = 5  # estimation = médiane des N dernières ventes observées
     # Achat d'une position : parmi ces N ventes, au moins tant de ventes disputées (plus d'une mise), et la plus
     # haute pas plus de X fois la plus basse (0 = sans limite). Le 18/10, l'éclipse XXIe était achetée 882 sur une
