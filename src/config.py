@@ -16,6 +16,8 @@ from typing import Annotated, Any, Literal, get_args, get_origin
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from src.core.text import tag_key
+
 
 RARITIES: tuple[str, ...] = ("C", "PC", "R", "SR", "UR", "L")
 RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
@@ -25,7 +27,7 @@ WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "sniper": ("place_bid",),            # mises des positions (achat pour revendre)
     "collection": ("collection_bid",),   # mises du mode collection (cartes gardées)
     "ventes": ("create_listing",), "inventory": ("create_listing", "bulk_discard"),
-    "defausse": ("bulk_discard",), "tags": ("tag_card",),
+    "defausse": ("bulk_discard",), "tags": ("tag_card",), "themes": ("theme_tag",),
     "succes": ("achievements_check", "claim_achievement"),
 }
 
@@ -313,6 +315,15 @@ class Settings(BaseSettings):
     collection_tag: str = "date"           # étiquette des jours et de COLLECTION_TITLES ("" = non)
     collection_tag_max_per_run: int = 60   # étiquettes posées par passage (requêtes espacées)
 
+    # --- Étiquettes de thème (worker « etiquettes ») ---------------------------------------
+    # Thème de chaque carte (Personne, Pays, Musique…) lu sur Wikidata selon config/etiquettes.yaml, posé sur
+    # l'exemplaire gardé ; les autres exemplaires reçoivent THEME_DUPLICATE_TAG. Écritures : groupe « themes ».
+    enable_theme_tags: bool = False
+    theme_tags_hours: float = 6.0          # passage complet toutes les N h
+    theme_tags_max_per_run: int = 200      # étiquettes posées ou retirées par passage (requêtes de fond)
+    theme_lookups_per_run: int = 500       # cartes classées sur Wikidata par passage (le reste au suivant)
+    theme_duplicate_tag: str = "Doublon"   # "" = pas d'étiquette de doublon
+
     @field_validator("*", mode="before")
     @classmethod
     def _parse_lists(cls, value: Any, info: ValidationInfo) -> Any:
@@ -371,6 +382,11 @@ class Settings(BaseSettings):
             label += (f", une requête toutes les {self.http_peak_spacing_seconds:g} s de {self.http_peak_start:%H:%M} "
                       f"à {self.http_peak_end:%H:%M} ({self.http_min_spacing_seconds:g} s sinon)")
         return label
+
+    @property
+    def protected_tag_keys(self) -> set[str]:
+        """PROTECTED_TAGS comparables aux étiquettes des cartes (OwnedCard.tag_names) : émojis et casse ignorés."""
+        return {key for key in map(tag_key, self.protected_tags) if key}
 
     @property
     def session_file(self) -> Path:

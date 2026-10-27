@@ -162,6 +162,24 @@ flowchart TD
 - Les jours seuls se lisent en 12 recherches (une par mois). Avec une collection du fichier, toute la collection est lue, en requêtes de fond.
 - `python -m src.main collection` montre l'avancement et les cartes manquantes.
 
+## Étiquettes de thème
+
+```mermaid
+flowchart TD
+    L["Lecture de toute la collection<br/>toutes les 6 h (requêtes de fond)"] --> G["Exemplaire gardé de chaque carte<br/>favori, shiny, rareté, le plus ancien"]
+    G --> W["Wikidata : nature de l'article<br/>(gardée en base, 500 cartes par passage)"]
+    W --> R["Règles de config/etiquettes.yaml<br/>+ corrections à la main"]
+    R --> T["Thèmes sur l'exemplaire gardé<br/>« Doublon » sur les autres"]
+```
+
+- Désactivé par défaut : `ENABLE_THEME_TAGS=true`. Écritures du groupe `themes` : `SIMULATE=themes` pour voir dans les logs ce qui serait posé (`[SIMULÉ]`), sans rien écrire.
+- Une carte peut avoir plusieurs thèmes (Personne + Musique). Pour les personnes, la description Wikidata fait foi (« actrice et chanteuse »), pas la liste complète des métiers.
+- Le bot ne fait qu'ajouter. Il ne retire que « Doublon », de l'exemplaire gardé quand son doublon est parti.
+- La vente et la défausse prennent toujours l'exemplaire le plus récent, et l'exemplaire gardé est le plus ancien : un exemplaire « Doublon » part avant l'exemplaire gardé.
+- Chaque étiquette est à créer une fois sur le site. Les noms sont comparés sans émojis ni casse, partout dans le bot (`PROTECTED_TAGS`, `MANUAL_RESALE_TAG`, `COLLECTION_TAG`) : « 📅 Jour » correspond à `Jour`.
+- Aucune mise, aucun paquet : rien ne compte pour la vérification anti-bot. Wikidata est un autre site.
+- `python -m src.main etiquettes` montre le classement, les cartes sans thème et les étiquettes à créer, sans rien écrire.
+
 ## Cotes, succès, sécurité
 
 **Cotes** (toutes les 12 h, en requêtes de fond, sans message) : cote chaque carte, pour savoir quels derniers exemplaires défausser.

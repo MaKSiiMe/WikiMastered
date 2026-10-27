@@ -41,6 +41,7 @@ from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
 from src.core.models import Auction, DiscardResult, MyBids, OwnedCard, parse_items
 from src.core.notifier import Topic
 from src.core.pricing import ANY, Quote
+from src.core.text import tag_key
 from src.core.timeutils import local_dt, now_local, random_in_window, utcnow
 from src.workers.base import Context, Worker
 
@@ -110,8 +111,11 @@ class DiscardCandidate:
 
 
 def keep_order(row: OwnedCard) -> tuple:
-    """Les exemplaires à garder en premier : favori, shiny, plus haute rareté."""
-    return (not row.starred, not row.is_shiny, -RARITY_RANK.get(row.rarity or "", -1), row.id)
+    """Les exemplaires à garder en premier : favori, shiny, plus haute rareté, puis le plus ancien. La vente prend le
+    plus récent (newest_sellable) : entre exemplaires identiques, l'exemplaire gardé n'est jamais celui vendu, et
+    l'étiquette « Doublon » (worker etiquettes) va bien aux exemplaires qui partiront."""
+    return (not row.starred, not row.is_shiny, -RARITY_RANK.get(row.rarity or "", -1), row.obtained_at or _EPOCH,
+            row.id)
 
 
 def same_copies(copies: list[OwnedCard], rarity: str | None, shiny: bool) -> list[OwnedCard]:
@@ -271,8 +275,7 @@ async def excluded_copies(ctx: Context, rows: list[OwnedCard]) -> set[str]:
     excluded = await ctx.api.protected_owned_ids({r.id for r in rows})
     excluded |= await ctx.db.scheduled_owned_ids()
     excluded |= keeps.protected(rows, await keeps.load(ctx.db))
-    protected = {t.casefold() for t in ctx.settings.protected_tags}
-    return excluded | {r.id for r in rows if r.tag_names & protected}
+    return excluded | {r.id for r in rows if r.tag_names & ctx.settings.protected_tag_keys}
 
 
 async def copies_of(ctx: Context, title: str) -> tuple[list[OwnedCard], set[str]]:
@@ -654,7 +657,7 @@ class InventoryManager(Worker):
         jamais quand une position de la même carte attend déjà ni quand il est déjà en vente. Sans cote : prévenu une
         fois, la carte n'est pas vendue. Renvoie le nombre de cartes reprises."""
         s = self.settings
-        tag, me = s.manual_resale_tag.strip().casefold(), (self.api.user_id or "").lower()
+        tag, me = tag_key(s.manual_resale_tag), (self.api.user_id or "").lower()
         tagged = [c for c in rows if tag in c.tag_names]
         if not tagged or not me:
             return 0
@@ -741,7 +744,7 @@ class InventoryManager(Worker):
                                datetime.fromisoformat(row["placed_at"]) - timedelta(minutes=1))
 
     def _protected_tags(self) -> set[str]:
-        return {t.casefold() for t in self.settings.protected_tags}
+        return self.settings.protected_tag_keys
 
     async def _owned_copies(self, card_id: str, title: str) -> list[OwnedCard]:
         """Exemplaires de cette carte pas déjà en vente : recherchés par titre sur toutes les pages, sinon parmi les

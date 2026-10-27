@@ -40,7 +40,7 @@ from src.core import timeutils
 from src.core.client import ApiError
 from src.core.models import OwnedCard
 from src.core.notifier import Topic
-from src.core.text import normalize_title
+from src.core.text import normalize_title, tag_key
 from src.core.timeutils import utcnow
 from src.workers.base import Context, Worker
 
@@ -200,7 +200,7 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: It
         return {}
     untagged = [(tag, min(rows, key=keep_order)) for tag, keys in keys_by_tag.items()
                 for key, rows in copies.items()
-                if key in keys and not any(tag.casefold() in r.tag_names for r in rows)]
+                if key in keys and not any(tag_key(tag) in r.tag_names for r in rows)]
     out: dict = {"tag": ", ".join(keys_by_tag), "to_tag": len(untagged), "tagged": 0}
     if not untagged:
         return out
@@ -211,14 +211,14 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: It
     except ApiError as exc:
         out["tag_error"] = str(exc)
         return out
-    ids = {str(t.get("name", "")).strip().casefold(): t["id"] for t in data or []
+    ids = {tag_key(str(t.get("name", ""))): t["id"] for t in data or []
            if isinstance(t, dict)} if status == 200 else {}
-    missing = [tag for tag in keys_by_tag if tag.casefold() not in ids]
+    missing = [tag for tag in keys_by_tag if tag_key(tag) not in ids]
     if missing:
         out["tag_error"] = (f"étiquette(s) « {', '.join(missing)} » introuvable(s) (HTTP {status}) : "
                             "crée-la une fois sur le site")
-    for tag, row in [u for u in untagged if u[0].casefold() in ids][: ctx.settings.collection_tag_max_per_run]:
-        tag_id = ids[tag.casefold()]
+    for tag, row in [u for u in untagged if tag_key(u[0]) in ids][: ctx.settings.collection_tag_max_per_run]:
+        tag_id = ids[tag_key(tag)]
         if not live:
             log.info("[DRY RUN] étiquette « %s » sur %s", tag, row.title)
             continue

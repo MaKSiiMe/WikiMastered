@@ -1,0 +1,213 @@
+# Étiquettes de thème (worker « etiquettes », ENABLE_THEME_TAGS=true).
+#
+# Chaque carte possédée reçoit, sur son exemplaire gardé, les thèmes dont une règle correspond à son article
+# Wikipédia, lu sur Wikidata. Les autres exemplaires de la carte reçoivent THEME_DUPLICATE_TAG (« Doublon »).
+# Le bot ne fait qu'ajouter : il ne retire que « Doublon », de l'exemplaire gardé quand il n'a plus de doublon.
+# Les noms sont comparés sans émojis ni casse : « 🎵 Musique » sur le site correspond à « Musique » ici.
+# Chaque étiquette est à créer une fois sur le site ; une étiquette absente du site est ignorée (signalée).
+#
+# Une règle de thème (une carte peut en avoir plusieurs) :
+#   natures      classes Wikidata : l'article en est un exemple ou une sous-classe (Q5 : être humain)
+#   taxons       taxons Wikidata : l'espèce en descend (Q729 : animaux)
+#   description  pour les personnes : un mot de la description Wikidata en français commence par l'un de ceux-ci
+#                (« footballeu » : footballeur, footballeuse) ; 4 lettres ou moins : le mot exact (« dj ») ;
+#                avec une espace ou un tiret : l'expression entière
+#   metiers      pour les personnes sans description : métiers Wikidata (P106)
+#   sauf         pas ce thème si la carte a déjà l'un de ceux-là (un pays est aussi une « entité territoriale »)
+#   seul         seulement si la carte n'a aucun autre thème
+# Modifier natures, taxons ou metiers fait relire Wikidata pour toutes les cartes au passage suivant.
+
+themes:
+  Personne:
+    natures: [Q5]  # être humain
+
+  Pays:
+    natures: [Q6256, Q3624078]  # pays, État souverain
+
+  Lieu:
+    natures:
+      - Q486972   # établissement humain (ville, commune, village)
+      - Q56061    # entité territoriale administrative (région, département)
+      - Q41176    # bâtiment
+      - Q811979   # structure architecturale
+      - Q4989906  # monument
+      - Q570116   # site touristique
+      - Q22698    # parc
+      - Q33506    # musée
+      - Q5107     # continent
+      - Q23442    # île
+    sauf: [Pays, Histoire]
+
+  Nature:
+    natures:
+      - Q8502     # montagne
+      - Q4022     # cours d'eau
+      - Q23397    # lac
+      - Q9430     # océan
+      - Q8514     # désert
+      - Q8072     # volcan
+      - Q271669   # modelé (relief)
+      - Q15324    # étendue d'eau
+      - Q7946     # minéral
+      - Q11344    # élément chimique
+    taxons: [Q756, Q764]  # plantes, champignons
+    sauf: [Pays, Lieu, Histoire, Animal]
+
+  Animal:
+    taxons: [Q729]  # animaux
+    natures:
+      - Q39367     # race de chien
+      - Q26401003  # animal individuel
+    sauf: [Personne]  # pour Wikidata, l'être humain est un animal
+
+  Astéroïde:
+    natures: [Q3863]
+
+  Spatial:
+    natures:
+      - Q634      # planète
+      - Q523      # étoile
+      - Q318      # galaxie
+      - Q8928     # constellation
+      - Q2537     # satellite naturel
+      - Q3559     # comète
+      - Q42372    # nébuleuse
+      - Q40218    # véhicule spatial
+      - Q26529    # sonde spatiale
+      - Q26540    # satellite artificiel
+      - Q2133344  # mission spatiale
+    sauf: [Astéroïde]
+
+  Cinéma / Série:
+    natures:
+      - Q11424    # film
+      - Q24856    # série de films
+      - Q5398426  # série télévisée
+      - Q15416    # programme télévisé
+      - Q581714   # série d'animation
+      - Q1107     # anime
+      - Q95074    # personnage de fiction
+      - Q196600   # franchise médiatique
+    description: [acteur, actrice, comédien, réalisateur, réalisatrice, cinéaste, doubleu]
+    metiers: [Q33999, Q2526255]  # acteur ou actrice, réalisateur
+
+  Musique:
+    natures:
+      - Q7366       # chanson
+      - Q482994     # album
+      - Q105543609  # œuvre musicale
+      - Q215380     # groupe de musique
+      - Q2088357    # ensemble musical
+      - Q34379      # instrument de musique
+      - Q188451     # genre musical
+      - Q868557     # festival de musique
+      - Q1344       # opéra
+    description: [chanteu, rappeu, musicien, compositeu, interprète, pianiste, guitariste, batteu, violoniste,
+                  bassiste, dj, disc-jockey, beatmaker, producteur de musique, chef d'orchestre]
+    metiers: [Q639669, Q177220, Q2252262, Q36834, Q130857]  # musicien, chanteur, rappeur, compositeur, DJ
+
+  Sport:
+    natures:
+      - Q349       # sport
+      - Q847017    # club sportif
+      - Q12973014  # équipe sportive
+      - Q13406554  # compétition sportive
+      - Q16510064  # événement sportif
+      - Q5389      # Jeux olympiques
+      - Q623109    # ligue
+      - Q1076486   # installation sportive
+      - Q483110    # stade
+    description: [footballeu, joueu, athlète, sporti, cycliste, coureu, nageu, boxeu, tennism, rugby, handballeu,
+                  basketteu, volleyeu, judoka, karatéka, skieu, patineu, gymnaste, escrimeu, lutteu, golfeu, surfeu,
+                  arts martiaux, entraîneu, entraineu, sélectionneu, arbitre, pilote automobile, pilote de formule,
+                  pilote de course, pilote de rallye, pilote moto, motocycliste, triathlète, marathonien, sprinteu,
+                  alpiniste, haltérophile, décathlonien, heptathlonienne, catcheu, skateu]
+    metiers: [Q2066131, Q378622, Q41583]  # sportif, pilote, entraîneur
+
+  Jeu vidéo:
+    natures:
+      - Q7889     # jeu vidéo
+      - Q7058673  # série de jeux vidéo
+      - Q8076     # console de jeux vidéo
+      - Q1569167  # personnage de jeu vidéo
+      - Q210167   # développeur de jeux vidéo
+    description: [joueur professionnel de jeux vidéo, joueuse professionnelle de jeux vidéo]
+
+  Nourriture / Boisson:
+    natures:
+      - Q2095      # nourriture
+      - Q746549    # mets
+      - Q19861951  # type de préparation culinaire
+      - Q40050     # boisson
+      - Q154       # boisson alcoolisée
+
+  Entreprise / Marque:
+    natures:
+      - Q4830453  # entreprise
+      - Q431289   # marque
+      - Q786820   # constructeur automobile
+
+  Voiture:
+    natures:
+      - Q3231690   # modèle d'automobile
+      - Q59773381  # série de modèles d'automobile
+      - Q1420      # automobile
+      - Q786820    # constructeur automobile
+
+  Technologie:
+    natures:
+      - Q11016   # technologie
+      - Q7397    # logiciel
+      - Q9143    # langage de programmation
+      - Q9135    # système d'exploitation
+      - Q35127   # site web
+      - Q3220391 # service de réseau social
+      - Q68      # ordinateur
+      - Q17517   # téléphone mobile
+      - Q22645   # smartphone
+      - Q5082128 # appareil mobile
+    sauf: [Jeu vidéo]  # un jeu vidéo est aussi un logiciel
+
+  Objet:
+    natures:
+      - Q8205328  # objet artificiel physique
+      - Q39546    # outil
+      - Q1183543  # dispositif
+      - Q728      # arme
+      - Q11460    # vêtement
+      - Q14745    # meuble
+      - Q11422    # jouet
+    seul: true  # une tour, un avion ou un téléphone sont aussi des objets : seulement faute de mieux
+
+  Histoire:
+    natures:
+      - Q13418847  # événement historique
+      - Q178561    # bataille
+      - Q198       # guerre
+      - Q645883    # opération militaire
+      - Q10931     # révolution
+      - Q131569    # traité
+      - Q41397     # génocide
+      - Q48349     # empire
+      - Q164950    # dynastie
+      - Q3024240   # État historique
+      - Q8432      # civilisation
+      - Q11514315  # période historique
+      - Q839954    # site archéologique
+
+# Babie : une personne de sexe féminin, née en NEE_APRES ou après, vivante, dont la description commence un mot
+# par l'un de ceux-ci (« actrice, productrice et mannequin israélienne »).
+babie:
+  etiquette: Babie
+  nee_apres: 1960
+  vivante: true
+  description: [actrice, mannequin, chanteuse, rappeuse, animatrice, présentatrice, youtubeuse, vidéaste,
+                streameuse, influenceuse, tiktokeuse, instagrameuse, créatrice de contenu, personnalité médiatique,
+                personnalité de la télévision, personnalité télévisuelle, télé-réalité, miss,
+                reine de beauté, top model, top-model, danseuse, princesse, playmate, comédienne]
+
+# Corrections à la main, prioritaires sur Wikidata : titre exact de la carte -> ses thèmes (remplacent ceux trouvés ;
+# [] : aucun thème).
+corrections:
+  Ingrid Alexandra de Norvège: [Personne, Babie]
+  Marteau: [Objet]
