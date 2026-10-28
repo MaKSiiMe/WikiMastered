@@ -197,10 +197,10 @@ class PriceService:
             quotes[ANY] = combine([], 0, market[ANY][0])
         return quotes
 
-    async def observed_quote(self, card_id: str) -> dict[str, Quote]:
+    async def observed_quote(self, card_id: str, shiny: bool = False) -> dict[str, Quote]:
         """Estimation sans aucune requête : ventes observées seules, par rareté (vide si aucune)."""
         return {r: combine(prices, n, None) for r, (prices, n) in
-                trusted(await self.db.observed_by_rarity(card_id, self.recent_n)).items()}
+                trusted(await self.db.observed_by_rarity(card_id, self.recent_n, shiny)).items()}
 
     async def is_fresh(self, card_id: str, max_age: timedelta) -> bool:
         cached = await self.db.price_get(card_id)

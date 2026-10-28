@@ -6,7 +6,8 @@
 - /plafond-collection : mise maximale d'une carte de collection manquante, sans redéployer (src/overrides.py).
 - /carte : tes exemplaires d'une carte, sa cote, ce que le bot en fait ; boutons garder, vendre, demander.
 - /opportunites : les ventes suivies par le sniper et son plafond pour chacune.
-- /top : les cartes les plus chères en moyenne sur les ventes observées (normales ou shiny).
+- /top : les cartes les plus chères en moyenne sur les ventes observées (normales ou shiny), et la mise conseillée
+  pour les revendre.
 - /echange : un échange envisagé est-il équitable ? Valeur de chaque côté et contre-offre (src/trades.py).
 - Boutons des messages « Revente sans acheteur », « Revente à 1 WB », « Position invendue » : identifiant fixe
   (wm:<action>:<vente>), encore actifs après un redémarrage du bot.
@@ -27,7 +28,7 @@ from discord import app_commands
 
 from src import account, keeps, orders, overrides, pauses, snipes, trades
 from src.charts import number, value_line
-from src.core.models import OwnedCard
+from src.core.models import OwnedCard, deterrent_bid
 from src.core.timeutils import utcnow
 from src.discord_bot import COLOR, CONFIRM_SECONDS, GREEN, GREY, RARITIES, RED, Buttons, ago, paris
 from src.roi import wb
@@ -41,6 +42,7 @@ OPPORTUNITIES_SHOWN = 20
 TOP_DAYS = 7  # /top : moyenne des ventes observées de ces derniers jours
 TOP_MIN_SALES = 3  # … d'une carte vendue au moins ce nombre de fois
 TOP_SIZES = (10, 25, 50)
+TOP_PER_EMBED = 25
 OPEN_STATUSES = ("scheduled", "waiting")  # vente pas encore publiée : prix modifiable, annulable
 # Boutons des messages de vente, par sorte de message : (action, libellé, style).
 MESSAGE_BUTTONS = {
@@ -181,17 +183,41 @@ def sellable(copies: list[OwnedCard], excluded: set[str], rarity: str = "") -> t
     return next(c for c in free if c.id == copy_id), ""
 
 
-async def top_embed(ctx: Context, size: int, shiny: bool) -> discord.Embed:
-    """/top : les `size` cartes les plus chères en moyenne, normales ou shiny."""
+def top_bid(resale: float | None, fee: float) -> str:
+    """/top : mise conseillée pour revendre la carte (voir `deterrent_bid`) et bénéfice si elle est gagnée."""
+    if resale is None:
+        return ""
+    bid = deterrent_bid(resale)
+    profit = resale * (1 - fee) - bid
+    return f" · miser **{wb(bid)}** ({wb(profit, sign=True)})" if profit > 0 else " · pas rentable"
+
+
+async def top_embeds(ctx: Context, size: int, shiny: bool) -> list[discord.Embed]:
+    """/top : les `size` cartes les plus chères en moyenne, normales ou shiny, avec la mise conseillée pour les
+    revendre ; TOP_PER_EMBED par embed (50 lignes dépassent les 4096 caractères d'une description)."""
     rows = await ctx.db.top_prices(utcnow() - timedelta(days=TOP_DAYS), shiny, size, TOP_MIN_SALES)
-    lines = [f"`{i:>2}.` **{r['title'][:45]}** ({r['rarity']}) · **{wb(r['average'])}** · {r['sales']} ventes · "
-             f"{wb(r['low'])}–{wb(r['high'])}" for i, r in enumerate(rows, 1)]
+    lines = []
+    for i, r in enumerate(rows, 1):
+        # Revente estimée comme pour le sniper : médiane des dernières ventes, sans la cote du site (en retard sur
+        # une carte qui monte : Hitler L, cote 51 316 le 28/10 pour des ventes autour de 55 000).
+        quote = (await ctx.prices.observed_quote(r["card_id"], shiny)).get(r["rarity"])
+        lines.append(f"`{i:>2}.` **{r['title'][:45]}** ({r['rarity']}) · **{wb(r['average'])}** · {r['sales']} "
+                     f"ventes · {wb(r['low'])}–{wb(r['high'])}"
+                     + top_bid(quote.average if quote else None, ctx.settings.sale_fee_pct))
     kind = "shiny" if shiny else "normales"
-    return discord.Embed(
-        title=f"Top {size} des cartes {kind} les plus chères", color=COLOR,
-        description="\n".join(lines) or "Aucune carte vendue assez souvent ces derniers jours.",
-    ).set_footer(text=f"Moyenne des ventes observées sur {TOP_DAYS} jours (au moins {TOP_MIN_SALES} ventes), "
-                      "puis prix le plus bas et le plus haut.")
+    title = f"Top {size} des cartes {kind} les plus chères"
+    if not lines:
+        return [discord.Embed(title=title, color=COLOR,
+                              description="Aucune carte vendue assez souvent ces derniers jours.")]
+    pages = [lines[i:i + TOP_PER_EMBED] for i in range(0, len(lines), TOP_PER_EMBED)]
+    embeds = [discord.Embed(title=title if not n else f"{title} (suite)", color=COLOR, description="\n".join(page))
+              for n, page in enumerate(pages)]
+    embeds[-1].set_footer(text=f"Moyenne des ventes observées sur {TOP_DAYS} jours (au moins {TOP_MIN_SALES} "
+                               "ventes), prix le plus bas et le plus haut. Miser : la plus petite mise dont la "
+                               "relance minimale (+10 %) atteint le prix de revente (médiane des dernières ventes) : "
+                               "qui te surenchérit paie plus que la carte ne se revend. Entre parenthèses, le "
+                               "bénéfice si tu la gagnes à ce prix.")
+    return embeds
 
 
 def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Context, workers: list[Worker]) -> None:
@@ -512,7 +538,9 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     async def top(interaction: discord.Interaction, nombre: app_commands.Choice[int] | None = None,
                   shiny: bool = False) -> None:
         await interaction.response.defer(thinking=True)  # ~1 s sur toute la base : au-delà de 3 s, Discord abandonne
-        await interaction.followup.send(embed=await top_embed(ctx, nombre.value if nombre else 10, shiny))
+        # Un message par embed : deux embeds de 25 lignes dépassent les 6000 caractères d'un message.
+        for embed in await top_embeds(ctx, nombre.value if nombre else 10, shiny):
+            await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------ échanges
     @tree.command(name="echange", description="Un échange est-il équitable ? Valeur de chaque côté et contre-offre")

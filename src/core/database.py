@@ -809,8 +809,8 @@ class Database:
         """Cartes les plus chères en moyenne (commande /top) : ventes observées depuis `since`, par carte et rareté,
         au moins `min_sales` ventes (une vente isolée ne fait pas un prix), ventes suspectes exclues."""
         return await self._all(
-            "SELECT MAX(title) AS title, rarity, COUNT(*) AS sales, AVG(price) AS average, MIN(price) AS low, "
-            "MAX(price) AS high FROM observed_sales o WHERE is_shiny = ? AND rarity IS NOT NULL AND ended_at >= ? "
+            "SELECT card_id, MAX(title) AS title, rarity, COUNT(*) AS sales, AVG(price) AS average, "
+            "MIN(price) AS low, MAX(price) AS high FROM observed_sales o WHERE is_shiny = ? AND rarity IS NOT NULL AND ended_at >= ? "
             f"AND NOT {SUSPECT_SALE} GROUP BY card_id, rarity HAVING COUNT(*) >= ? ORDER BY average DESC LIMIT ?",
             (int(shiny), iso(since), min_sales, limit))
 
