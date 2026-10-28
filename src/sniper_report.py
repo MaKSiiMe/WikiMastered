@@ -6,7 +6,7 @@ Pour chaque enchère, sa dernière mise et son issue :
 - perdue : prix final payé par le gagnant et gain non acquis (estimation − prix final, si positif). « Dans nos
   limites » : le gagnant a payé moins que notre plafond, la vente était gagnable ;
 - en cours, refusée (vérification anti-bot…) ou incertaine.
-Trois blocs : positions réelles, sniper de test (simulé), collection.
+Trois blocs : positions réelles, positions simulées (DRY_RUN), collection.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ PENDING = ("placed", "simulated")
 
 @dataclass
 class Block:
-    """Une famille de mises : réelles, simulées (sniper de test) ou collection."""
+    """Une famille de mises : réelles, simulées ou collection."""
     lines_won: list[tuple[float, str]] = field(default_factory=list)
     lines_lost: list[tuple[float, str]] = field(default_factory=list)
     lines_other: list[str] = field(default_factory=list)
@@ -169,7 +169,7 @@ def render(blocks: dict[str, Block], since: datetime, until: datetime, *,
     """(titre, résumé, blocs) ; `limit` lignes au plus par bloc (Discord), None pour tout (console)."""
     title = f"Sniper : récap du {since.astimezone(timeutils.PARIS):%d/%m %H:%M} au " \
             f"{until.astimezone(timeutils.PARIS):%d/%m %H:%M}"
-    names = {"real": "Positions réelles", "sim": "Sniper de test (simulé)", "collection": "Collection"}
+    names = {"real": "Positions réelles", "sim": "Positions simulées", "collection": "Collection"}
     summary, sections = [], []
     for key, name in names.items():
         block = blocks[key]

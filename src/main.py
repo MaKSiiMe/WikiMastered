@@ -159,7 +159,7 @@ def report_sections(stats: dict, *, live_bids: bool) -> tuple[str, list[tuple[st
         sales.append(f"{stats['discarded']} carte(s) défaussée(s)")
     positions = [f"{stats['positions_held']} réelle(s) détenue(s), {stats['capital_in_positions']} WB immobilisés"]
     if stats.get("positions_held_sim"):
-        positions.append(f"{stats['positions_held_sim']} simulée(s) (sniper de test, "
+        positions.append(f"{stats['positions_held_sim']} simulée(s) ("
                          f"{stats.get('capital_simulated', 0)} WB fictifs)")
     if stats["positions_sold"]:
         positions.append(f"{stats['positions_sold']} revendue(s), bénéfice {stats['profit']:+d} WB")

@@ -989,7 +989,7 @@ class Database:
             "positions_sold": sum(1 for c in closed if not c["dry_run"]),
             "profit": sum(c["sale_price"] - c["amount"] for c in closed if not c["dry_run"]),
             "profit_simulated": sum(c["sale_price"] - c["amount"] for c in closed if c["dry_run"]),
-            # Positions réelles seulement : les simulées (sniper de test) à part, sans WB réels immobilisés.
+            # Positions réelles seulement : les simulées à part, sans WB réels immobilisés.
             "positions_held": held["real_count"],
             "capital_in_positions": held["real_cost"],
             "positions_held_sim": held["count"] - held["real_count"],

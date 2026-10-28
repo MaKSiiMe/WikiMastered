@@ -369,49 +369,6 @@ def sniper_params(client):
 
 
 @pytest.mark.asyncio
-async def test_shadow_sniper_simulates_what_the_live_one_skips(tmp_path):
-    """Sniper réel limité à 500 WB par carte, sniper de test en plus : la L à 300 est misée pour de vrai, celle
-    à 550 (au-dessus du plafond du test) est simulée, sans message Discord pour la simulation."""
-    posted = []
-
-    def handler(request):
-        if request.method == "POST":
-            posted.append(request.url.path)
-            return httpx.Response(200, json={"current_bid": 300, "bidder_balance": 3000})
-        if request.url.path == "/api/wikibidous":
-            return httpx.Response(200, json={"balance": 3300})
-        if request.url.path == "/api/marketplace/mine":
-            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
-        if "mine" in request.url.params:
-            return httpx.Response(200, json={"bidding": [], "selling": []})
-        raise AssertionError(f"route inattendue {request.url}")
-
-    client, notifier = make_client(tmp_path, handler, dry_run=False, sniper_resale_rarities=["L"], sniper_max_bid=500,
-                                   portfolio_max_positions=5, sniper_max_buys=5, sniper_shadow=True,
-                                   notify_simulated=False, notify_each_bid=True)
-    ctx = await make_context(tmp_path, client, notifier)
-    db = ctx.db
-    for card in ("card-a", "card-b"):
-        await seed_observed(db, card, [1500, 1450, 1550], rarity="L")
-    sniper = AuctionSniper(ctx)
-    await sniper.setup()
-
-    def l_sale(aid, card, base):
-        return Auction.model_validate({**sale(aid, "x", 15, base=base),
-                                       "card": {"id": card, "wikipedia_title": card, "rarity": "L"}})
-
-    now = datetime.now(UTC)
-    cheap, dear = l_sale("cheap", "card-a", 300), l_sale("dear", "card-b", 550)  # budget d'une position : ~594
-    await sniper._play([cheap, dear], sniper_params(client), now)
-    assert posted == ["/api/marketplace/cheap/bid"]
-    assert (await db.last_bid("cheap"))["status"] == "placed"
-    assert (await db.last_bid("dear"))["status"] == "simulated"
-    assert sniper._outcomes == {"cheap": "misée", "dear": "simulée (sniper de test)"}
-    assert ("INFO", "Enchère placée") in notifier.sent and ("INFO", "Enchère simulée") not in notifier.sent
-    await db.close()
-
-
-@pytest.mark.asyncio
 async def test_position_bid_pushed_then_straight_to_ceiling(tmp_path):
     """17/10 : une L misée au minimum était surenchérie d'un pas en 20-30 s, et chaque remise usait le quota
     de la vérification anti-bot. Première mise : minimum + la moitié de l'écart ; surenchérie : le plafond."""
