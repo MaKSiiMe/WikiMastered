@@ -23,8 +23,9 @@ flowchart LR
         A["🏆 Succès"]
         V["💰 Cotes"]
         G["🛡️ Garde du profil"]
+        E["🤝 Échanges"]
     end
-    S & I & C & A & V & G --> Q["Client HTTP<br/>une requête à la fois"]
+    S & I & C & A & V & G & E --> Q["Client HTTP<br/>une requête à la fois"]
     Q --> W[("wiki-masters.com")]
     Workers --> DB[("SQLite<br/>data/wikimastered.db")]
     Workers --> D["Discord"]
@@ -192,6 +193,8 @@ flowchart TD
 | Cotée sous 50 WB | jamais |
 
 **Succès** : chaque soir à 22:50, le bot fait recalculer tes succès et réclame les récompenses.
+
+**Échanges** : toutes les 10 min, le bot relit les échanges en cours. Chaque échange qu'on te propose (contre-offres comprises) est annoncé une fois dans le salon principal : valeur de chaque carte (médiane des ventes observées sur 7 jours, même rareté, shiny à part), nombre de ventes de la semaine, verdict (équitable à 10 % près) et, s'il est défavorable, la contre-offre à envoyer : des WB en plus, une carte de la bonne valeur qui part vite, ou une de tes cartes retirée. Le bot ne répond jamais à ta place. `/echange` fait la même évaluation pour un échange que tu envisages.
 
 **Garde du profil** : toutes les 15 min, le bot relit ton profil. Au premier avertissement de triche ou à la première sanction, il s'arrête net, même après un redémarrage, jusqu'à `rm data/HALT`.
 

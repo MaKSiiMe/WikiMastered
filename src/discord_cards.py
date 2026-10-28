@@ -7,6 +7,7 @@
 - /carte : tes exemplaires d'une carte, sa cote, ce que le bot en fait ; boutons garder, vendre, demander.
 - /opportunites : les ventes suivies par le sniper et son plafond pour chacune.
 - /top : les cartes les plus chères en moyenne sur les ventes observées (normales ou shiny).
+- /echange : un échange envisagé est-il équitable ? Valeur de chaque côté et contre-offre (src/trades.py).
 - Boutons des messages « Revente sans acheteur », « Revente à 1 WB », « Position invendue » : identifiant fixe
   (wm:<action>:<vente>), encore actifs après un redémarrage du bot.
 """
@@ -24,11 +25,11 @@ from typing import Any
 import discord
 from discord import app_commands
 
-from src import account, keeps, orders, overrides, pauses, snipes
+from src import account, keeps, orders, overrides, pauses, snipes, trades
 from src.charts import number, value_line
 from src.core.models import OwnedCard
 from src.core.timeutils import utcnow
-from src.discord_bot import COLOR, CONFIRM_SECONDS, GREY, RARITIES, Buttons, ago, paris
+from src.discord_bot import COLOR, CONFIRM_SECONDS, GREEN, GREY, RARITIES, RED, Buttons, ago, paris
 from src.roi import wb
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
@@ -512,6 +513,29 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                   shiny: bool = False) -> None:
         await interaction.response.defer(thinking=True)  # ~1 s sur toute la base : au-delà de 3 s, Discord abandonne
         await interaction.followup.send(embed=await top_embed(ctx, nombre.value if nombre else 10, shiny))
+
+    # ------------------------------------------------------------ échanges
+    @tree.command(name="echange", description="Un échange est-il équitable ? Valeur de chaque côté et contre-offre")
+    @app_commands.describe(je_donne="carte que tu donnes (« Titre », « Titre (L) », « Titre ✨ » pour un shiny)",
+                           je_recois="carte que tu reçois", je_donne_2="autre carte que tu donnes",
+                           je_donne_3="autre carte que tu donnes", je_recois_2="autre carte que tu reçois",
+                           je_recois_3="autre carte que tu reçois", wb_donnes="WB que tu ajoutes",
+                           wb_recus="WB qu'il ajoute")
+    @app_commands.autocomplete(je_donne=title_choices, je_recois=title_choices, je_donne_2=title_choices,
+                               je_donne_3=title_choices, je_recois_2=title_choices, je_recois_3=title_choices)
+    async def echange(interaction: discord.Interaction, je_donne: str, je_recois: str, je_donne_2: str = "",
+                      je_donne_3: str = "", je_recois_2: str = "", je_recois_3: str = "",
+                      wb_donnes: app_commands.Range[int, 0, 10_000_000] = 0,
+                      wb_recus: app_commands.Range[int, 0, 10_000_000] = 0) -> None:
+        await interaction.response.defer(thinking=True)
+        given = [await trades.value_of_title(ctx, t) for t in (je_donne, je_donne_2, je_donne_3) if t.strip()]
+        received = [await trades.value_of_title(ctx, t) for t in (je_recois, je_recois_2, je_recois_3) if t.strip()]
+        e = await trades.evaluate(ctx, given, received, wb_donnes, wb_recus)
+        color = {"equitable": COLOR, "avantage": GREEN, "defavorable": RED}[e.verdict]
+        embed = discord.Embed(title=e.headline, description=e.text[:4000], color=color)
+        embed.set_footer(text=f"Médiane des ventes observées sur {trades.TRADE_DAYS} jours (même rareté, shiny à "
+                              f"part). Équitable : écart de {s.trade_fair_margin:.0%} au plus.")
+        await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------ boutons des messages de vente
     async def listing_or_reply(interaction: discord.Interaction, listing_id: int):

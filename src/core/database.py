@@ -814,10 +814,20 @@ class Database:
             f"AND NOT {SUSPECT_SALE} GROUP BY card_id, rarity HAVING COUNT(*) >= ? ORDER BY average DESC LIMIT ?",
             (int(shiny), iso(since), min_sales, limit))
 
+    async def cards_priced_between(self, since: datetime, low: float, high: float, limit: int,
+                                   min_sales: int) -> list[aiosqlite.Row]:
+        """Cartes normales vendues en moyenne entre `low` et `high` depuis `since` (contre-offre d'un échange), les
+        plus vendues d'abord : des cartes qui partent vite, à demander en plus."""
+        return await self._all(
+            "SELECT MAX(title) AS title, rarity, COUNT(*) AS sales, AVG(price) AS average FROM observed_sales o "
+            f"WHERE is_shiny = 0 AND rarity IS NOT NULL AND ended_at >= ? AND NOT {SUSPECT_SALE} "
+            "GROUP BY card_id, rarity HAVING COUNT(*) >= ? AND AVG(price) BETWEEN ? AND ? "
+            "ORDER BY sales DESC LIMIT ?", (iso(since), min_sales, low, high, limit))
+
     async def observed_for_title(self, title: str) -> list[aiosqlite.Row]:
         """Ventes observées d'une carte, par son titre (commande prices) : plus récentes d'abord, suspectes marquées."""
         return await self._all(
-            f"SELECT card_id, rarity, is_shiny, price, base_amount, ended_at, {SUSPECT_SALE} AS suspect "
+            f"SELECT card_id, title, rarity, is_shiny, price, base_amount, ended_at, {SUSPECT_SALE} AS suspect "
             "FROM observed_sales o WHERE title = ? COLLATE NOCASE ORDER BY ended_at DESC", (title,))
 
     async def bids_for_title(self, title: str) -> list[aiosqlite.Row]:

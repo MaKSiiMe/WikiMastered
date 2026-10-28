@@ -110,6 +110,7 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | `/carte <carte>` | Tes exemplaires, les ventes observées, ce que le bot en fait. Boutons : garder, vendre, demander au sniper |
 | `/opportunites` | Les ventes que le sniper surveille et son plafond pour chacune |
 | `/top [nombre] [shiny]` | Les 10, 25 ou 50 cartes les plus chères en moyenne sur les ventes observées des 7 derniers jours (au moins 3 ventes), normales ou shiny |
+| `/echange <je_donne> <je_recois> […]` | Un échange envisagé est-il équitable ? Jusqu'à 3 cartes et des WB de chaque côté (« Titre », « Titre (L) », « Titre ✨ »). Valeur de chaque carte (médiane des ventes observées sur 7 jours), ventes par semaine, verdict et, s'il est défavorable, la contre-offre à envoyer |
 
 Le bot n'envoie jamais de message privé : tout arrive dans les salons des webhooks. Avec le bot Discord connecté :
 - « Vérification anti-bot demandée » (et son rappel toutes les heures) arrive dans le salon des alertes avec la mention et le bouton **C'est fait** ; quand une mise repasse, le message devient « ✅ Vérification levée » ;

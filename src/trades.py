@@ -1,0 +1,202 @@
+"""Échanges entre joueurs : valeur de chaque côté, verdict, contre-offre à envoyer.
+
+Sert au worker « echanges » (chaque échange qu'on te propose, évalué une fois) et à /echange (un échange que tu
+envisages). Valeur d'une carte : médiane de ses ventes observées des TRADE_DAYS derniers jours (même rareté, shiny à
+part, ventes suspectes écartées) ; moins de TRADE_MIN_SALES ventes : l'estimation du bot, sans requête. Le nombre de
+ventes dit si elle part vite : le 28/10, Olé refusait Jeffrey Epstein (L, ~12 000) « qui se vend pas trop » contre
+Emma Watson + Zendaya (~5 500 chacune), alors que le bot en voyait autant de ventes que des deux autres.
+Aucune route connue ne propose ni ne contre un échange : le bot dit quoi envoyer, tu l'envoies sur le site.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import timedelta
+from itertools import combinations
+
+from src.config import RARITIES
+from src.core.models import Trade
+from src.core.pricing import robust_median
+from src.core.timeutils import utcnow
+from src.roi import wb
+from src.workers.base import Context
+
+TRADE_DAYS = 7
+TRADE_MIN_SALES = 3  # en dessous, sur TRADE_DAYS jours : l'estimation du bot (5 dernières ventes observées)
+SUGGESTED_CARDS = 4  # cartes proposées à demander en plus
+SUGGESTED_MIN_SALES = 5  # … vendues au moins tant de fois sur TRADE_DAYS jours (elles partent vite)
+_RARITY_PREFIX = re.compile(rf"^({'|'.join(RARITIES)})\s*·\s*(.+)$")
+_RARITY_SUFFIX = re.compile(rf"^(.+?)\s*\(({'|'.join(RARITIES)})\)$")
+
+
+@dataclass(frozen=True)
+class Priced:
+    title: str
+    rarity: str | None
+    shiny: bool = False
+    value: float | None = None  # None : jamais vue vendue, valeur inconnue
+    sales: int = 0  # ventes observées sur TRADE_DAYS jours
+
+    @property
+    def label(self) -> str:
+        return f"{self.rarity or '?'} · {self.title}{' ✨' if self.shiny else ''}"
+
+    @property
+    def line(self) -> str:
+        if self.value is None:
+            return f"• {self.label} : ⚠️ jamais vue vendue, valeur inconnue"
+        return f"• {self.label} : ~{wb(self.value)} WB ({self.sales} vente(s) en {TRADE_DAYS} j)"
+
+
+@dataclass
+class Evaluation:
+    given: list[Priced]
+    received: list[Priced]
+    wb_given: int = 0
+    wb_received: int = 0
+    margin: float = 0.1
+    offers: list[str] = field(default_factory=list)  # contre-offres à envoyer (counter_offers)
+
+    @staticmethod
+    def _total(cards: list[Priced], extra: int) -> float:
+        return sum(c.value or 0 for c in cards) + extra
+
+    @property
+    def given_total(self) -> float:
+        return self._total(self.given, self.wb_given)
+
+    @property
+    def received_total(self) -> float:
+        return self._total(self.received, self.wb_received)
+
+    @property
+    def gap(self) -> float:
+        """Ce que tu gagnes (négatif : ce que tu perds)."""
+        return self.received_total - self.given_total
+
+    def fair(self, given: float, received: float) -> bool:
+        top = max(given, received)
+        return top == 0 or min(given, received) >= (1 - self.margin) * top
+
+    @property
+    def verdict(self) -> str:
+        """« equitable », « avantage » (tu gagnes plus que la marge) ou « defavorable »."""
+        if self.fair(self.given_total, self.received_total):
+            return "equitable"
+        return "avantage" if self.gap > 0 else "defavorable"
+
+    @property
+    def unknown(self) -> list[Priced]:
+        return [c for c in self.given + self.received if c.value is None]
+
+    @property
+    def headline(self) -> str:
+        if self.verdict == "equitable":
+            return f"🤝 Équitable (écart ~{wb(abs(self.gap))} WB)"
+        if self.verdict == "avantage":
+            return f"✅ À ton avantage : tu gagnes ~{wb(self.gap)} WB"
+        return f"❌ Défavorable : tu perds ~{wb(-self.gap)} WB"
+
+    def side(self, cards: list[Priced], extra: int) -> str:
+        lines = [c.line for c in cards] + ([f"• {wb(extra)} WB"] if extra else [])
+        return "\n".join(lines) or "• rien"
+
+    @property
+    def text(self) -> str:
+        parts = [f"**Tu donnes** (~{wb(self.given_total)} WB)\n{self.side(self.given, self.wb_given)}",
+                 f"**Tu reçois** (~{wb(self.received_total)} WB)\n{self.side(self.received, self.wb_received)}"]
+        if self.given_total and self.received_total:
+            parts.append(f"Tu reçois {self.received_total * 100 / self.given_total:.0f} % de ce que tu donnes.")
+        if self.unknown:
+            parts.append("⚠️ Verdict incomplet : " + ", ".join(c.label for c in self.unknown)
+                         + " jamais vue(s) vendue(s), comptée(s) 0.")
+        if self.offers:
+            parts.append("**Contre-offre à envoyer**\n" + "\n".join(f"• {o}" for o in self.offers))
+        return "\n\n".join(parts)
+
+
+async def card_value(ctx: Context, card_id: str | None, title: str, rarity: str | None, shiny: bool) -> Priced:
+    """Médiane des ventes observées des TRADE_DAYS derniers jours ; trop peu de ventes : l'estimation du bot."""
+    if not card_id:
+        return Priced(title, rarity, shiny)
+    prices = await ctx.db.observed_prices_since(card_id, utcnow() - timedelta(days=TRADE_DAYS), 1000, rarity, shiny)
+    if len(prices) >= TRADE_MIN_SALES:
+        return Priced(title, rarity, shiny, robust_median(prices), len(prices))
+    quote = await ctx.prices.quote(card_id, rarity, shiny=shiny, fetch=False)
+    return Priced(title, rarity, shiny, quote.average, len(prices))
+
+
+def parse_card(text: str) -> tuple[str, str | None, bool]:
+    """« Emma Watson », « L · Emma Watson », « Emma Watson (L) », « Emma Watson ✨ » -> (titre, rareté, shiny)."""
+    text = text.strip()
+    shiny = "✨" in text or text.casefold().endswith(" shiny")
+    text = text.replace("✨", "").strip()
+    if text.casefold().endswith(" shiny"):
+        text = text[:-6].strip()
+    rarity = None
+    if match := _RARITY_PREFIX.match(text):
+        rarity, text = match.group(1), match.group(2)
+    elif match := _RARITY_SUFFIX.match(text):
+        text, rarity = match.group(1), match.group(2)
+    return text.strip(), rarity, shiny
+
+
+async def value_of_title(ctx: Context, text: str) -> Priced:
+    """Carte saisie dans /echange : sans rareté précisée, la plus vendue de ce titre."""
+    title, rarity, shiny = parse_card(text)
+    rows = [r for r in await ctx.db.observed_for_title(title) if bool(r["is_shiny"]) == shiny]
+    if rarity:
+        rows = [r for r in rows if r["rarity"] == rarity]
+    if not rows:
+        return Priced(title, rarity, shiny)
+    rarity = rarity or Counter(r["rarity"] for r in rows).most_common(1)[0][0]
+    card_id = Counter(r["card_id"] for r in rows if r["rarity"] == rarity).most_common(1)[0][0]
+    return await card_value(ctx, card_id, rows[0]["title"] or title, rarity, shiny)
+
+
+async def counter_offers(ctx: Context, e: Evaluation) -> list[str]:
+    """Défavorable : ce que tu peux demander en plus (des WB, une carte qui part vite), ou retirer de ton côté."""
+    if e.verdict != "defavorable":
+        return []
+    need = e.given_total - e.received_total
+    theirs = " + ".join(c.label for c in e.received) or "rien"
+    offers = [f"{theirs} + **{wb(math.ceil(need / 100) * 100)} WB**"]
+    taken = {c.title.casefold() for c in e.given + e.received}
+    rows = await ctx.db.cards_priced_between(utcnow() - timedelta(days=TRADE_DAYS), need * 0.9, need * 1.6,
+                                             SUGGESTED_CARDS + len(taken), SUGGESTED_MIN_SALES)
+    cards = [f"{r['rarity']} · {r['title']} (~{wb(r['average'])}, {r['sales']} ventes en {TRADE_DAYS} j)"
+             for r in rows if r["title"].casefold() not in taken][:SUGGESTED_CARDS]
+    if cards:
+        offers.append(f"ou {theirs} + **une carte vers {wb(need)} WB** s'il en a une : " + ", ".join(cards))
+    # Plusieurs cartes de ton côté : en garder une partie, au plus près de ce qu'il donne sans redevenir défavorable.
+    fair_subsets = [kept for n in range(1, len(e.given)) for kept in combinations(e.given, n)
+                    if e.fair(Evaluation._total(list(kept), e.wb_given), e.received_total)]
+    if fair_subsets:
+        best = max(fair_subsets, key=lambda kept: Evaluation._total(list(kept), e.wb_given))
+        removed = [c.label for c in e.given if c not in best]
+        offers.append(f"ou retire **{' + '.join(removed)}** de ton côté : tu donnes "
+                      f"{' + '.join(c.label for c in best)} (~{wb(Evaluation._total(list(best), e.wb_given))} WB)")
+    return offers
+
+
+async def evaluate(ctx: Context, given: list[Priced], received: list[Priced], wb_given: int = 0,
+                   wb_received: int = 0) -> Evaluation:
+    e = Evaluation(given, received, wb_given, wb_received, ctx.settings.trade_fair_margin)
+    e.offers = await counter_offers(ctx, e)
+    return e
+
+
+async def evaluate_trade(ctx: Context, trade: Trade, me: str) -> Evaluation:
+    """Échange du site, vu de ton côté : tes cartes (offered_by = toi) et tes WB contre les siens."""
+    given, received = [], []
+    for item in trade.items:
+        priced = await card_value(ctx, item.card_id or (item.card.id if item.card else None), item.title or "?",
+                                  item.rarity, item.shiny)
+        (given if (item.offered_by or "").lower() == me else received).append(priced)
+    mine_first = (trade.initiator_id or "").lower() == me
+    wb_initiator, wb_recipient = trade.initiator_wikibidous or 0, trade.recipient_wikibidous or 0
+    return await evaluate(ctx, given, received, *((wb_initiator, wb_recipient) if mine_first
+                                                  else (wb_recipient, wb_initiator)))
