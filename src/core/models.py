@@ -220,13 +220,37 @@ class DiscardResult(_Model):
 
 
 class TradeItem(_Model):
+    """Carte d'un échange (champs relevés par [KZ bridge/core.js] ; `is_shiny` supposé, comme ailleurs sur le site)."""
     card_id: str | None = None
     user_card_id: str | None = None
     offered_by: str | None = None
+    snapshot_rarity: str | None = None
+    is_shiny: bool = False
+    card: Card | None = None
+
+    @property
+    def title(self) -> str:
+        return self.card.wikipedia_title if self.card else ""
+
+    @property
+    def rarity(self) -> str | None:
+        return self.snapshot_rarity or (self.card.rarity if self.card else None)
+
+    @property
+    def shiny(self) -> bool:
+        return self.is_shiny or bool(self.card and self.card.is_shiny)
 
 
 class Trade(_Model):
+    """Échange (/api/trades) : `initiator` propose à `recipient`, chacun ajoute des cartes et des WB."""
+    id: str | None = None
     status: str | None = None
+    initiator_id: str | None = None
+    recipient_id: str | None = None
+    initiator: dict[str, Any] | None = None
+    recipient: dict[str, Any] | None = None
+    initiator_wikibidous: int | None = None
+    recipient_wikibidous: int | None = None
     items: list[TradeItem] = []
 
 
