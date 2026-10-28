@@ -869,7 +869,7 @@ class InventoryManager(Worker):
             if result is None or result.dry_run:
                 await self.db.update_listing(row["id"], status="simulated", posted_at=utcnow(), dry_run=1,
                                              duration_minutes=minutes, target_end=target_end)
-                if row["bid_id"] and self.settings.notify_simulated:  # positions : message ; doublons : bilan
+                if row["bid_id"]:  # positions : message ; doublons : bilan
                     self.notifier.info("Mise en vente simulée", label, durée=f"{minutes} min")
             elif result.ok:
                 auction_id = await self._listing_auction_id(result.payload, row["card_id"])
@@ -1015,7 +1015,6 @@ class InventoryManager(Worker):
                 if bid:
                     await self.db.close_position(bid["id"], price)
                     self.log.info("revente simulée : %s, achetée %d, vendue %d WB", label, bid["amount"], price)
-                if bid and self.settings.notify_simulated:
                     self.notifier.info("Revente simulée", f"{label} : achetée {bid['amount']}, départ "
                                        f"{row['base_amount']}, vendue {price} WB ({price - bid['amount']:+d})")
                 continue
@@ -1090,10 +1089,9 @@ class InventoryManager(Worker):
             price = floor
         else:
             await self.db.close_position(bid["id"], None)
-            if not bid["dry_run"] or self.settings.notify_simulated:
-                self.notifier.warning("Position invendue", f"{label} : invendue après {row['relist_count'] + 1} "
-                                      "essai(s), carte gardée : toutes les places de vente sont prises.",
-                                      actions=None if bid["dry_run"] else {"kind": "kept", "listing": row["id"]})
+            self.notifier.warning("Position invendue", f"{label} : invendue après {row['relist_count'] + 1} "
+                                  "essai(s), carte gardée : toutes les places de vente sont prises.",
+                                  actions=None if bid["dry_run"] else {"kind": "kept", "listing": row["id"]})
             return
         self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
         listing_id = await self._schedule(owned_id=await self._returned_copy(row, bid), card_id=row["card_id"],

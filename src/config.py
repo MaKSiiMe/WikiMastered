@@ -128,8 +128,6 @@ class Settings(BaseSettings):
     sniper_report_hours: int = 24  # 0 = pas de récap du sniper
     notify_each_bid: bool = False
     notify_digest_minutes: float = 60.0
-    # Messages des achats et reventes simulés (sniper de test) ; false : seulement dans les logs, le récap et le bilan.
-    notify_simulated: bool = True
 
     # --- Workers ----------------------------------------------------------------
     enable_sniper: bool = True
@@ -190,13 +188,6 @@ class Settings(BaseSettings):
     # quand une extension passe la vérification dans le navigateur.
     sniper_antibot_retry_seconds: float = 300.0
     sniper_max_concurrent_bids: int = 0   # 0 = illimité (le site n'impose pas de limite aux mises)
-    # Sniper de test : avec des mises réelles, simule en plus les achats que le sniper réel ne fait pas (au-dessus
-    # de SNIPER_MAX_BID, plafond de positions atteint, raretés SNIPER_SHADOW_RARITIES), pour
-    # continuer à mesurer la stratégie. Ni plafond de mise ni plafond de positions (le budget d'une position et le
-    # solde simulé s'appliquent), et le sniper réel passe toujours en premier. Une rareté ajoutée ici coûte des
-    # requêtes de repérage (moins de relectures pour le réel).
-    sniper_shadow: bool = False
-    sniper_shadow_rarities: CsvList = Field(default_factory=list)  # en plus de SNIPER_RESALE_RARITIES
     sniper_avoid_my_bids: bool = True     # ne jamais toucher aux cartes sur lesquelles tu mises toi-même
 
     # Arbitrage nocturne
@@ -361,7 +352,7 @@ class Settings(BaseSettings):
                 return f"0{value}"
         return value
 
-    @field_validator("discard_rarities", "sniper_resale_rarities", "sniper_shadow_rarities",
+    @field_validator("discard_rarities", "sniper_resale_rarities",
                      "sell_last_copy_rarities", "discard_last_copy_rarities")
     @classmethod
     def _check_rarities(cls, value: list[str]) -> list[str]:

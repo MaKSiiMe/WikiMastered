@@ -84,7 +84,7 @@ def test_report_sections():
     assert blocks["Sniper"] == ("120 mise(s) placée(s), 465 refusée(s) par le site, 19 mise(s) simulée(s)\n"
                                 "Gagnées : 2 position(s) pour 474 WB, 23 carte(s) de collection pour 1091 WB")
     assert blocks["Positions"].startswith("5 réelle(s) détenue(s), 1338 WB immobilisés\n"
-                                          "5 simulée(s) (sniper de test, 1273 WB fictifs)")
+                                          "5 simulée(s) (1273 WB fictifs)")
     assert dict(report_sections({**stats, "bids_simulated": 0}, live_bids=True)[1])["Sniper"] == \
         "0 mise(s) placée(s)"
 
