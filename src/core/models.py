@@ -47,6 +47,17 @@ def min_next_bid(current_bid: int | None, base_amount: int) -> int:
     return max(math.ceil(1.1 * current_bid), current_bid + 1)
 
 
+def deterrent_bid(price: float) -> int:
+    """Plus petite mise dont la relance minimale (`min_next_bid`) atteint `price` : qui surenchérit paie au moins ce
+    prix. La relance est arrondie au-dessus, depuis 1,1 × b en flottant (ceil(1,1 × 90) vaut 100) : on part de
+    (p - 1) / 1,1 et on monte tant que la relance n'atteint pas le prix (un cran au plus)."""
+    target = math.ceil(price)
+    bid = max(1, math.floor((target - 1) * 10 / 11))
+    while min_next_bid(bid, 1) < target:
+        bid += 1
+    return bid
+
+
 class Card(_Model):
     id: str
     wikipedia_title: str = ""

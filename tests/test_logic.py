@@ -13,7 +13,7 @@ from src.config import Settings
 from src.core.client import user_id_from_cookie
 from src.core.database import Database
 from src.core.endpoints import Endpoints
-from src.core.models import Auction, CollectionPage, OwnedCard, SaleRow, min_next_bid
+from src.core.models import Auction, CollectionPage, OwnedCard, SaleRow, deterrent_bid, min_next_bid
 from src.core.pricing import Quote, combine, recent_estimates
 from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
@@ -76,6 +76,13 @@ def test_min_bid_matches_site_rule():
     assert min_next_bid(None, 7) == 7
     assert min_next_bid(10, 7) == 11
     assert min_next_bid(25, 7) == 28  # ceil(27.5)
+
+
+def test_deterrent_bid_is_the_lowest_bid_whose_raise_reaches_the_price():
+    for price in (1, 10, 11, 110, 2100, 55001):
+        bid = deterrent_bid(price)
+        assert min_next_bid(bid, 1) >= price and (bid == 1 or min_next_bid(bid - 1, 1) < price)
+    assert deterrent_bid(110) == 100 and deterrent_bid(55001) == 50000
 
 
 def test_invalid_rows_are_skipped():

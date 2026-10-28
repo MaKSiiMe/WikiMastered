@@ -269,7 +269,7 @@ async def test_buying_a_discord_sale_to_one_wb_picks_a_late_ending_for_at_least_
 
 @pytest.mark.asyncio
 async def test_top_ranks_cards_by_average_recent_price(tmp_path):
-    from src.discord_cards import top_embed
+    from src.discord_cards import top_embeds
     from src.roi import wb
 
     client, notifier = make_client(tmp_path, trades)
@@ -289,11 +289,24 @@ async def test_top_ranks_cards_by_average_recent_price(tmp_path):
          for i, (card, title, shiny, price, days) in enumerate(sales)])
     await ctx.db.db.commit()
 
-    embed = await top_embed(ctx, 10, False)
+    [embed] = await top_embeds(ctx, 10, False)
     assert embed.title == "Top 10 des cartes normales les plus chères"
     lines = embed.description.splitlines()
     assert len(lines) == 2 and "Ada" in lines[1]
-    assert f"**Bob** (L) · **{wb(2100)}** · 3 ventes · {wb(2000)}–{wb(2200)}" in lines[0]
-    shiny = await top_embed(ctx, 10, True)
+    # Revente ~2100 (médiane) : à 1909, la relance minimale (2100) l'atteint ; bénéfice 191.
+    assert f"**Bob** (L) · **{wb(2100)}** · 3 ventes · {wb(2000)}–{wb(2200)} · miser **{wb(1909)}** (+191)" \
+        in lines[0]
+    [shiny] = await top_embeds(ctx, 10, True)
     assert f"**Ada** (L) · **{wb(8000)}**" in shiny.description and "Bob" not in shiny.description
+    assert f"miser **{wb(7272)}**" in shiny.description  # médiane shiny 8000, pas celle de la carte normale
+
+    # 50 cartes : deux embeds de 25 lignes (une description fait 4096 caractères au plus).
+    await ctx.db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
+        "VALUES (?, ?, ?, 'R', 0, 100, ?)",
+        [(f"m{c}-{k}", f"m{c}", "M" * 60, now.isoformat()) for c in range(48) for k in range(3)])
+    await ctx.db.db.commit()
+    first, second = await top_embeds(ctx, 50, False)
+    assert len(first.description.splitlines()) == len(second.description.splitlines()) == 25
+    assert second.title.endswith("(suite)") and second.footer.text and not first.footer.text
     await ctx.db.close()
