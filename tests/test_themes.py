@@ -12,7 +12,7 @@ import pytest
 from src.core.models import OwnedCard
 from src.core.text import tag_key
 from src.core.wikidata import Facts, Wikidata
-from src.workers.themes import describes, load_rules, themes_of
+from src.workers.themes import describes, load_rules, plan, themes_of
 from tests.test_integration import make_client, make_context
 
 RULES = load_rules()
@@ -193,3 +193,16 @@ async def test_simulated_writes_nothing_and_wikidata_errors_wait(tmp_path):
     assert state["pending_lookups"] == 1 and state["classified"] == 0  # Wikidata refusé : relu au prochain passage
     assert state["to_add"] == 1  # le doublon, même sans thème connu
     await ctx.db.close()
+
+
+def test_gif_tag_goes_on_every_animated_copy():
+    def own(oid, card, image, tags=()):
+        return OwnedCard.model_validate({"id": oid, "card_id": card, "tags": [{"id": 9, "name": t} for t in tags],
+                                         "card": {"id": card, "wikipedia_title": card, "rarity": "C",
+                                                  "image_url": f"https://upload.wikimedia.org/{image}?utm_source=x"}})
+
+    groups = {"anim": [own("a1", "anim", "330px-Franks_expansion.gif"), own("a2", "anim", "x.GIF", tags=["🎞️ GIF"])],
+              "still": [own("s1", "still", "x.jpg")]}
+    todo = plan(groups, {}, "", "GIF")
+    assert [(c.id, t) for c, t in todo.add] == [("a1", "GIF")]  # a2 déjà étiquetée (émoji ignoré)
+    assert plan(groups, {}, "", "").add == []

@@ -331,6 +331,7 @@ class Settings(BaseSettings):
     theme_tags_max_per_run: int = 200      # étiquettes posées ou retirées par passage (requêtes de fond)
     theme_lookups_per_run: int = 500       # cartes classées sur Wikidata par passage (le reste au suivant)
     theme_duplicate_tag: str = "Doublon"   # "" = pas d'étiquette de doublon
+    theme_gif_tag: str = "GIF"             # sur chaque exemplaire d'une carte animée ; "" = pas d'étiquette GIF
 
     @field_validator("*", mode="before")
     @classmethod
