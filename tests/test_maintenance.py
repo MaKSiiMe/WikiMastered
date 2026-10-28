@@ -32,6 +32,30 @@ async def test_purge_keeps_accounting_and_recent_market(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_non_legendary_sales_before_29_10_are_wiped_on_startup(tmp_path):
+    """29/10 : prix hors L faux (UR et SR vues surtout au lancement) ; leur plus haut prix reste pour la défausse, les
+    L et les ventes vues depuis restent."""
+    from src.core.database import NON_L_PURGE_BEFORE
+
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    cutoff = datetime.fromisoformat(NON_L_PURGE_BEFORE)
+    before, after = (cutoff - timedelta(days=14)).isoformat(), (cutoff + timedelta(hours=1)).isoformat()
+    await db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, rarity, is_shiny, price, ended_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [("ur", "kc", "UR", 0, 6243, before), ("sr", "zoro", "SR", 1, 20000, before),
+         ("l", "kc", "L", 0, 900, before), ("ur-new", "kc", "UR", 0, 300, after)])
+    await db.db.commit()
+    await db.connect()  # réparations du démarrage
+    left = {r["auction_id"] for r in await db._all("SELECT auction_id FROM observed_sales")}
+    assert left == {"l", "ur-new"}
+    assert dict(await db._all("SELECT card_id, price FROM observed_max")) == {"kc": 6243, "zoro": 20000}
+    await db.connect()  # rejouées : rien de plus
+    assert {r["auction_id"] for r in await db._all("SELECT auction_id FROM observed_sales")} == left
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_purged_sales_keep_their_highest_price_for_discard(tmp_path):
     """Ventes observées gardées 60 jours (~26 000 par jour le 24/10) ; une carte vendue cher il y a 90 jours n'est
     toujours pas défaussable."""

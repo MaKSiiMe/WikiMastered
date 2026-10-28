@@ -117,7 +117,16 @@ OBSOLETE = ["DROP TABLE IF EXISTS trend_alerts", "DROP INDEX IF EXISTS idx_aucti
             *(f"DROP TABLE IF EXISTS {t}" for t in ("pulls", "pack_opens", "pack_checks", "trend_signals", "trend_terms",
                                                      "pageviews", "value_sightings"))]
 # Victoire remisée à la main avant la correction du 27/10 : le prix payé est le prix final, pas la mise du bot.
-REPAIRS = ["UPDATE bids SET amount = final_price WHERE status = 'won' AND dry_run = 0 AND final_price > amount"]
+# Ventes observées hors L jusqu'au 29/10 : prix faux (UR et SR surtout vues les 14 et 15/10, au lancement, le sniper ne
+# suivant plus que les L depuis), effacées ; leur plus haut prix passe d'abord dans observed_max, comme à la purge, pour
+# que la défausse n'oublie pas qu'une carte s'est vendue. Date fixe : rejouées à chaque démarrage, elles n'effacent
+# pas les ventes vues depuis.
+NON_L_PURGE_BEFORE = "2026-10-29T00:00:00+00:00"
+REPAIRS = ["UPDATE bids SET amount = final_price WHERE status = 'won' AND dry_run = 0 AND final_price > amount",
+           "INSERT INTO observed_max (card_id, price) SELECT card_id, MAX(price) FROM observed_sales "
+           f"WHERE rarity <> 'L' AND ended_at < '{NON_L_PURGE_BEFORE}' GROUP BY card_id "
+           "ON CONFLICT(card_id) DO UPDATE SET price = MAX(observed_max.price, excluded.price)",
+           f"DELETE FROM observed_sales WHERE rarity <> 'L' AND ended_at < '{NON_L_PURGE_BEFORE}'"]
 # Ventes observées gardées N jours (estimations, ventes factices, commandes hours et gifs).
 OBSERVED_KEEP_DAYS = 60
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
