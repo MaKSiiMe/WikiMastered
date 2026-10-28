@@ -7,6 +7,7 @@
   Les corrections du fichier passent avant Wikidata.
 - Posées sur l'exemplaire gardé ; les autres exemplaires reçoivent THEME_DUPLICATE_TAG. Le bot n'enlève jamais un
   thème ; il retire seulement « Doublon » de l'exemplaire gardé (son doublon est parti, ou la carte gardée a changé).
+- THEME_GIF_TAG sur chaque exemplaire d'une carte animée (image GIF), doublons compris.
 - Écritures : table Supabase `user_card_tags`, comme l'éditeur d'étiquettes du site (voir collection.tag_owned),
   THEME_TAGS_MAX_PER_RUN par passage ; groupe « themes » de LIVE_WRITES / SIMULATE. Tant qu'il en reste, le passage
   suivant a lieu BACKLOG_MINUTES plus tard.
@@ -155,11 +156,14 @@ class Plan:
     remove: list[tuple[OwnedCard, str]] = field(default_factory=list)
 
 
-def plan(groups: dict[str, list[OwnedCard]], themes: dict[str, list[str]], duplicate: str) -> Plan:
-    """Étiquettes à poser (thèmes sur l'exemplaire gardé, doublon sur les autres) et doublon à retirer du gardé."""
+def plan(groups: dict[str, list[OwnedCard]], themes: dict[str, list[str]], duplicate: str, gif: str = "") -> Plan:
+    """Étiquettes à poser (thèmes sur l'exemplaire gardé, doublon sur les autres, GIF sur chaque exemplaire animé) et
+    doublon à retirer du gardé."""
     out = Plan()
-    dup = tag_key(duplicate)
+    dup, animated = tag_key(duplicate), tag_key(gif)
     for copies in groups.values():
+        if animated:
+            out.add += [(c, gif) for c in copies if c.card.is_gif and animated not in c.tag_names]
         main = copies[0]
         out.add += [(main, t) for t in themes.get(main.title, []) if tag_key(t) not in main.tag_names]
         if dup:
@@ -178,7 +182,7 @@ async def run_pass(ctx: Context, wikidata: Wikidata, *, write: bool = True) -> d
     groups = group_by_card(rows)
     titles = {copies[0].title for copies in groups.values() if copies[0].title}
     themes, pending = await classify(ctx, wikidata, titles, rules, s.theme_lookups_per_run)
-    todo = plan(groups, themes, s.theme_duplicate_tag.strip())
+    todo = plan(groups, themes, s.theme_duplicate_tag.strip(), s.theme_gif_tag.strip())
     counts = Counter(t for title in titles for t in themes.get(title, []))
     state: dict = {
         "at": utcnow().isoformat(), "cards": len(titles), "copies": len(rows), "classified": len(themes),
@@ -202,7 +206,8 @@ async def apply(ctx: Context, todo: Plan, rules: Rules, state: dict, write: bool
                                                                      "user_id": f"eq.{ctx.api.user_id}"},
                                              background=True)
     ids = {tag_key(str(t.get("name", ""))): t["id"] for t in data or [] if isinstance(t, dict)} if status == 200 else {}
-    wanted = {*rules.names, *(t for v in rules.corrections.values() for t in v), s.theme_duplicate_tag.strip()} - {""}
+    wanted = {*rules.names, *(t for v in rules.corrections.values() for t in v), s.theme_duplicate_tag.strip(),
+              s.theme_gif_tag.strip()} - {""}
     state["missing_tags"] = sorted(t for t in wanted if tag_key(t) not in ids)
     ops = [("remove", c, t) for c, t in todo.remove] + [("add", c, t) for c, t in todo.add]
     ops = [op for op in ops if tag_key(op[2]) in ids][: s.theme_tags_max_per_run]
