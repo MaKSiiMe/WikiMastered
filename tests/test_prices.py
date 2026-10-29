@@ -42,6 +42,10 @@ async def test_prices_shows_observed_sales_estimate_and_competition(tmp_path):
         "VALUES (?, 'ecl21', ?, 'L', ?, ?, ?)",
         [(f"o{i}", TITLE, p, b, (now - timedelta(hours=i + 1)).isoformat())
          for i, (p, b) in enumerate([(1250, 900), (1197, 800), (1100, 1100), (1300, 700), (1150, 1000)])])
+    await ctx.db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, base_amount, ended_at) "
+        "VALUES (?, 'ecl21', ?, 'L', 1, ?, 100, ?)",
+        [(f"s{p}", TITLE, p, (now - timedelta(hours=3)).isoformat()) for p in (8000, 9000)])
     await ctx.db.db.commit()
     await ctx.db.record_bid(auction_id="b", card_id="ecl21", title=TITLE, rarity="L", is_shiny=False, amount=882,
                             reference_price=1197, reason="revente ~1197 WB", night=False, dry_run=False,
@@ -50,6 +54,11 @@ async def test_prices_shows_observed_sales_estimate_and_competition(tmp_path):
     assert text.startswith(TITLE + "\n")  # le vrai titre, pas celui tapé
     assert "L : 5 vente(s) observée(s) · estimation du bot ~1197 WB" in text and "moyenne du site : 1300 WB" in text
     assert "1100 WB  (départ 1100)  au prix de départ, sans surenchère" in text
+    # Mise conseillée : la plus petite dont la relance minimale (+10 %) atteint la revente, normale et shiny à part.
+    assert "  Pour revendre : miser 1088 WB au plus (revente ~1197 WB" in text and "+109 WB)" in text
+    assert "  ✨ shiny (2 vente(s)) : miser 7727 WB au plus (revente ~8500 WB" in text
+    discord = await prices_status(ctx, TITLE, md=True)
+    assert "🎯 Pour revendre : miser **1088 WB** au plus" in discord and "\n✨ shiny (2 vente(s)) : miser **7727 WB**" in discord
     assert "réel : 882 WB, estimée ~1197" in text
     assert "En vente maintenant (3)" in text and "XXe" not in text  # l'autre carte n'est pas mêlée
     assert text.index("départ 600, aucune") < text.index("départ 900, aucune") < text.index("départ 1040, aucune")

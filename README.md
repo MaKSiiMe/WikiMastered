@@ -89,7 +89,7 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | `/valeur` | Valeur du compte : solde + cartes possédées (estimation du bot) + cartes en vente (prix de départ) + mises en tête, l'évolution depuis la veille, la collection par rareté et les cartes les plus chères. Boutons : 📈 évolution (courbe de la valeur, notée chaque jour), 🔄 recompter la collection |
 | `/positions` | Cartes achetées pour la revente, et où en est leur vente |
 | `/ventes` | Ventes programmées et en cours |
-| `/prix <carte>` | Ventes observées, estimation du bot, ventes en cours |
+| `/prix <carte>` | Ventes observées, estimation du bot, ventes en cours, et la mise conseillée pour l'acheter et la revendre (normale et shiny) : la plus petite dont la relance minimale (+10 %) atteint la revente, avec le bénéfice |
 | `/collection` | Avancement des collections, cartes manquantes |
 | `/sniper [heures]` | Récap des enchères misées |
 | `/snipe <carte> <prix_max> [rareté] [shiny]` | Demander une carte au sniper : mise au minimum jusqu'à `prix_max`, gardée (pas revendue). `shiny` : seulement un exemplaire shiny (sinon shiny ou non). Confirmée par un bouton |

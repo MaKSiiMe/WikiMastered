@@ -42,7 +42,7 @@ from src.core.database import Database
 from src.core.endpoints import Endpoints
 from src.core.models import MarketPage
 from src.core.notifier import DiscordNotifier, Topic
-from src.core.pricing import PriceService
+from src.core.pricing import PriceService, Quote, advised_bid
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
 from src.overrides import load as load_overrides
 from src.pauses import load as load_pauses
@@ -313,13 +313,27 @@ PRICES_SHOWN = 15  # ventes observées affichées par rareté
 
 
 def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime,
-                md: bool = False) -> str:
+                md: bool = False, resale: dict[tuple[str, bool], Quote] | None = None, fee: float = 0.0) -> str:
     """Ventes observées d'une carte, estimation du bot, achats du bot et ventes en cours (commande prices).
-    `md` : version Discord (/prix), lignes courtes en markdown, sans bloc de code."""
+    `md` : version Discord (/prix), lignes courtes en markdown, sans bloc de code. `resale` : revente estimée par
+    (rareté, shiny) sur les ventes observées seules, d'où la mise conseillée pour l'acheter."""
     def paris(value) -> str:
         moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
         text = f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
         return f"`{text}`" if md else text
+
+    def bid_line(rarity: str, shiny: bool) -> str | None:
+        """Mise conseillée : la plus petite dont la relance minimale (+10 %) atteint la revente (voir advised_bid)."""
+        quote = (resale or {}).get((rarity, shiny))
+        if quote is None or quote.average is None:
+            return None
+        bid, profit = advised_bid(quote.average, fee)
+        kind = f"✨ shiny ({quote.count} vente(s))" if shiny else "Pour revendre"  # shiny : souvent peu de ventes
+        if profit <= 0:
+            return f"{kind} : revente ~{quote.average:.0f} WB, pas rentable"
+        amount = f"**{bid} WB**" if md else f"{bid} WB"
+        return (f"{kind} : miser {amount} au plus (revente ~{quote.average:.0f} WB, médiane des dernières ventes "
+                f"sans la cote du site ; +{profit:.0f} WB)")
 
     if md:
         lines = ["Ventes finies avec au moins une mise, vues par le bot (une mise de dernière seconde peut manquer)."]
@@ -342,6 +356,9 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
         else:
             lines.append(f"\n{rarity} : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
                          f"5 dernières, plafonnée par la moyenne du site : {site_text})")
+        for shiny in (False, True):
+            if line := bid_line(rarity, shiny):
+                lines.append((("" if shiny else "🎯 ") if md else "  ") + line)
         for r in sales[:PRICES_SHOWN]:
             notes = []
             if r["base_amount"] and r["price"] <= r["base_amount"]:
@@ -389,14 +406,16 @@ async def prices_status(ctx: Context, title: str, md: bool = False) -> str:
     card_ids = {r["card_id"] for r in observed} | {a.catalog_id for a in selling}
     if not card_ids:
         return f"« {title} » : ni vente observée ni vente en cours (titre exact de la carte, sans « (L) »)."
-    quotes, site = {}, {}
+    quotes, site, resale = {}, {}, {}
     for card_id in card_ids:  # en principe une seule carte par titre
         quotes.update({r: q for r, q in (await ctx.prices.quotes(card_id)).items() if r in RARITY_RANK})
         cached = await ctx.db.price_get(card_id)
         site.update(cached[1] if cached else {})
+        for shiny in (False, True):
+            resale.update({(r, shiny): q for r, q in (await ctx.prices.observed_quote(card_id, shiny)).items()})
     name = selling[0].title if selling else title
     return prices_text(name, observed, await ctx.db.bids_for_title(title), selling, quotes, site,
-                       ctx.client.user_id, now, md)
+                       ctx.client.user_id, now, md, resale, ctx.settings.sale_fee_pct)
 
 
 async def roi_report(ctx: Context, days: int) -> Roi:
