@@ -45,6 +45,14 @@ async def test_snipes_are_stored_by_title(tmp_path):
     only_l = snipes.Snipe("Ada", 50, "L")
     assert only_l.matches(Auction.model_validate(sale("a", "Ada", "L", 60)))
     assert not only_l.matches(Auction.model_validate(sale("b", "Ada", "UR", 60)))
+    # 29/10 : The Weeknd L shiny (~6 fois la L normale) ; sans « shiny », le sniper aurait gardé une L normale.
+    shiny = snipes.Snipe("The Weeknd", 35000, "L", shiny=True)
+    assert shiny.label == "The Weeknd (L) ✨ shiny ≤ 35000 WB"
+    assert shiny.matches(Auction.model_validate({**sale("s", "The Weeknd", "L", 60), "is_shiny": True}))
+    assert not shiny.matches(Auction.model_validate(sale("n", "The Weeknd", "L", 60)))
+    await snipes.add(ctx.db, "The Weeknd", 35000, "L", shiny=True)
+    assert (await snipes.load(ctx.db))[shiny.key].shiny
+    assert await snipes.remove(ctx.db, "The Weeknd") is not None
     assert await snipes.remove(ctx.db, "Napoléon Ier") is not None
     assert await snipes.load(ctx.db) == {}
     await ctx.db.close()

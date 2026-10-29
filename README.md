@@ -92,7 +92,7 @@ Avec un bot Discord (`DISCORD_BOT_TOKEN`, `DISCORD_OWNER_ID`, `DISCORD_GUILD_ID`
 | `/prix <carte>` | Ventes observées, estimation du bot, ventes en cours |
 | `/collection` | Avancement des collections, cartes manquantes |
 | `/sniper [heures]` | Récap des enchères misées |
-| `/snipe <carte> <prix_max> [rareté]` | Demander une carte au sniper : mise au minimum jusqu'à `prix_max`, gardée (pas revendue). Confirmée par un bouton |
+| `/snipe <carte> <prix_max> [rareté] [shiny]` | Demander une carte au sniper : mise au minimum jusqu'à `prix_max`, gardée (pas revendue). `shiny` : seulement un exemplaire shiny (sinon shiny ou non). Confirmée par un bouton |
 | `/snipes` | Cartes demandées |
 | `/annuler <carte>` | Ne plus demander une carte |
 | `/etat` | Santé du bot : session, vérification anti-bot, routes du site en pause, chaque worker. Boutons : vérification faite, pause / reprise du sniper, actualiser |

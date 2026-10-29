@@ -548,11 +548,12 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     # ------------------------------------------------------------ actions
     @tree.command(name="snipe", description="Demander une carte au sniper : il la mise jusqu'à ta mise maximale")
     @app_commands.describe(titre="titre exact de la carte", prix_max="mise maximale en WB",
-                           rarete="une seule rareté (toutes par défaut)")
+                           rarete="une seule rareté (toutes par défaut)",
+                           shiny="shiny seulement (non par défaut : shiny ou non)")
     @app_commands.autocomplete(titre=title_choices)
     @app_commands.choices(rarete=[app_commands.Choice(name=r, value=r) for r in RARITIES])
     async def snipe(interaction: discord.Interaction, titre: str, prix_max: app_commands.Range[int, 1, 100_000],
-                    rarete: app_commands.Choice[str] | None = None) -> None:
+                    rarete: app_commands.Choice[str] | None = None, shiny: bool = False) -> None:
         rarity = rarete.value if rarete else ""
         notes = []
         if titre.casefold() not in {t.casefold() for t in await ctx.db.known_titles(titre, limit=200)}:
@@ -561,7 +562,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             notes.append("⚠️ Sniper désactivé (ENABLE_SNIPER) : rien ne sera misé.")
         elif not s.is_live("collection_bid"):
             notes.append("ℹ️ Mises de collection simulées (DRY_RUN / SIMULATE) : la mise sera simulée.")
-        label = snipes.Snipe(titre, prix_max, rarity).label
+        label = snipes.Snipe(titre, prix_max, rarity, shiny=shiny).label
         embed = discord.Embed(title="Demander cette carte ?", color=COLOR,
                               description=f"**{label}**\nMise au minimum, jusqu'à {prix_max} WB ; gardée, pas "
                                           "revendue." + ("\n\n" + "\n".join(notes) if notes else ""))
@@ -572,7 +573,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             embed.title, embed.color = ("Annulé" if view.value is False else "Annulé (pas de réponse)"), 0x99AAB5
             await interaction.edit_original_response(embed=embed, view=None)
             return
-        added = await snipes.add(ctx.db, titre, prix_max, rarity)
+        added = await snipes.add(ctx.db, titre, prix_max, rarity, shiny)
         if sniper is not None:
             await sniper.reload_snipes()
         log.info("Discord : carte demandée %s", added.label)
