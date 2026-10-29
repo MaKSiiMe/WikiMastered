@@ -394,12 +394,12 @@ class Database:
         return await self._all("SELECT * FROM bids WHERE status = 'lost' AND dry_run = 0 AND note = ? AND end_at >= ? "
                                "ORDER BY end_at", (note, iso(since)))
 
-    async def collection_cards(self, statuses: tuple[str, ...]) -> list[str]:
-        """Titres des achats « collection » du bot ayant ce statut."""
+    async def collection_cards(self, statuses: tuple[str, ...]) -> list[tuple[str, str | None]]:
+        """(titre, rareté) des achats « collection » du bot ayant ce statut."""
         marks = ",".join("?" * len(statuses))
-        rows = await self._all(f"SELECT DISTINCT title FROM bids WHERE reason LIKE 'collection%' "
+        rows = await self._all(f"SELECT DISTINCT title, rarity FROM bids WHERE reason LIKE 'collection%' "
                                f"AND status IN ({marks})", statuses)
-        return [r["title"] for r in rows if r["title"]]
+        return [(r["title"], r["rarity"]) for r in rows if r["title"]]
 
     async def collection_auctions_engaged(self, card_id: str) -> set[str]:
         """Enchères « collection » en cours du bot pour cette carte (dernière mise en tête ou simulée)."""

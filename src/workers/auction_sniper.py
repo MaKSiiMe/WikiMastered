@@ -18,7 +18,8 @@ laisse les enchères terminées en tête du tri « ending_soon » jusqu'à leur 
 une page de 50 n'atteint jamais la fenêtre de mise. Le sniper repère donc les ventes à l'avance :
 - nouvelles ventes des raretés suivies (SNIPER_RESALE_RARITIES, tri « recent ») ;
 - ventes tout juste terminées de ces raretés (prix finaux = ventes observées, pour les cotes) ;
-- jours manquants de la collection, cherchés un par un (q=« 14 octobre »), toutes raretés.
+- jours manquants de la collection, cherchés un par un (q=« 14 octobre »), toutes raretés ; en alternance,
+  les cartes possédées, pour un exemplaire de rareté plus haute que le meilleur (COLLECTION_UPGRADE).
 Une vente intéressante devient une cible ; dans sa fenêtre de mise, l'enchère est relue
 (/api/marketplace/{id}) puis misée. Une cible misée est relue à sa fin : prolongée, elle est rejouée.
 """
@@ -32,7 +33,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 
-from src.config import Settings
+from src.config import RARITY_RANK, Settings
 from src.core import timeutils
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
@@ -387,6 +388,8 @@ class AuctionSniper(Worker):
         self._last_read: dict[tuple[str, str], datetime] = {}
         self._recent_ids: dict[str, set[str]] = {}
         self._day_queue: list[str] = []
+        self._upgrade_queue: list[str] = []
+        self._upgrade_turn = False  # recherches alternées : carte manquante, puis carte à monter en rareté
         self._day_titles: dict[str, str] = {}
         self._gap_warned_at = _EPOCH
         # Depuis le dernier récap : trous dans les nouvelles ventes, ventes de jours manquants trouvées.
@@ -425,6 +428,8 @@ class AuctionSniper(Worker):
         self._bids_since_check = 0  # mises réelles acceptées depuis la dernière vérification (ou CHECK_QUOTA_BIDS)
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
+        # Cartes possédées à monter en rareté (COLLECTION_UPGRADE) : clé -> rang de la meilleure rareté possédée.
+        self._collection_best: dict[str, int] = {}
         # Jours manquants d'après la dernière lecture (avant de retirer ceux que le bot a gagnés), et
         # ventes de ces cartes déjà signalées dans les logs : id -> issue journalisée (None = repérée).
         self._collection_wanted: set[str] = set()
@@ -514,7 +519,7 @@ class AuctionSniper(Worker):
         sources = [((kind, rarity), every) for rarity in self.settings.sniper_resale_rarities
                    for kind, every in (("recent", self.settings.sniper_discovery_seconds),
                                        ("ended", self.settings.sniper_observe_seconds))]
-        if self._collection_missing or self._snipes:
+        if self._collection_missing or self._snipes or self._collection_best:
             sources.append((("day", ""), self.settings.collection_search_seconds))
         return [((now - self._last_read.get(key, _EPOCH)).total_seconds() - every, every, key)
                 for key, every in sources]
@@ -585,11 +590,20 @@ class AuctionSniper(Worker):
         self._unread = {aid: u for aid, u in self._unread.items() if u[1] > horizon}
 
     def _next_day(self) -> str:
-        """Prochain titre à chercher (rotation sur les jours manquants et les cartes demandées sur Discord)."""
-        while self._day_queue and self._day_queue[0] not in self._collection_missing | set(self._snipes):
+        """Prochain titre à chercher : rotation sur les jours manquants et les cartes demandées sur Discord, en
+        alternance avec les cartes possédées à monter en rareté (une recherche sur deux au plus pour elles)."""
+        wanted = self._collection_missing | set(self._snipes)
+        self._upgrade_turn = not self._upgrade_turn
+        if self._collection_best and (self._upgrade_turn or not wanted):
+            self._upgrade_queue = [k for k in self._upgrade_queue if k in self._collection_best]
+            if not self._upgrade_queue:
+                self._upgrade_queue = sorted(self._collection_best)
+            key = self._upgrade_queue.pop(0)
+            return self._day_titles.get(key, key)
+        while self._day_queue and self._day_queue[0] not in wanted:
             self._day_queue.pop(0)
         if not self._day_queue:
-            self._day_queue = sorted(self._collection_missing | set(self._snipes))
+            self._day_queue = sorted(wanted)
         key = self._day_queue.pop(0)
         return self._snipes[key].title if key in self._snipes else self._day_titles.get(key, key)
 
@@ -632,7 +646,7 @@ class AuctionSniper(Worker):
             return False
         if snipe := self._snipe_for(a):
             return a.min_bid <= snipe.max_price
-        if collection_key(a.title) in self._collection_missing:
+        if self._collection_wants(a):
             return a.min_bid <= self.settings.collection_max_price
         if a.rarity not in self.settings.sniper_resale_rarities:
             return False
@@ -688,8 +702,24 @@ class AuctionSniper(Worker):
         return min(ended, key=lambda t: t.auction.end_at) if ended else None
 
     def _wanted(self, auction: Auction) -> bool:
-        """Carte manquante à la collection ou demandée sur Discord (gardée, pas revendue)."""
-        return collection_key(auction.title) in self._collection_missing or self._snipe_for(auction) is not None
+        """Carte manquante à la collection (ou de rareté plus haute) ou demandée sur Discord (gardée, pas revendue)."""
+        return self._collection_wants(auction) or self._snipe_for(auction) is not None
+
+    def _collection_wants(self, auction: Auction) -> bool:
+        """Carte manquante à la collection, ou possédée mais dans une rareté plus basse que celle de cette vente."""
+        key = collection_key(auction.title)
+        if key in self._collection_missing:
+            return True
+        best = self._collection_best.get(key)
+        return best is not None and RARITY_RANK.get(auction.rarity or "", -1) > best
+
+    def _upgrade_from(self, auction: Auction) -> str | None:
+        """Meilleure rareté possédée d'une carte de collection que cette vente ferait monter (None : carte manquante
+        ou pas à monter)."""
+        key = collection_key(auction.title)
+        if key in self._collection_missing or not self._collection_wants(auction):
+            return None
+        return next(r for r, i in RARITY_RANK.items() if i == self._collection_best[key])
 
     def watched(self) -> list[tuple[Auction, int | None, str]]:
         """Ventes suivies (commande Discord /opportunites) : enchère, plafond, motif ; les plus proches de la fin
@@ -702,8 +732,10 @@ class AuctionSniper(Worker):
                 continue
             if snipe := self._snipe_for(a):
                 out.append((a, snipe.max_price, "demandée"))
-            elif collection_key(a.title) in self._collection_missing:
-                out.append((a, self.settings.collection_max_price, "collection"))
+            elif self._collection_wants(a):
+                have = self._upgrade_from(a)
+                out.append((a, self.settings.collection_max_price,
+                            f"collection, rareté {have} → {a.rarity}" if have else "collection"))
             else:
                 out.append((a, t.ceiling, "revente, misée" if t.recheck else "revente"))
         return sorted(out, key=lambda w: w[0].end_at)
@@ -955,22 +987,36 @@ class AuctionSniper(Worker):
             return
         state = await self.db.kv_get(COLLECTION_KV) or {}
         # Gagnées par le bot (même en simulation) : plus manquantes, même avant la prochaine lecture.
-        won = {collection_key(t) for t in await self.db.collection_cards(("won", "sim_won"))}
+        wins = await self.db.collection_cards(("won", "sim_won"))
+        won = {collection_key(t) for t, _ in wins}
         self._collection_wanted = set(state.get("missing", []))
         self._collection_missing = self._collection_wanted - won
         self._day_titles = collection_targets(self.ctx)
+        best: dict[str, int] = {}
+        if self.settings.collection_upgrade:
+            ranks = [(k, r) for k, r in (state.get("best") or {}).items()]
+            ranks += [(collection_key(t), r) for t, r in wins]
+            for key, rarity in ranks:
+                if key in self._day_titles and rarity in RARITY_RANK:
+                    best[key] = max(best.get(key, -1), RARITY_RANK[rarity])
+        # Déjà en L : plus rien au-dessus.
+        self._collection_best = {k: i for k, i in best.items() if i < len(RARITY_RANK) - 1}
 
     def _log_collection_sales(self, auctions: list[Auction], now: datetime) -> None:
-        """Journalise une fois chaque vente d'une carte de collection manquante repérée sur le marché."""
+        """Journalise une fois chaque vente d'une carte de collection manquante (ou de rareté plus haute) repérée sur
+        le marché."""
         for a in auctions:
-            if a.id in self._collection_logged or collection_key(a.title) not in self._collection_wanted:
+            if a.id in self._collection_logged or not (collection_key(a.title) in self._collection_wanted
+                                                        or self._upgrade_from(a)):
                 continue
             self._collection_logged[a.id] = None
             left = a.seconds_left(now)
             self._days_found += left > 0
             when = f"dans {left / 60:.0f} min" if left >= 120 else (f"dans {left:.0f} s" if left > 0 else
                                                                     f"déjà terminée depuis {-left:.0f} s")
-            self.log.info("collection : %s (%s) en vente, mise min %d WB, fin %s (%s)", a.title, a.rarity, a.min_bid,
+            have = self._upgrade_from(a)
+            self.log.info("collection : %s (%s%s) en vente, mise min %d WB, fin %s (%s)", a.title, a.rarity,
+                          f", tu as la {have}" if have else "", a.min_bid,
                           f"{a.end_at.astimezone(timeutils.PARIS):%H:%M:%S}", when)
         if len(self._collection_logged) > 2000:
             self._collection_logged.clear()
@@ -979,9 +1025,10 @@ class AuctionSniper(Worker):
         """Journalise l'issue d'une carte de collection manquante dans la fenêtre de mise (une fois par issue)."""
         for a in auctions:
             key = collection_key(a.title)
-            if key not in self._collection_wanted:
+            upgrade = self._upgrade_from(a) is not None
+            if key not in self._collection_wanted and not upgrade:
                 continue
-            if key not in self._collection_missing:
+            if key not in self._collection_missing and not upgrade:
                 outcome = "déjà gagnée par le bot (lance reset-simulation si c'était en simulation)"
             elif self.is_manual_interest(a):
                 outcome = "tu mises sur cette carte"
@@ -996,7 +1043,7 @@ class AuctionSniper(Worker):
         """Plafond si la carte manque à la collection (ou est demandée sur Discord) et que le bot ne mise pas déjà
         sur une autre vente."""
         snipe = self._snipe_for(auction)
-        if snipe is None and collection_key(auction.title) not in self._collection_missing:
+        if snipe is None and not self._collection_wants(auction):
             return None
         engaged = await self.db.collection_auctions_engaged(auction.catalog_id)
         if engaged - {auction.id}:
@@ -1094,6 +1141,9 @@ class AuctionSniper(Worker):
                           collection_cap=collection_cap, resale=resale and snipe is None, push=push)
         if decision is not None and snipe is not None:
             decision = replace(decision, reason=f"{SNIPE_REASON} ≤ {decision.ceiling}")
+        elif decision is not None and decision.collection and (have := self._upgrade_from(auction)):
+            decision = replace(decision, reason=f"{COLLECTION_PREFIX} : rareté {have} → {auction.rarity} "
+                                                f"≤ {decision.ceiling}")
         if decision is None:
             self._outcome(auction, "collection : trop chère" if collection_cap is not None else
                           refusal(auction, params, quote, min_sales(self.settings, auction.shiny), portfolio,
@@ -1180,7 +1230,7 @@ class AuctionSniper(Worker):
         outcomes, self._outcomes = self._outcomes, {}
         watched = "/".join(self.settings.sniper_resale_rarities)
         found = f"Repérage : {len(self._targets)} vente(s) suivie(s) ({watched} et jours manquants), " \
-                f"{self._days_found} vente(s) de jours manquants trouvée(s)"
+                f"{self._days_found} vente(s) de cartes de collection trouvée(s)"
         if self._gaps:
             found += f", {self._gaps} trou(s) dans les nouvelles ventes"
         if self._unread_winnable:
@@ -1420,9 +1470,15 @@ class AuctionSniper(Worker):
         if closed:
             # Plus manquante dès maintenant : une autre vente de la même carte ne doit pas être misée d'ici
             # la prochaine lecture de la collection.
-            self._collection_missing.discard(collection_key(row["title"]))
+            key = collection_key(row["title"])
+            self._collection_missing.discard(key)
+            if self.settings.collection_upgrade and key in self._day_titles and row["rarity"] in RARITY_RANK:
+                rank = max(self._collection_best.get(key, -1), RARITY_RANK[row["rarity"]])
+                self._collection_best[key] = rank
+                if rank == len(RARITY_RANK) - 1:
+                    del self._collection_best[key]
             if not simulated:
-                await record_win(self.ctx, row["title"])
+                await record_win(self.ctx, row["title"], row["rarity"])
             notify = self.notifier.info if simulated else self.notifier.success
             title = "Collection : carte obtenue (simulé)" if simulated else "Collection : carte obtenue !"
             if str(row["reason"]).startswith(SNIPE_REASON):  # demande remplie : plus de mise sur cette carte

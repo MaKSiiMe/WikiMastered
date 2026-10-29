@@ -21,7 +21,7 @@ Le détail des règles (estimation des prix, mises, remises en vente, défausse�
 
 ## Collections
 
-Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur les cartes manquantes (jusqu'à `COLLECTION_MAX_PRICE`), les garde et leur pose une étiquette.
+Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur les cartes manquantes (jusqu'à `COLLECTION_MAX_PRICE`), les garde et leur pose une étiquette. Il mise aussi sur une carte déjà possédée quand un exemplaire de rareté plus haute est en vente (`COLLECTION_UPGRADE`), jusqu'à avoir chaque carte dans sa plus haute rareté.
 
 - `jours` (les 366 jours de l'année) est intégrée.
 - Les autres se décrivent dans [config/collections.yaml](config/collections.yaml) : un nom, une étiquette, les titres.
