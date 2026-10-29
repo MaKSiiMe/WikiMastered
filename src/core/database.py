@@ -842,7 +842,7 @@ class Database:
     async def bids_for_title(self, title: str) -> list[aiosqlite.Row]:
         """Achats de positions du bot sur cette carte (commande prices) : mise, estimation à l'achat, issue."""
         return await self._all(
-            "SELECT card_id, rarity, amount, reference_price, status, dry_run, placed_at, sale_price FROM bids "
+            "SELECT card_id, rarity, is_shiny, amount, reference_price, status, dry_run, placed_at, sale_price FROM bids "
             "WHERE title = ? COLLATE NOCASE AND reason NOT LIKE 'collection%' AND status IN ('won', 'sim_won') "
             "ORDER BY placed_at DESC", (title,))
 

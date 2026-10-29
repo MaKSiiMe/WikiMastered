@@ -163,3 +163,29 @@ async def test_resale_listed_just_under_the_cheapest_rival(tmp_path):
     row = await listing(lid)
     assert row["status"] == "posted" and row["base_amount"] == 883 and "883" in json.dumps(posted[-1])
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_prices_shiny_option_shows_only_shiny_copies(tmp_path):
+    market = [selling("m1", 600), {**selling("m2", 5000), "is_shiny": True}]
+
+    def handler(request):
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": market, "hasMore": False})
+        raise AssertionError(f"route inattendue {request.url}")  # pas de cote du site pour un shiny
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    now = datetime.now(UTC)
+    await ctx.db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, base_amount, ended_at) "
+        "VALUES (?, 'ecl21', ?, 'L', ?, ?, 100, ?)",
+        [("n1", TITLE, 0, 1200, now.isoformat()), ("s1", TITLE, 1, 8000, now.isoformat()),
+         ("s2", TITLE, 1, 9000, (now - timedelta(hours=1)).isoformat())])
+    await ctx.db.db.commit()
+    text = await prices_status(ctx, TITLE, md=True, shiny=True)
+    assert text.startswith("✨ **Shiny seulement.**")
+    assert "**L** ✨ · 2 vente(s) · estimation du bot **~8500 WB**" in text
+    assert "🎯 Pour revendre : miser **7727 WB** au plus" in text and "1200 WB" not in text
+    assert "En vente maintenant (1)" in text and "**5000 WB**" in text and "600" not in text
+    await ctx.db.close()

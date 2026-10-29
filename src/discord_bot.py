@@ -514,9 +514,9 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         await reply(interaction, f"Ventes ({len(rows)})", listings_text(rows), code=False)
 
     @tree.command(name="prix", description="Ventes observées d'une carte, estimation du bot, ventes en cours")
-    @app_commands.describe(titre="titre exact de la carte")
+    @app_commands.describe(titre="titre exact de la carte", shiny="exemplaires shiny seulement (non par défaut)")
     @app_commands.autocomplete(titre=title_choices)
-    async def prix(interaction: discord.Interaction, titre: str) -> None:
+    async def prix(interaction: discord.Interaction, titre: str, shiny: bool = False) -> None:
         await interaction.response.defer(thinking=True)
         known = await ctx.db.known_titles(titre, limit=10)
         exact = next((t for t in known if t.casefold() == titre.strip().casefold()), None)
@@ -525,7 +525,8 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                         "marché :\n" + "\n".join(f"• {t}" for t in known) + "\n\nRelance /prix en choisissant "
                         "dans la liste qui s'affiche pendant la frappe.", code=False)
             return
-        await reply(interaction, (exact or titre)[:250], await cli.prices_status(ctx, exact or titre, md=True),
+        name = f"{exact or titre} ✨" if shiny else exact or titre
+        await reply(interaction, name[:250], await cli.prices_status(ctx, exact or titre, md=True, shiny=shiny),
                     code=False)
 
     @tree.command(name="collection", description="Avancement des collections et cartes manquantes")
