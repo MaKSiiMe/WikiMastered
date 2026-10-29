@@ -9,14 +9,17 @@
   requêtes de fond (le sniper passe avant).
 - Le sniper mise sur une carte manquante en vente, jusqu'à COLLECTION_MAX_PRICE, dans la
   même fenêtre que ses autres mises. Une carte gagnée est gardée, jamais revendue.
+- Rareté : la plus haute possédée de chaque carte est enregistrée (kv « collection », clé best). Avec
+  COLLECTION_UPGRADE, le sniper mise aussi sur un exemplaire de rareté plus haute, jusqu'à la L.
 - Jamais deux enchères en même temps pour la même carte ; jamais sur une carte que tu
   cherches toi-même (tu mises déjà dessus).
 
 - Suivi de complétion : avancement de chaque collection (jours, titres) et date d'obtention de
   chaque carte (kv « collection », clé first_owned), pour le récap, le bilan et la commande.
 
-- Étiquette de la collection (COLLECTION_TAG pour les jours, « date » par défaut) : ajoutée à un
-  exemplaire de chaque carte possédée qui n'en a pas, comme le fait l'éditeur d'étiquettes du site
+- Étiquette de la collection (COLLECTION_TAG pour les jours, « date » par défaut) : posée sur l'exemplaire
+  gardé de chaque carte (favori, shiny, plus haute rareté : keep_order) et retirée des autres, qui peuvent
+  alors partir (le R remplacé par un SR gagné), comme le fait l'éditeur d'étiquettes du site
   (tables Supabase `tags` et `user_card_tags` [WP tags.js]). Avec PROTECTED_TAGS=date, cet exemplaire n'est jamais vendu.
 
 Les titres attendus sont ceux de Wikipédia (« 1er janvier », « 14 octobre »), vérifiés sur les
@@ -35,7 +38,7 @@ from pathlib import Path
 
 import yaml
 
-from src.config import Settings
+from src.config import RARITY_RANK, Settings
 from src.core import timeutils
 from src.core.client import ApiError
 from src.core.models import OwnedCard
@@ -57,6 +60,12 @@ MONTH_DAYS = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 def year_days() -> list[str]:
     """Les 366 jours, titrés comme sur Wikipédia : « 1er janvier », « 2 janvier »… « 29 février »."""
     return [f"{'1er' if d == 1 else d} {m}" for m, n in zip(MONTHS, MONTH_DAYS, strict=True) for d in range(1, n + 1)]
+
+
+def best_rarity(rows: Iterable[OwnedCard]) -> str | None:
+    """Rareté la plus haute parmi des exemplaires (None : aucune connue)."""
+    known = [r.rarity for r in rows if r.rarity in RARITY_RANK]
+    return max(known, key=RARITY_RANK.__getitem__) if known else None
 
 
 def collection_key(title: str) -> str:
@@ -131,18 +140,25 @@ async def refresh(ctx: Context) -> dict:
     state = {"owned": sorted(owned), "missing": sorted(set(wanted) - owned, key=list(wanted).index),
              "total": len(wanted), "unmatched": sorted(near)[:20], "unknown_sets": unknown,
              "at": utcnow().isoformat(), "sets": set_progress(ctx, owned),
-             "first_owned": first_owned(previous, owned, utcnow())}
+             "first_owned": first_owned(previous, owned, utcnow()),
+             "best": {k: r for k, rows in sorted(copies.items()) if (r := best_rarity(rows))}}
     state.update(await tag_owned(ctx, copies, active.values()))
     await ctx.db.kv_set(KV_KEY, state)
     return state
 
 
-async def record_win(ctx: Context, title: str) -> None:
+async def record_win(ctx: Context, title: str, rarity: str | None = None) -> None:
     """Carte gagnée par le sniper : possédée tout de suite dans l'état (récap, bilan), sans attendre la
     prochaine lecture (COLLECTION_REFRESH_MINUTES, 6 h par défaut), qui la confirmera."""
     state = await ctx.db.kv_get(KV_KEY)
     key = collection_key(title)
-    if not state or key not in state["missing"]:
+    if not state:
+        return
+    best = state.setdefault("best", {})
+    if rarity in RARITY_RANK and RARITY_RANK[rarity] > RARITY_RANK.get(best.get(key) or "", -1):
+        best[key] = rarity
+    if key not in state["missing"]:
+        await ctx.db.kv_set(KV_KEY, state)
         return
     state["missing"].remove(key)
     state["owned"] = sorted({*state["owned"], key})
@@ -189,7 +205,8 @@ def progress_lines(state: dict | None, titles: dict[str, str], now: datetime, da
 
 
 async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: Iterable[Collection]) -> dict:
-    """Ajoute l'étiquette de chaque collection au meilleur exemplaire de chaque carte possédée qui n'en a pas."""
+    """Pose l'étiquette de chaque collection sur l'exemplaire gardé de chaque carte possédée, et la retire des autres
+    exemplaires : un exemplaire de rareté plus haute arrivé depuis la reprend, l'ancien n'est plus protégé."""
     from src.workers.inventory_manager import keep_order  # import local : évite un cycle
 
     keys_by_tag: dict[str, set[str]] = {}
@@ -198,11 +215,18 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: It
             keys_by_tag.setdefault(c.tag, set()).update(collection_key(t) for t in c.titles)
     if not keys_by_tag:
         return {}
-    untagged = [(tag, min(rows, key=keep_order)) for tag, keys in keys_by_tag.items()
-                for key, rows in copies.items()
-                if key in keys and not any(tag_key(tag) in r.tag_names for r in rows)]
-    out: dict = {"tag": ", ".join(keys_by_tag), "to_tag": len(untagged), "tagged": 0}
-    if not untagged:
+    untagged: list[tuple[str, OwnedCard]] = []
+    stale: list[tuple[str, OwnedCard]] = []  # étiquette sur un autre exemplaire que le gardé
+    for tag, keys in keys_by_tag.items():
+        for key, rows in copies.items():
+            if key not in keys:
+                continue
+            kept = min(rows, key=keep_order)
+            if tag_key(tag) not in kept.tag_names:
+                untagged.append((tag, kept))
+            stale += [(tag, r) for r in rows if r is not kept and tag_key(tag) in r.tag_names]
+    out: dict = {"tag": ", ".join(keys_by_tag), "to_tag": len(untagged), "tagged": 0, "untagged": 0}
+    if not untagged and not stale:
         return out
     live = ctx.settings.is_live("tag_card")
     try:
@@ -217,6 +241,7 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: It
     if missing:
         out["tag_error"] = (f"étiquette(s) « {', '.join(missing)} » introuvable(s) (HTTP {status}) : "
                             "crée-la une fois sur le site")
+    waiting = {(tag, collection_key(row.title)) for tag, row in untagged}  # cartes sans exemplaire étiqueté
     for tag, row in [u for u in untagged if tag_key(u[0]) in ids][: ctx.settings.collection_tag_max_per_run]:
         tag_id = ids[tag_key(tag)]
         if not live:
@@ -226,10 +251,25 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: It
                                                  json_body={"user_card_id": row.id, "tag_id": tag_id})
         if status in (200, 201, 204, 409):  # 409 : déjà étiquetée
             out["tagged"] += 1
+            waiting.discard((tag, collection_key(row.title)))
         else:
             out["tag_error"] = f"ajout refusé (HTTP {status}) : {str(data)[:200]}"
-            break
+            return out
     out["to_tag"] -= out["tagged"]
+    # Retrait seulement une fois l'exemplaire gardé étiqueté : la carte n'est jamais sans protection.
+    for tag, row in stale:
+        if tag_key(tag) not in ids or (tag, collection_key(row.title)) in waiting:
+            continue
+        if not live:
+            log.info("[DRY RUN] étiquette « %s » retirée de %s (%s)", tag, row.title, row.rarity)
+            continue
+        status, data = await ctx.client.supabase("DELETE", "user_card_tags", prefer="return=minimal",
+                                                 params={"user_card_id": f"eq.{row.id}",
+                                                         "tag_id": f"eq.{ids[tag_key(tag)]}"})
+        if status not in (200, 204):
+            out["tag_error"] = f"retrait refusé (HTTP {status}) : {str(data)[:200]}"
+            break
+        out["untagged"] += 1
     return out
 
 
@@ -252,9 +292,11 @@ class CollectionWorker(Worker):
                       len(state["missing"]))
         if state.get("unknown_sets"):
             self.notifier.warning("Collection : ensemble inconnu", unknown_text(self.settings, state["unknown_sets"]))
-        if state.get("tagged"):
+        if state.get("tagged") or state.get("untagged"):
+            moved = f" ; retirée de {state['untagged']} exemplaire(s) remplacé(s)" if state.get("untagged") else ""
             self.notifier.info("Collection : étiquettes ajoutées",
-                               f"« {state['tag']} » ajoutée(s) à {state['tagged']} carte(s) ; reste {state['to_tag']}.")
+                               f"« {state['tag']} » ajoutée(s) à {state['tagged']} carte(s){moved} ; "
+                               f"reste {state['to_tag']}.")
         if state.get("tag_error"):
             self.log.warning("étiquettes de collection : %s", state["tag_error"])
         return self.settings.collection_refresh_minutes * 60

@@ -315,8 +315,11 @@ class Settings(BaseSettings):
     collection_sets: CsvList = Field(default_factory=list)    # « jours » + clés de config/collections.yaml
     collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
     collection_max_price: int = 50                              # mise maximale pour une carte manquante
+    # Carte possédée : le sniper mise aussi sur un exemplaire de rareté plus haute que la meilleure possédée,
+    # jusqu'à COLLECTION_MAX_PRICE (le but : chaque carte dans sa plus haute rareté).
+    collection_upgrade: bool = True
     collection_refresh_minutes: float = 360.0
-    collection_search_seconds: float = 30.0  # le sniper cherche un jour manquant sur le marché toutes les N s
+    collection_search_seconds: float = 30.0  # le sniper cherche une carte de collection sur le marché toutes les N s
     # Mises réelles de collection par vérification anti-bot (le site en accepte ~9-10, puis la redemande) :
     # le reste est gardé pour les L. 0 = pas de limite.
     collection_bids_per_check: int = 2

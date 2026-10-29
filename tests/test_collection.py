@@ -288,3 +288,92 @@ async def test_sales_history_asked_only_for_a_pro_account(tmp_path):
     await prices.quote("b", "L")
     assert (await prices.quote("c", "L")).average == 700 and asked == ["summary", "summary", "history"]
     await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_tag_moves_to_the_highest_rarity_copy(tmp_path):
+    import json as jsonlib
+
+    from src.workers.collection import refresh
+    from tests.test_session import cookie_for
+
+    calls = []
+
+    def day(oid, title, rarity, tags=()):
+        row = copy(oid, f"card-{title}", title)
+        row.update(snapshot_rarity=rarity, tags=[{"id": 7, "name": t} for t in tags])
+        return row
+
+    def handler(request):
+        if request.url.host.endswith("supabase.co"):
+            if request.method == "GET":
+                return httpx.Response(200, json=[{"id": 7, "name": "Date"}])
+            calls.append((request.method, jsonlib.loads(request.content) if request.content
+                          else dict(request.url.params)))
+            return httpx.Response(201 if request.method == "POST" else 204)
+        rows = {"janvier": [day("o1", "1er janvier", "R", tags=["date"]), day("o2", "1er janvier", "SR"),
+                            day("o3", "2 janvier", "UR", tags=["date"])]}.get(request.url.params.get("q", ""), [])
+        return httpx.Response(200, json={"collection": rows})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, collection_sets=["jours"],
+                                   supabase_anon_key="anon-key", wm_cookie=cookie_for("a1", "r1", 3600))
+    ctx = await make_context(tmp_path, client, notifier)
+    state = await refresh(ctx)
+    assert state["best"] == {"1 janvier": "SR", "2 janvier": "UR"}
+    # Le SR gagné reprend l'étiquette, puis le R la perd (il peut partir).
+    assert calls == [("POST", {"user_card_id": "o2", "tag_id": 7}),
+                     ("DELETE", {"user_card_id": "eq.o1", "tag_id": "eq.7"})]
+    assert state["tagged"] == 1 and state["untagged"] == 1
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upgrade", [True, False])
+async def test_sniper_bids_on_a_higher_rarity_of_an_owned_card(tmp_path, upgrade):
+    from datetime import datetime, timedelta
+
+    from src.workers.auction_sniper import AuctionSniper
+
+    now = datetime.now(UTC)
+
+    def sale(aid, title, rarity, base):
+        return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": rarity},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
+                "end_at": (now + timedelta(seconds=15)).isoformat(), "base_amount": base,
+                "current_bid": None, "current_bidder_id": None}
+
+    market = [sale("a1", "3 mars", "R", 10), sale("a2", "3 mars", "SR", 20), sale("a3", "4 mars", "SR", 20)]
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 3000})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": market, "hasMore": False})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, collection_sets=["jours"], collection_max_price=50,
+                                   collection_upgrade=upgrade)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    await db.kv_set("collection", {"owned": ["3 mars", "4 mars"], "missing": [], "total": 366,
+                                   "best": {"3 mars": "R", "4 mars": "UR"}})
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    await sniper.step()
+    rows = await db._all("SELECT id, auction_id, title, rarity, reason FROM bids")
+    if not upgrade:
+        assert rows == [] and sniper._collection_best == {}
+        await db.close()
+        return
+    # 3 mars : le SR monte le R possédé, le R n'apporte rien ; 4 mars : déjà en UR.
+    assert [(r["auction_id"], r["reason"]) for r in rows] == [("a2", "collection : rareté R → SR ≤ 50")]
+    await sniper._close_bid(await db.last_bid("a2"), won=True, simulated=False)
+    assert sniper._collection_best["3 mars"] == 3
+    assert (await db.kv_get("collection"))["best"]["3 mars"] == "SR"
+    await db.close()

@@ -149,13 +149,16 @@ flowchart LR
 ```mermaid
 flowchart TD
     Y["config/collections.yaml<br/>+ jours intégrés"] --> L["Lecture de ta collection<br/>toutes les 6 h"]
-    L --> M["Cartes manquantes"]
-    M --> S["Sniper : cherche une manquante<br/>sur le marché toutes les 30 s"]
+    L --> M["Cartes manquantes<br/>+ meilleure rareté de chaque carte possédée"]
+    M --> S["Sniper : cherche une carte de collection<br/>sur le marché toutes les 30 s"]
     S --> B{"Mise min ≤ COLLECTION_MAX_PRICE ?"}
     B -->|oui| W["Mise au minimum"]
     W --> K["Gagnée : gardée"]
     K --> T["Étiquette de la collection<br/>sur le meilleur exemplaire"]
 ```
+
+- Rareté (`COLLECTION_UPGRADE`, actif par défaut) : une carte possédée est aussi misée quand une vente propose une rareté plus haute que ta meilleure (R → SR, SR → UR…), au même plafond `COLLECTION_MAX_PRICE`. Les recherches alternent : une carte manquante, puis une carte à monter.
+- L'étiquette passe sur le nouvel exemplaire, puis est retirée de l'ancien, qui n'est plus protégé : il peut être vendu ou défaussé.
 
 - Seuls les titres exacts comptent : « 14 octobre », pas « 14 octobre 1066 ».
 - Jamais deux enchères sur la même carte, jamais sur une carte que tu cherches toi-même.
