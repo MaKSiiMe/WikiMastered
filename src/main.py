@@ -6,7 +6,7 @@
     python -m src.main inventory scan|report|list|discard [--apply]
     python -m src.main report                   # envoie le bilan du jour sur Discord
     python -m src.main roi [--days 7]           # bénéfice et ROI des reventes, jour par jour
-    python -m src.main prices "Titre"           # ventes observées d'une carte, estimation du bot
+    python -m src.main prices "Titre"           # ventes observées d'une carte, estimation du bot (--shiny)
     python -m src.main collection               # collection à compléter (jours de l'année…)
     python -m src.main market [--pages 4] [--rarity UR]  # où sont les fins imminentes dans le marché
     python -m src.main profile                  # profil du joueur : solde, paquets, pity…
@@ -313,52 +313,64 @@ PRICES_SHOWN = 15  # ventes observées affichées par rareté
 
 
 def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime,
-                md: bool = False, resale: dict[tuple[str, bool], Quote] | None = None, fee: float = 0.0) -> str:
+                md: bool = False, resale: dict[tuple[str, bool], Quote] | None = None, fee: float = 0.0,
+                shiny: bool = False) -> str:
     """Ventes observées d'une carte, estimation du bot, achats du bot et ventes en cours (commande prices).
     `md` : version Discord (/prix), lignes courtes en markdown, sans bloc de code. `resale` : revente estimée par
-    (rareté, shiny) sur les ventes observées seules, d'où la mise conseillée pour l'acheter."""
+    (rareté, shiny) sur les ventes observées seules, d'où la mise conseillée pour l'acheter. `shiny` : les exemplaires
+    shiny seuls (ventes, estimation, achats, ventes en cours), sans la cote du site qui ne les distingue pas."""
     def paris(value) -> str:
         moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
         text = f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
         return f"`{text}`" if md else text
 
-    def bid_line(rarity: str, shiny: bool) -> str | None:
+    def bid_line(rarity: str, version: bool) -> str | None:
         """Mise conseillée : la plus petite dont la relance minimale (+10 %) atteint la revente (voir advised_bid)."""
-        quote = (resale or {}).get((rarity, shiny))
+        quote = (resale or {}).get((rarity, version))
         if quote is None or quote.average is None:
             return None
         bid, profit = advised_bid(quote.average, fee)
-        kind = f"✨ shiny ({quote.count} vente(s))" if shiny else "Pour revendre"  # shiny : souvent peu de ventes
+        # Shiny à côté de la carte normale : souvent peu de ventes, leur nombre est montré.
+        kind = f"✨ shiny ({quote.count} vente(s))" if version and not shiny else "Pour revendre"
         if profit <= 0:
             return f"{kind} : revente ~{quote.average:.0f} WB, pas rentable"
         amount = f"**{bid} WB**" if md else f"{bid} WB"
         return (f"{kind} : miser {amount} au plus (revente ~{quote.average:.0f} WB, médiane des dernières ventes "
                 f"sans la cote du site ; +{profit:.0f} WB)")
 
+    observed = [r for r in observed if bool(r["is_shiny"]) == shiny]
+    bought = [b for b in bought if bool(b["is_shiny"]) == shiny]
+    selling = [a for a in selling if a.shiny == shiny]
     if md:
-        lines = ["Ventes finies avec au moins une mise, vues par le bot (une mise de dernière seconde peut manquer)."]
+        lines = (["✨ **Shiny seulement.**"] if shiny else []) + \
+            ["Ventes finies avec au moins une mise, vues par le bot (une mise de dernière seconde peut manquer)."]
     else:
-        lines = [f"{title}", "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de "
-                 "2 min avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais "
+        lines = [f"{title}{' ✨ shiny' if shiny else ''}",
+                 "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de 2 min avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais "
                  "comptée."]
     rarities = sorted({r["rarity"] for r in observed} | set(quotes), key=lambda r: -RARITY_RANK.get(r, -1))
     if not rarities:
         lines.append("  aucune")
     for rarity in rarities:
-        sales = [r for r in observed if r["rarity"] == rarity and not r["is_shiny"]]
+        sales = [r for r in observed if r["rarity"] == rarity]
         quote = quotes.get(rarity)
         estimate = f"~{quote.average:.0f} WB" if quote and quote.average is not None else "aucune"
         average = site.get(rarity, (None, None))[0]
         site_text = f"{average:.0f} WB" if average is not None else "inconnue"
-        if md:
+        if shiny:
+            lines.append(f"\n**{rarity}** ✨ · {len(sales)} vente(s) · estimation du bot **{estimate}** (médiane des 5 "
+                         f"dernières ventes shiny, sans la cote du site)" if md else
+                         f"\n{rarity} ✨ : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
+                         f"5 dernières ventes shiny, sans la moyenne du site)")
+        elif md:
             lines.append(f"\n**{rarity}** · {len(sales)} vente(s) · estimation du bot **{estimate}** (médiane des 5 "
                          f"dernières, plafonnée par la cote du site : {site_text})")
         else:
             lines.append(f"\n{rarity} : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
                          f"5 dernières, plafonnée par la moyenne du site : {site_text})")
-        for shiny in (False, True):
-            if line := bid_line(rarity, shiny):
-                lines.append((("" if shiny else "🎯 ") if md else "  ") + line)
+        for version in ((True,) if shiny else (False, True)):
+            if line := bid_line(rarity, version):
+                lines.append((("" if version and not shiny else "🎯 ") if md else "  ") + line)
         for r in sales[:PRICES_SHOWN]:
             notes = []
             if r["base_amount"] and r["price"] <= r["base_amount"]:
@@ -398,7 +410,7 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
     return "\n".join(lines)
 
 
-async def prices_status(ctx: Context, title: str, md: bool = False) -> str:
+async def prices_status(ctx: Context, title: str, md: bool = False, shiny: bool = False) -> str:
     observed = await ctx.db.observed_for_title(title)
     auctions, _ = await ctx.api.market_page(sort="ending_soon", q=title, limit=50)
     now = utcnow()
@@ -408,14 +420,14 @@ async def prices_status(ctx: Context, title: str, md: bool = False) -> str:
         return f"« {title} » : ni vente observée ni vente en cours (titre exact de la carte, sans « (L) »)."
     quotes, site, resale = {}, {}, {}
     for card_id in card_ids:  # en principe une seule carte par titre
-        quotes.update({r: q for r, q in (await ctx.prices.quotes(card_id)).items() if r in RARITY_RANK})
+        quotes.update({r: q for r, q in (await ctx.prices.quotes(card_id, shiny=shiny)).items() if r in RARITY_RANK})
         cached = await ctx.db.price_get(card_id)
         site.update(cached[1] if cached else {})
-        for shiny in (False, True):
-            resale.update({(r, shiny): q for r, q in (await ctx.prices.observed_quote(card_id, shiny)).items()})
+        for version in (False, True):
+            resale.update({(r, version): q for r, q in (await ctx.prices.observed_quote(card_id, version)).items()})
     name = selling[0].title if selling else title
     return prices_text(name, observed, await ctx.db.bids_for_title(title), selling, quotes, site,
-                       ctx.client.user_id, now, md, resale, ctx.settings.sale_fee_pct)
+                       ctx.client.user_id, now, md, resale, ctx.settings.sale_fee_pct, shiny)
 
 
 async def roi_report(ctx: Context, days: int) -> Roi:
@@ -713,6 +725,7 @@ def main(argv: list[str] | None = None) -> None:
     pr = sub.add_parser("prices", help="ventes observées d'une carte, estimation du bot et ventes en cours "
                                        "(lecture seule)")
     pr.add_argument("title", help="titre exact de la carte, entre guillemets")
+    pr.add_argument("--shiny", action="store_true", help="exemplaires shiny seulement")
     inv = sub.add_parser("inventory", help="analyse / vente / défausse")
     inv.add_argument("action", choices=["scan", "report", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
@@ -743,7 +756,7 @@ def main(argv: list[str] | None = None) -> None:
         "profile": profile_status,
         "hours": lambda ctx: hours_status(ctx, args.rarity),
         "sniper-report": lambda ctx: sniper_report_status(ctx, args.hours, args.summary, args.breakdown),
-        "prices": lambda ctx: prices_status(ctx, args.title),
+        "prices": lambda ctx: prices_status(ctx, args.title, shiny=args.shiny),
         "roi": lambda ctx: roi_status(ctx, max(1, args.days)),
         "inventory": lambda ctx: inventory_cli(ctx, args.action, args.apply, args.lookups),
     }
