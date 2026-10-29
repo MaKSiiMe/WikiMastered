@@ -28,7 +28,8 @@ from discord import app_commands
 
 from src import account, keeps, orders, overrides, pauses, snipes, trades
 from src.charts import number, value_line
-from src.core.models import OwnedCard, deterrent_bid
+from src.core.models import OwnedCard
+from src.core.pricing import advised_bid
 from src.core.timeutils import utcnow
 from src.discord_bot import COLOR, CONFIRM_SECONDS, GREEN, GREY, RARITIES, RED, Buttons, ago, paris
 from src.roi import wb
@@ -184,11 +185,10 @@ def sellable(copies: list[OwnedCard], excluded: set[str], rarity: str = "") -> t
 
 
 def top_bid(resale: float | None, fee: float) -> str:
-    """/top : mise conseillée pour revendre la carte (voir `deterrent_bid`) et bénéfice si elle est gagnée."""
+    """/top : mise conseillée pour revendre la carte (voir `advised_bid`) et bénéfice si elle est gagnée."""
     if resale is None:
         return ""
-    bid = deterrent_bid(resale)
-    profit = resale * (1 - fee) - bid
+    bid, profit = advised_bid(resale, fee)
     return f" · miser **{wb(bid)}** ({wb(profit, sign=True)})" if profit > 0 else " · pas rentable"
 
 

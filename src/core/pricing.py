@@ -35,7 +35,7 @@ from src.config import RARITIES
 from src.core.api import WikiMastersAPI
 from src.core.client import ApiError, RateLimited
 from src.core.database import Database
-from src.core.models import SaleRow, SalesHistory
+from src.core.models import SaleRow, SalesHistory, deterrent_bid
 from src.core.timeutils import utcnow
 
 log = logging.getLogger(__name__)
@@ -108,6 +108,13 @@ def combine(observed: list[int], n_observed: int, site_average: float | None,
             estimate = min(estimate, site_average)
         return Quote(estimate, n_observed, contested, spread)
     return Quote(site_average, 0)
+
+
+def advised_bid(resale: float, fee: float) -> tuple[int, float]:
+    """Mise conseillée pour revendre une carte (`deterrent_bid` : qui surenchérit paie plus que la revente) et bénéfice
+    si elle gagne à ce prix (commandes /top et /prix)."""
+    bid = deterrent_bid(resale)
+    return bid, resale * (1 - fee) - bid
 
 
 def recent_estimates(rows: list[SaleRow], recent_n: int) -> dict[str, tuple[float | None, int | None]]:
