@@ -416,6 +416,9 @@ class InventoryManager(Worker):
         reopened = await self.db.reopen_favorite_positions()
         if reopened:
             self.log.info("%d revente(s) abandonnée(s) pour une carte en favori : reprise(s)", reopened)
+        reopened = await self.db.reopen_same_card_positions(utcnow() - timedelta(days=7))
+        if reopened:
+            self.log.info("%d revente(s) abandonnée(s) pendant la vente d'un autre exemplaire : reprise(s)", reopened)
         if self.settings.position_post_now:
             # Programmées avec l'ancienne règle (lendemain 11 h-12 h) : publiées dès maintenant. Une seule fois, au
             # démarrage : une revente reportée faute de place de vente ne doit pas être avancée en boucle.
@@ -839,6 +842,14 @@ class InventoryManager(Worker):
         selling, maximum = await self.slot_usage()
         for row in due:
             simulated = bool(row["dry_run"]) or row["owned_card_id"].startswith("sim-")
+            if not simulated and (busy_until := await self.db.own_listing_end(row["card_id"], row["id"])):
+                # Un seul exemplaire d'une carte en vente à la fois : celui-ci attend la fin de l'autre.
+                retry = max(busy_until, utcnow()) + timedelta(minutes=2)
+                await self.db.update_listing(row["id"], post_at=retry,
+                                             target_end=retry + timedelta(minutes=row["duration_minutes"] or 0))
+                self.log.info("%s (%s) : un autre exemplaire est déjà en vente, publication après sa fin (%s)",
+                              row["title"], row["rarity"], f"{retry.astimezone(now_local().tzinfo):%d/%m %H:%M}")
+                continue
             if not (simulated and self.listing_live):  # une revente simulée n'occupe pas une vraie place
                 if selling >= maximum:
                     await self._postpone(row)

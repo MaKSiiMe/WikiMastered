@@ -29,7 +29,7 @@ from __future__ import annotations
 import contextlib
 import math
 import random
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 
@@ -61,6 +61,10 @@ COLLECTION_GUARD_SECONDS = 10
 # les 10 dernières secondes ne prolonge pas l'enchère : sans cette relecture, elle gagnait (rapport du 16/10 :
 # Chris Pratt, William de Galles… parties sous notre plafond).
 LAST_LOOK_SECONDS = 10
+# Passage du sniper plus long : écrit dans les logs avec son étape la plus lente. Le 30/10 à 16:08, 5 avril (R, 11 WB,
+# carte manquante repérée 41 min avant) n'a pas été relue de toute sa fenêtre de mise, sans rien dans les logs.
+SLOW_PASS_SECONDS = 15
+PASS_HISTORY = timedelta(minutes=5)  # passages gardés pour expliquer une carte de collection manquée
 # Issues d'une mise acceptée (ou simulée) : la vente est relue à sa fin.
 PLACED = ("misée", "misée (collection)")
 # Refus d'une mise tant que la vérification humaine du site n'est pas faite : « Vérification anti-bot
@@ -397,6 +401,9 @@ class AuctionSniper(Worker):
         self._gaps = self._days_found = 0
         # Ventes jamais relues dans leur fenêtre de mise : id -> (plafond estimé, fin), jugées à leur fin.
         self._unread: dict[str, tuple[int, datetime]] = {}
+        # Derniers passages : (début, fin, étape la plus lente, sa durée en s).
+        self._passes: deque[tuple[datetime, datetime, str, float]] = deque()
+        self._phases: list[tuple[str, datetime]] = []
         self._unread_winnable = 0
         # Fins imminentes : page à lire au prochain passage (par rareté), ids de la dernière page lue, et depuis le
         # dernier récap, pages 2+ lues et cibles de la fenêtre de mise qu'elles ont relues.
@@ -457,6 +464,41 @@ class AuctionSniper(Worker):
                                       f"(~{budget} WB) : la plupart des achats seront bloqués. Mets 0 ou plus.")
 
     async def step(self) -> float:
+        """Un passage (_step), chronométré étape par étape : voir _phase et _missed_report."""
+        self._phases = [("début", utcnow())]
+        try:
+            return await self._step()
+        finally:
+            end = utcnow()
+            started = self._phases[0][1]
+            marks = self._phases + [("fin", end)]
+            spans = [(label, (marks[i + 1][1] - at).total_seconds()) for i, (label, at) in enumerate(marks[:-1])]
+            slowest, seconds = max(spans, key=lambda s: s[1])
+            self._passes.append((started, end, slowest, seconds))
+            while self._passes and self._passes[0][1] < end - PASS_HISTORY:
+                self._passes.popleft()
+            if (end - started).total_seconds() > SLOW_PASS_SECONDS:
+                self.log.info("passage lent : %.0f s, dont %.0f s pour « %s »", (end - started).total_seconds(),
+                              seconds, slowest)
+
+    def _phase(self, label: str) -> None:
+        """Début d'une étape du passage en cours (sa durée va jusqu'à l'étape suivante)."""
+        self._phases.append((label, utcnow()))
+
+    def _missed_report(self, since: datetime, now: datetime) -> str:
+        """Ce que faisait le sniper depuis `since` : passages, le plus long et son étape, la plus longue pause."""
+        passes = [p for p in self._passes if p[1] >= since]
+        if not passes:
+            last = self._passes[-1][1] if self._passes else None
+            return "aucun passage" + (f" (dernier fini il y a {(now - last).total_seconds():.0f} s)" if last else "")
+        longest = max(passes, key=lambda p: p[1] - p[0])
+        # Pauses : avant le 1er passage, entre deux passages, après le dernier.
+        edges = [since] + [at for start, end, *_ in passes for at in (start, end)] + [now]
+        pause = max((edges[i + 1] - edges[i]).total_seconds() for i in range(0, len(edges), 2))
+        return (f"{len(passes)} passage(s), le plus long {(longest[1] - longest[0]).total_seconds():.0f} s "
+                f"(« {longest[2]} » {longest[3]:.0f} s), plus longue pause entre deux {max(pause, 0):.0f} s")
+
+    async def _step(self) -> float:
         self._ticks += 1
         now = utcnow()
         night = in_window(now_local(), self.settings.night_start, self.settings.night_end)
@@ -466,29 +508,38 @@ class AuctionSniper(Worker):
         # (cote, règlements…), sinon le passage en cours la ferait manquer (« 7 octobre … pas relue à temps »).
         guard = self._collection_soon(params, now) is not None
         if self._ticks % 20 == 0 and not guard:
+            self._phase("mises en cours, collection, cartes demandées")
             await self._refresh_engaged()
             await self._load_collection()
             await self.reload_snipes()
 
         # Une requête par passage, par priorité : carte de collection dans sa fenêtre de mise ou cible misée à
         # relire à sa fin ; repérage très en retard ; revente dans sa fenêtre ; cote à l'avance ; repérage.
+        self._phase("tri des cibles")
         self._prune(now)
         await self._drop_hopeless(params, now)
         target = self._next_due(params, now)
         if target is not None and (target.recheck or self._wanted(target.auction)):
+            self._phase(f"relecture {target.auction.title}")
             await self._read_target(target, params, now)
         elif guard:
+            self._phase("solde et places de vente")
             await self.portfolio(now)  # solde et places de vente en cache pour la mise qui vient
         elif target is not None and not self._discovery_late(params, now):
+            self._phase(f"relecture {target.auction.title}")
             await self._read_target(target, params, now)
-        elif self._discovery_late(params, now) or not await self._prefetch(now):
-            await self._discover(params, now)
+        else:
+            self._phase("cote à l'avance")
+            if self._discovery_late(params, now) or not await self._prefetch(now):
+                self._phase("repérage")
+                await self._discover(params, now)
 
         now = utcnow()
         ready = [t.auction for t in self._targets.values()
                  if not t.recheck and now - t.seen_at <= FRESH
                  and in_snipe_window(t.auction, me, params.window_seconds, now, self.settings.sniper_min_seconds_left)]
         if ready:
+            self._phase(f"mises ({len(ready)} vente(s))")
             for a in ready:
                 # Surenchérie puis rejouée : la nouvelle issue (ex. « trop chère ») remplace la mise précédente,
                 # sinon elle n'est ni journalisée ni comptée, et la vente est encore relue à sa fin pour rien.
@@ -506,8 +557,10 @@ class AuctionSniper(Worker):
                 t.recheck = True  # déjà en tête : relue à sa fin seulement
 
         if self._ticks % 10 == 5:
+            self._phase("ventes terminées en base")
             await self.db.harvest_ended_auctions(now - HARVEST_DELAY)
         if self._ticks % 10 == 0 and not guard:
+            self._phase("règlements")
             await self._settle()
             await self._reconcile()
         self._flush_digest(now)
@@ -676,6 +729,13 @@ class AuctionSniper(Worker):
                 # Séparées au récap : une carte de collection manquée compte, une revente simulée beaucoup moins.
                 self._outcome(t.auction, "collection : pas relue à temps" if self._wanted(t.auction)
                               else "pas relue à temps")
+                if self._wanted(t.auction):
+                    window = t.auction.end_at - timedelta(seconds=max(self.settings.sniper_window_seconds,
+                                                                      self.settings.night_window_seconds))
+                    self.log.warning("collection : %s (%s) à %d WB manquée, dernière lecture il y a %.0f s ; "
+                                     "pendant sa fenêtre de mise : %s", t.auction.title, t.auction.rarity,
+                                     t.auction.min_bid, (now - t.seen_at).total_seconds(),
+                                     self._missed_report(window, now))
                 self._log_collection_outcomes([t.auction])
                 if t.ceiling is not None and not self._wanted(t.auction):
                     self._unread[aid] = (t.ceiling, t.auction.end_at)
