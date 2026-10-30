@@ -105,6 +105,9 @@ async def test_resale_estimate_capped_by_the_cheapest_rival_sale(tmp_path):
     await seen(ctx.db, "m2", 900, 10)
     await seen(ctx.db, "m1", 600, 11)
     assert (await sniper._against_rivals(target, quote)).average == 600.0
+    # Sous la moitié de l'estimation : un prix de départ, ignoré (30/10 : 56 % des L en avaient une).
+    await seen(ctx.db, "m0", 221, 12)
+    assert (await sniper._against_rivals(target, quote)).average == 600.0
     await ctx.db.close()
 
 

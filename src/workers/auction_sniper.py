@@ -48,6 +48,7 @@ from src.snipes import remove as remove_snipe
 from src.workers.base import Worker
 from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers.collection import collection_key, record_win, targets as collection_targets
+from src.workers.inventory_manager import RIVAL_MIN_SHARE
 
 COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, pas revendues
 # Le site refuse plus de 50 enchères par page (403 dès limit=100, relevé du 15/10/2026).
@@ -1153,11 +1154,13 @@ class AuctionSniper(Worker):
     async def _against_rivals(self, auction: Auction, quote: Quote) -> Quote:
         """Revente estimée au plus au prix de la vente concurrente la moins chère de la même carte encore en cours à
         la fin de celle-ci : sur ce marché, beaucoup de cartes partent au prix demandé (le 18/10, l'éclipse XXIe
-        achetée 882 sur une estimation de 1197 se retrouvait face à d'autres en vente à 600 et 900)."""
+        achetée 882 sur une estimation de 1197 se retrouvait face à d'autres en vente à 600 et 900). Une vente
+        affichée sous RIVAL_MIN_SHARE de l'estimation ne compte pas : c'est un prix de départ (comme à la revente)."""
         if quote.average is None:
             return quote
         ask = await self.db.cheapest_ask(auction.catalog_id, auction.rarity, auction.shiny,
-                                         auction.end_at + RIVAL_MIN_OVERLAP, auction.id, self.api.user_id)
+                                         auction.end_at + RIVAL_MIN_OVERLAP, auction.id, self.api.user_id,
+                                         RIVAL_MIN_SHARE * quote.average)
         if ask is None or ask >= quote.average:
             return quote
         self.log.debug("%s : vente concurrente à %d WB, estimation %.0f ramenée à ce prix", auction.title, ask,
