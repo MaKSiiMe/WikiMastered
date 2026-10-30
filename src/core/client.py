@@ -63,6 +63,10 @@ class Halted(RuntimeError):
 
 
 HALT_FILE = "HALT"  # dans DATA_DIR ; sa présence garde le bot à l'arrêt, même après un redémarrage
+# Requête urgente (relecture ou mise du sniper) qui attend plus longtemps son créneau, réponse plus lente : écrites dans
+# les logs, pour expliquer une cible manquée (le 30/10, 5 avril pas relue de toute sa fenêtre de mise).
+URGENT_WAIT_WARN_SECONDS = 5.0
+SLOW_RESPONSE_SECONDS = 10.0
 ROUTE_ALERT_FAILURES = 3  # refus de suite d'une route limitée (403 + Retry-After) avant un message Discord
 
 
@@ -574,13 +578,23 @@ class WikiMastersClient:
                     self._no_urgent.set()
 
     async def _send(self, req: BuiltRequest, urgent: bool = False, background: bool = False) -> httpx.Response:
+        asked = time.monotonic()
         await (self._acquire_background_slot() if background else self._acquire_slot(urgent))
-        return await self._http.request(
-            req.method, req.url,
-            params=req.params or None,
-            json=req.json,
-            headers=req.headers or None,
-        )
+        sent = time.monotonic()
+        route = str(req.url).split("?")[0].rsplit("/api/", 1)[-1]
+        if urgent and sent - asked > URGENT_WAIT_WARN_SECONDS:
+            log.warning("requête urgente %s : %.0f s d'attente avant son créneau", route, sent - asked)
+        try:
+            return await self._http.request(
+                req.method, req.url,
+                params=req.params or None,
+                json=req.json,
+                headers=req.headers or None,
+            )
+        finally:
+            if time.monotonic() - sent > SLOW_RESPONSE_SECONDS:
+                log.info("réponse lente du site : %s en %.0f s%s", route, time.monotonic() - sent,
+                         " (requête urgente)" if urgent else "")
 
     def _backoff(self, reason: str, *, limited: bool, retry_after: float = 0.0) -> float:
         self._failures = min(self._failures + 1, 10)

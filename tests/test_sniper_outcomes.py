@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -318,16 +320,41 @@ async def test_bid_wrongly_counted_lost_is_recovered_at_startup(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_missed_collection_card_counted_apart(tmp_path):
-    """Récap du 16/10 : 1933 « pas relue à temps » sur 2091, sans savoir combien de cartes de collection."""
+async def test_missed_collection_card_counted_apart(tmp_path, caplog):
+    """Récap du 16/10 : 1933 « pas relue à temps » sur 2091, sans savoir combien de cartes de collection. Le 30/10,
+    5 avril manquée sans rien dans les logs : la ligne dit maintenant ce que faisait le sniper pendant sa fenêtre."""
     sniper, db, _ = await start(tmp_path, {}, [])
     now = datetime.now(UTC)
     for aid, title in (("col", "14 octobre"), ("ur", "Miley Cyrus")):
-        sniper._targets[aid] = Target(Auction.model_validate(sale(aid, title, 5)), now)
-    sniper._prune(now)
+        sniper._targets[aid] = Target(Auction.model_validate(sale(aid, title, 5)), now - timedelta(seconds=50))
+    sniper._passes.append((now - timedelta(seconds=45), now - timedelta(seconds=2), "relecture Miley Cyrus", 41.0))
+    with caplog.at_level(logging.WARNING):
+        sniper._prune(now)
     assert sniper._outcomes == {"col": "collection : pas relue à temps", "ur": "pas relue à temps"}
     counted = sniper.recap()[1].split(" : ", 1)[1].split(" · ")
     assert sorted(counted) == ["collection : pas relue à temps 1", "pas relue à temps 1"]
+    missed = [r.getMessage() for r in caplog.records if "manquée" in r.getMessage()]
+    assert len(missed) == 1 and "14 octobre" in missed[0] and "dernière lecture il y a 50 s" in missed[0]
+    assert "1 passage(s), le plus long 43 s (« relecture Miley Cyrus » 41 s)" in missed[0]
+    window = max(sniper.settings.sniper_window_seconds, sniper.settings.night_window_seconds)
+    assert f"plus longue pause entre deux {max(window - 5 - 45, 2)} s" in missed[0]  # avant le passage, ou après
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_slow_pass_is_logged_with_its_slowest_step(tmp_path, caplog):
+    sniper, db, _ = await start(tmp_path, {}, [])
+
+    async def slow_step() -> float:
+        started = sniper._phases[0][1] - timedelta(seconds=20)
+        sniper._phases = [("début", started), ("repérage", started + timedelta(seconds=1))]
+        return 1.0
+
+    sniper._step = slow_step
+    with caplog.at_level(logging.INFO):
+        assert await sniper.step() == 1.0
+    assert any("passage lent" in r.getMessage() and "« repérage »" in r.getMessage() for r in caplog.records)
+    assert sniper._passes[-1][2] == "repérage"
     await db.close()
 
 

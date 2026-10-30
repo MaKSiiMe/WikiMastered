@@ -593,6 +593,13 @@ class Database:
         row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE status = 'posted'")
         return int(row["n"]) if row else 0
 
+    async def own_listing_end(self, card_id: str, exclude: int) -> datetime | None:
+        """Fin de la vente réelle du bot déjà en cours pour cette carte (un autre exemplaire) : le site refuse d'en
+        publier une deuxième, avec « Cette carte est déjà engagée dans un échange en attente » (29/10, Zidane)."""
+        row = await self._one("SELECT MAX(target_end) AS end_at FROM listings WHERE status = 'posted' AND dry_run = 0 "
+                              "AND card_id = ? AND id != ?", (card_id, exclude))
+        return datetime.fromisoformat(row["end_at"]) if row and row["end_at"] else None
+
     async def simulated_active_listings(self, now: datetime) -> int:
         row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE status = 'simulated' AND target_end > ?",
                               (iso(now),))
@@ -607,6 +614,23 @@ class Database:
         for r in rows:
             await self.update_bid(r["id"], closed=0, sold_at=None)
         await self._exec(f"UPDATE listings SET status = 'favorite' WHERE {favorite}")
+        return len(rows)
+
+    async def reopen_same_card_positions(self, since: datetime) -> int:
+        """Positions closes après des refus « déjà engagée dans un échange » depuis `since`, pendant qu'un autre
+        exemplaire de la même carte était en vente par le bot (29/10 : 2e Zidane, abandonné en 2 min pendant que le
+        1er se vendait) : rouvertes, et ces refus ne comptent plus comme des échecs. Plus anciennes (17/10 : Les Feux
+        de l'amour), l'exemplaire a pu partir depuis : laissées closes. Renvoie leur nombre."""
+        same_card = (f"status = 'failed' AND created_at >= '{iso(since)}' AND error LIKE '%engagée dans un échange%' "
+                     "AND EXISTS (SELECT 1 FROM listings o "
+                     "WHERE o.card_id = listings.card_id AND o.id != listings.id AND o.dry_run = 0 AND o.posted_at "
+                     "IS NOT NULL AND o.posted_at <= listings.created_at AND (o.settled_at IS NULL OR o.settled_at >= "
+                     "listings.created_at))")
+        rows = await self._all(f"SELECT id FROM bids WHERE closed = 1 AND sale_price IS NULL AND id IN "
+                               f"(SELECT bid_id FROM listings WHERE {same_card})")
+        for r in rows:
+            await self.update_bid(r["id"], closed=0, sold_at=None)
+        await self._exec(f"UPDATE listings SET status = 'same_card' WHERE {same_card}")
         return len(rows)
 
     async def advance_position_listings(self, now: datetime) -> int:

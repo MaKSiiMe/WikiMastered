@@ -284,6 +284,63 @@ async def test_lone_server_error_pauses_only_its_route(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_second_copy_waits_for_the_first_sale_and_abandoned_one_is_reopened(tmp_path):
+    """29/10 : 2 Zidane ; le 2e, refusé 3 fois (« déjà engagée dans un échange en attente ») pendant que le 1er était
+    en vente, a été abandonné. Il attend désormais la fin de l'autre vente, et l'abandonné est repris au démarrage."""
+    from src.workers.inventory_manager import InventoryManager
+
+    posted = []
+
+    def handler(request):
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if request.method == "POST" and request.url.path == "/api/marketplace":
+            posted.append(request.content)
+            return httpx.Response(201, json={"auction_id": f"a{len(posted)}"})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    inv = InventoryManager(ctx)
+    now = datetime.now(UTC)
+    first = await db.schedule_listing(owned_card_id="z1", card_id="zz", title="Zinédine Zidane", rarity="L",
+                                      base_amount=13427, duration_minutes=360, post_at=now - timedelta(minutes=1),
+                                      target_end=now + timedelta(hours=6), reason="cote 13427")
+    second = await db.schedule_listing(owned_card_id="z2", card_id="zz", title="Zinédine Zidane", rarity="L",
+                                       base_amount=13310, duration_minutes=720, post_at=now - timedelta(minutes=1),
+                                       target_end=now + timedelta(hours=12), reason="doublon")
+    await inv.post_due_listings()
+    assert len(posted) == 1
+    rows = {r["id"]: r for r in await db._all("SELECT id, status, post_at FROM listings")}
+    assert rows[first]["status"] == "posted" and rows[second]["status"] == "scheduled"
+    assert datetime.fromisoformat(rows[second]["post_at"]) > now + timedelta(hours=6)
+
+    # Position abandonnée avant le correctif : rouverte, ses refus ne comptent plus ; trop ancienne : laissée.
+    async def abandoned(card: str, at: datetime) -> int:
+        failed_at = (at + timedelta(minutes=10)).isoformat()
+        bid = await db.record_bid(auction_id=f"b{card}", card_id=card, title=card, rarity="L", is_shiny=False,
+                                  amount=12750, reference_price=13427, reason="achat manuel", night=False,
+                                  dry_run=False, status="won", end_at=at)
+        await db._exec("INSERT INTO listings (owned_card_id, card_id, title, rarity, base_amount, duration_minutes, post_at, "
+                       "status, created_at, posted_at, settled_at, dry_run) "
+                       "VALUES (?, ?, ?, 'L', 13427, 360, ?, 'sold', ?, ?, ?, 0)",
+                       (f"{card}-1", card, card, at.isoformat(), at.isoformat(), at.isoformat(),
+                        (at + timedelta(hours=6)).isoformat()))
+        await db._exec("INSERT INTO listings (owned_card_id, card_id, title, rarity, base_amount, duration_minutes, post_at, "
+                       "status, created_at, error, bid_id, dry_run) VALUES (?, ?, ?, 'L', 13310, 720, ?, 'failed', ?, "
+                       "'Cette carte est déjà engagée dans un échange en attente', ?, 0)",
+                       (f"{card}-2", card, card, failed_at, failed_at, bid))
+        await db.close_position(bid, None)
+        return bid
+
+    recent, old = await abandoned("recent", now - timedelta(days=1)), await abandoned("old", now - timedelta(days=13))
+    assert await db.reopen_same_card_positions(now - timedelta(days=7)) == 1
+    assert (await db.get_bid(recent))["closed"] == 0 and (await db.get_bid(old))["closed"] == 1
+    assert await db.failed_listings_count(recent) == 0
+    await db.close()
+
+@pytest.mark.asyncio
 async def test_listings_respect_concurrent_limit(tmp_path):
     from src.workers.inventory_manager import InventoryManager
 
@@ -304,7 +361,7 @@ async def test_listings_respect_concurrent_limit(tmp_path):
     inv = InventoryManager(ctx)
     now = datetime.now(UTC)
     for i in range(2):
-        await db.schedule_listing(owned_card_id=f"o{i}", card_id="c", title=f"T{i}", rarity="C", base_amount=20,
+        await db.schedule_listing(owned_card_id=f"o{i}", card_id=f"c{i}", title=f"T{i}", rarity="C", base_amount=20,
                                   duration_minutes=120, post_at=now - timedelta(minutes=1),
                                   target_end=now + timedelta(hours=2), reason="test")
     await inv.post_due_listings()
@@ -314,7 +371,7 @@ async def test_listings_respect_concurrent_limit(tmp_path):
     assert datetime.fromisoformat(rows[1]["post_at"]) > now + timedelta(hours=12)  # doublon : reporté au lendemain
 
     # Revente d'une position (16/10, Place publique reportée de 24 h) : nouvel essai dès SELL_CHECK_MINUTES.
-    await db.schedule_listing(owned_card_id="p1", card_id="c", title="Place publique", rarity="L", base_amount=356,
+    await db.schedule_listing(owned_card_id="p1", card_id="pp", title="Place publique", rarity="L", base_amount=356,
                               duration_minutes=720, post_at=now - timedelta(minutes=1),
                               target_end=now + timedelta(hours=12), reason="position", bid_id=7)
     await inv.post_due_listings()

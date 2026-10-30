@@ -135,6 +135,7 @@ async def test_resale_listed_just_under_the_cheapest_rival(tmp_path):
     inv = InventoryManager(ctx)
 
     async def position(price: int, cost: int) -> tuple[int, int]:
+        await db._exec("UPDATE listings SET status = 'sold' WHERE status = 'posted'")  # une vente de la carte à la fois
         bid = await db.record_bid(auction_id=f"b{price}", card_id="ecl21", title=TITLE, rarity="L", is_shiny=False,
                                   amount=cost, reference_price=1197, reason="revente ~1197 WB", night=False,
                                   dry_run=False, status="won", end_at=now)
