@@ -99,7 +99,11 @@ async def test_two_for_one_is_fair_and_counter_offer_suggests_a_liquid_card(tmp_
     assert any(o.startswith("ou retire **L · Emma Watson**") for o in two.offers)  # Zendaya, plus chère, reste
     unknown = await trades.value_of_title(ctx, "Carte inconnue ✨")
     assert unknown.shiny and unknown.value is None
-    assert "jamais vue(s) vendue(s)" in (await trades.evaluate(ctx, [unknown], [emma])).text
+    partial = await trades.evaluate(ctx, [unknown], [emma])
+    assert "jamais vue(s) vendue(s)" in partial.text and partial.verdict == "incomplet"
+    # Cartes illisibles contre rien (jarry0, 30/10) : pas « Équitable ».
+    blind = await trades.evaluate(ctx, [trades.Priced("?", None), trades.Priced("?", None)], [])
+    assert blind.verdict == "incomplet" and blind.headline.startswith("❓") and blind.offers == []
     await ctx.db.close()
 
 

@@ -83,7 +83,11 @@ class Evaluation:
 
     @property
     def verdict(self) -> str:
-        """« equitable », « avantage » (tu gagnes plus que la marge) ou « defavorable »."""
+        """« equitable », « avantage » (tu gagnes plus que la marge), « defavorable », ou « incomplet » : une carte
+        sans valeur connue, comptée 0, fausse le total. Le 30/10, jarry0 demandait 2 cartes illisibles (« ? · ? »)
+        contre rien : annoncé « Équitable (écart ~0 WB) »."""
+        if self.unknown:
+            return "incomplet"
         if self.fair(self.given_total, self.received_total):
             return "equitable"
         return "avantage" if self.gap > 0 else "defavorable"
@@ -94,6 +98,8 @@ class Evaluation:
 
     @property
     def headline(self) -> str:
+        if self.verdict == "incomplet":
+            return f"❓ À vérifier : {len(self.unknown)} carte(s) sans valeur connue"
         if self.verdict == "equitable":
             return f"🤝 Équitable (écart ~{wb(abs(self.gap))} WB)"
         if self.verdict == "avantage":

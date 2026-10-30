@@ -16,7 +16,8 @@ from src.core.notifier import Level, Topic
 from src.workers.base import Worker
 
 KV_KEY = "trades_seen"  # échanges déjà annoncés (seulement ceux encore actifs)
-LEVELS = {"equitable": Level.INFO, "avantage": Level.SUCCESS, "defavorable": Level.WARNING}
+LEVELS = {"equitable": Level.INFO, "avantage": Level.SUCCESS, "defavorable": Level.WARNING,
+          "incomplet": Level.WARNING}
 
 
 class TradeWatch(Worker):
@@ -29,10 +30,12 @@ class TradeWatch(Worker):
     async def step(self) -> float:
         raw = await self.ctx.client.get("active_trades", background=True)
         listed = TradesList.model_validate(raw)
-        if listed.trades and not self._shape_logged:  # champs réels d'un échange, à relire dans les logs
-            first = (raw.get("trades") or [{}])[0] if isinstance(raw, dict) else {}
-            item = (first.get("items") or [{}])[0] if isinstance(first, dict) else {}
-            self.log.info("champs d'un échange : %s ; d'une carte : %s", sorted(first), sorted(item))
+        # Champs réels d'une carte d'échange, à relire dans les logs : le 30/10, le 1er échange n'en avait aucune
+        # (« d'une carte : [] ») et celles de jarry0 restaient illisibles (« ? · ? »).
+        items = [i for t in (raw.get("trades") or [] if isinstance(raw, dict) else []) if isinstance(t, dict)
+                 for i in t.get("items") or []]
+        if items and not self._shape_logged:
+            self.log.info("carte d'un échange : %s", str(items[0])[:1500])
             self._shape_logged = True
         me = (self.ctx.client.user_id or "").lower()
         seen = set(await self.db.kv_get(KV_KEY) or [])

@@ -495,11 +495,19 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         # L'ancienne valeur disparaît pendant la relecture : on ne la prend pas pour la nouvelle.
         await interaction.response.edit_message(content=None, view=None, embed=discord.Embed(
             title="Valeur du compte", color=GREY,
-            description="⏳ Je relis toute ta collection (2-3 min, le sniper passe avant)…"))
+            description="⏳ Je relis toute ta collection (quelques minutes, jusqu'à 30 la nuit : le sniper passe "
+                        "avant)…"))
         started = utcnow()
         embed, view = await value_message(True)
         log.info("Discord : collection recomptée en %s", ago(utcnow() - started))
-        await interaction.edit_original_response(content=None, embed=embed, view=view)
+        try:
+            await interaction.edit_original_response(content=None, embed=embed, view=view)
+        except discord.HTTPException:
+            # Jeton d'interaction valable 15 min : le 30/10, recomptée en 25-26 min la nuit, réponse refusée (401).
+            # Le message reste modifiable par le bot lui-même.
+            if interaction.message is None:
+                raise
+            await interaction.message.edit(content=None, embed=embed, view=view)
 
     @tree.command(name="valeur", description="Valeur du compte : solde + cartes + ventes en cours + mises en tête")
     async def valeur(interaction: discord.Interaction) -> None:
@@ -559,7 +567,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         given = [await trades.value_of_title(ctx, t) for t in (je_donne, je_donne_2, je_donne_3) if t.strip()]
         received = [await trades.value_of_title(ctx, t) for t in (je_recois, je_recois_2, je_recois_3) if t.strip()]
         e = await trades.evaluate(ctx, given, received, wb_donnes, wb_recus)
-        color = {"equitable": COLOR, "avantage": GREEN, "defavorable": RED}[e.verdict]
+        color = {"equitable": COLOR, "avantage": GREEN, "defavorable": RED, "incomplet": GREY}[e.verdict]
         embed = discord.Embed(title=e.headline, description=e.text[:4000], color=color)
         embed.set_footer(text=f"Médiane des ventes observées sur {trades.TRADE_DAYS} jours (même rareté, shiny à "
                               f"part). Équitable : écart de {s.trade_fair_margin:.0%} au plus.")
