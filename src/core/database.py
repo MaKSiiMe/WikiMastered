@@ -927,13 +927,15 @@ class Database:
         return counts
 
     async def cheapest_ask(self, card_id: str, rarity: str | None, shiny: bool, after: datetime,
-                           exclude: str, me: str | None) -> int | None:
+                           exclude: str, me: str | None, lowest: float = 0) -> int | None:
         """Mise minimale la plus basse des autres ventes de cette carte (même rareté, shiny ou non) encore en cours
-        après `after` : la concurrence d'une revente. Lue sans requête, dans les ventes déjà vues."""
+        après `after` : la concurrence d'une revente. Lue sans requête, dans les ventes déjà vues. Celles sous
+        `lowest` sont écartées (un prix de départ, pas un prix de vente)."""
         row = await self._one(
             "SELECT MIN(COALESCE(min_bid, base_amount)) AS ask FROM auctions_seen WHERE card_id = ? AND rarity IS ? "
-            "AND is_shiny = ? AND end_at > ? AND auction_id != ? AND (seller_id IS NULL OR lower(seller_id) != ?)",
-            (card_id, rarity, int(shiny), iso(after), exclude, (me or "").lower()))
+            "AND is_shiny = ? AND end_at > ? AND auction_id != ? AND (seller_id IS NULL OR lower(seller_id) != ?) "
+            "AND COALESCE(min_bid, base_amount) >= ?",
+            (card_id, rarity, int(shiny), iso(after), exclude, (me or "").lower(), lowest))
         return int(row["ask"]) if row and row["ask"] is not None else None
 
     # ----------------------------------------------------------- entretien
