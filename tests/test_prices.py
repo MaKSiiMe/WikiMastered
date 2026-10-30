@@ -162,6 +162,13 @@ async def test_resale_listed_just_under_the_cheapest_rival(tmp_path):
     await inv.post_due_listings()
     row = await listing(lid)
     assert row["status"] == "posted" and row["base_amount"] == 883 and "883" in json.dumps(posted[-1])
+
+    # Sous la moitié de l'estimation (1197) : un prix de départ, pas une concurrente (30/10 : Ballon d'or 2025, estimée
+    # 2500, publiée au plancher face à une vente à 221).
+    market[:] = [selling("m4", 221)]
+    _, lid = await position(1043, 882)
+    await inv.post_due_listings()
+    assert (await listing(lid))["base_amount"] == 1043
     await db.close()
 
 

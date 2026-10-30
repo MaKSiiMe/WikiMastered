@@ -60,6 +60,11 @@ POSITION_COPY_RETRY = timedelta(minutes=10)
 POSITION_MAX_COPY_MISSES = 12
 # Vente concurrente d'une revente : encore en cours au moins N après la publication (comme pour l'achat).
 RIVAL_MIN_OVERLAP = timedelta(hours=1)
+# … et affichée à au moins cette part de l'estimation : en dessous, c'est un prix de départ, pas un prix de vente. Le
+# 30/10, Ballon d'or 2025 (estimée 2500) publiée au plancher (2001, +1) face à une vente à 221 ; ce jour-là, 56 % des
+# ventes L avaient une concurrente sous la moitié de leur cote, presque toutes sans mise (93 % des L en cours), et une
+# L partie de moins de 30 % de sa cote finissait en moyenne à 90 % de celle-ci (ventes observées du 23 au 30/10).
+RIVAL_MIN_SHARE = 0.5
 COPY_SEARCH_PAGES = 5  # pages de la recherche par titre lues pour retrouver un exemplaire
 _EPOCH = datetime.min.replace(tzinfo=UTC)
 SIM_MARKET_WINDOW = timedelta(days=3)  # ventes observées qui décident d'une revente simulée
@@ -926,9 +931,10 @@ class InventoryManager(Worker):
         me = (self.api.user_id or "").lower()
         overlap = utcnow() + RIVAL_MIN_OVERLAP
         shiny = bool(bid["is_shiny"]) if bid else False
+        lowest = RIVAL_MIN_SHARE * (bid["reference_price"] or 0) if bid else 0
         rivals = [a.min_bid for a in auctions if a.catalog_id == row["card_id"] and a.rarity == row["rarity"]
                   and a.shiny == shiny and a.status == "active" and a.end_at > overlap
-                  and (a.seller_id or "").lower() != me]
+                  and (a.seller_id or "").lower() != me and a.min_bid >= lowest]
         if not rivals or min(rivals) > row["base_amount"]:
             return row["base_amount"]
         floor = position_floor(bid["amount"], row["relist_count"], self.settings) if bid else 1
