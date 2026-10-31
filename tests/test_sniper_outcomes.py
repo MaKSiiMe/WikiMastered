@@ -342,6 +342,23 @@ async def test_missed_collection_card_counted_apart(tmp_path, caplog):
 
 
 @pytest.mark.asyncio
+async def test_collection_card_read_after_its_end_is_logged(tmp_path, caplog):
+    """31/10 à 19:24 : 5 avril, dernier jour manquant, partie à 11 WB, lue 4 s après sa fin, sans mise ni log."""
+    market = {"col": sale("col", "14 octobre", -4, base=11)}
+    sniper, db, _ = await start(tmp_path, market, [])
+    target = Target(Auction.model_validate(sale("col", "14 octobre", 30, base=11)),
+                    datetime.now(UTC) - timedelta(seconds=40))
+    sniper._targets["col"] = target
+    with caplog.at_level(logging.WARNING, logger="worker.sniper"):
+        await sniper._refresh_target(target)
+    late = [r.getMessage() for r in caplog.records if "pas de mise" in r.getMessage()]
+    assert len(late) == 1 and "14 octobre (R) à 11 WB relue 4 s après sa fin" in late[0]
+    assert "pendant sa fenêtre de mise" in late[0]
+    assert "col" not in sniper._targets and sniper._outcomes["col"] == "collection : relue après la fin"
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_slow_pass_is_logged_with_its_slowest_step(tmp_path, caplog):
     sniper, db, _ = await start(tmp_path, {}, [])
 

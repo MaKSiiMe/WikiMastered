@@ -326,14 +326,17 @@ def plan_position_time(now: datetime, start: time, end: time, minutes: int, dura
 
 
 def position_duration(now: datetime, short: int, long: int, *, prefer_long: bool, avoid_hours: list[int]) -> int:
-    """Durée choisie (`long` si `prefer_long`, sinon `short`), sauf si elle finit à une heure de `avoid_hours` (heure de
-    `now`, Paris) et l'autre non. 26/10 : une L gagnée à 13-16 h finissait en 6 h à 19-22 h, le pire créneau."""
-    first, other = (long, short) if prefer_long else (short, long)
+    """`short` dès que des positions attendent une place (pas `prefer_long`). Sinon `long`, sauf si elle finit à une
+    heure de `avoid_hours` (heure de `now`, Paris) et `short` non. 26/10 : une L gagnée à 13-16 h finissait en 6 h à
+    19-22 h, le pire créneau. Mais le 31/10, 5 positions attendaient une place pendant que les reventes de l'après-midi
+    partaient pour 12 h (6 h finissait à 18-22 h) : une place prise deux fois plus longtemps coûte plus que l'heure."""
+    if not prefer_long:
+        return short
 
     def bad(minutes: int) -> bool:
         return (now + timedelta(minutes=minutes)).hour in avoid_hours
 
-    return other if bad(first) and not bad(other) else first
+    return short if bad(long) and not bad(short) else long
 
 
 def plan_listing_time(now: datetime, start: time, end: time, durations: list[int], min_duration: int,
@@ -545,7 +548,7 @@ class InventoryManager(Worker):
         """Durée de revente d'une position publiée à `now` : longue (12 h, plus vue) tant que moins de
         POSITION_LIST_LONG_BELOW positions sont détenues, carte en cours de programmation comprise ; sinon courte
         (6 h), pour faire tourner les 5 places de vente. Ventes réelles : seules les positions réelles comptent.
-        L'autre durée est prise si celle-ci finit dans POSITION_AVOID_END_HOURS et l'autre non."""
+        12 h qui finirait dans POSITION_AVOID_END_HOURS : 6 h si elle finit ailleurs ; jamais 12 h à la place de 6 h."""
         s = self.settings
         prefer_long = False
         if s.position_list_long_below > 0:

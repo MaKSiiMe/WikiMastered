@@ -85,7 +85,7 @@ def anomalies(ctx: Context, stats: dict[str, int], pending: dict[str, int]) -> l
         live = s.is_live("place_bid")
         open_positions = (stats["held_real"] + pending["real_positions"]) if live else \
             (stats["held"] + pending["positions"])
-        if open_positions > s.portfolio_max_positions:
+        if 0 < s.portfolio_max_positions < open_positions:
             found.append(f"sniper : {open_positions} positions {'réelles ' if live else ''}ouvertes, "
                          f"plafond {s.portfolio_max_positions}")
         if pending["positions"] > 20:

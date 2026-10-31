@@ -164,8 +164,11 @@ class Settings(BaseSettings):
     sniper_max_price_spread: float = 2.0
 
     # --- Module D : sniper ------------------------------------------------------
-    sniper_poll_min_seconds: float = 2.5
-    sniper_poll_max_seconds: float = 4.0
+    # Pause entre deux passages (une requête chacun) quand aucune cible n'attend. À 2,5-4 s, le sniper plafonnait à
+    # ~0,3 lecture/s le 31/10 (1 seule limitation du site en 16 h), et repérait les nouvelles L toutes les 13-23 s au
+    # lieu de 10 : « plus de 50 nouvelles ventes … manquées » chaque heure.
+    sniper_poll_min_seconds: float = 1.0
+    sniper_poll_max_seconds: float = 1.5
     # Le marché est trop gros pour lire les fins imminentes (environ 12 fins par seconde) : le sniper
     # repère les nouvelles ventes de ces raretés (tri « recent ») et ne revend que celles-ci.
     sniper_resale_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
@@ -206,8 +209,10 @@ class Settings(BaseSettings):
 
     # --- Capital : positions achetées pour être revendues ----------------------------
     portfolio_slots: int = 5              # = places de vente simultanées du site
-    portfolio_max_positions: int = 15     # plafond absolu : positions détenues + enchères du bot
-    portfolio_buffer: int = 10            # positions en attente d'une place de vente, au-delà des places libres
+    # Plafonds de positions (0 = aucun). Supprimés le 31/10 : 5 positions attendaient une place de vente et le bot
+    # n'achetait plus aucune L depuis 18:40 ; les durées de revente raccourcissent à la place (position_minutes).
+    portfolio_max_positions: int = 0      # plafond absolu : positions détenues + enchères du bot
+    portfolio_buffer: int = 0             # positions en attente d'une place de vente, au-delà des places libres
     portfolio_queue_profit_ratio: float = 0.5  # bénéfice exigé pour une position qui devra attendre
     portfolio_capital_ratio: float = 0.9  # part des WikiBidous engagée en positions
     portfolio_min_profit_ratio: float = 0.25  # bénéfice attendu ≥ 25 % du budget d'une position
@@ -230,7 +235,8 @@ class Settings(BaseSettings):
     position_list_duration_minutes: int = 360
     position_list_long_minutes: int = 720
     position_list_long_below: int = 5     # 0 = toujours POSITION_LIST_DURATION_MINUTES
-    # Heures de fin (Paris) évitées : l'autre durée est prise si elle finit hors de ces heures. Ventes de L du
+    # Heures de fin (Paris) évitées par la revente de 12 h : 6 h si elle finit hors de ces heures (6 h n'est jamais
+    # allongée : des positions attendent une place). Ventes de L du
     # 25/10 19:43 au 26/10 19:18 (prix ÷ médiane des 8 ventes précédentes de la carte) : ×0,91-0,97 et 23-33 % sous
     # ×0,8 pour une fin à 18-22 h, ×0,93-0,95 à 11 h et 13 h, contre ×1,04-1,09 à 00-01 h et 07-09 h. Vide = jamais.
     position_avoid_end_hours: IntList = Field(default_factory=lambda: [11, 12, 13, 18, 19, 20, 21, 22])

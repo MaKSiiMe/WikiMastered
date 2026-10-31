@@ -37,7 +37,7 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
         await db.record_bid(auction_id=f"a{i}", card_id="c", title="t", rarity="C", is_shiny=False, amount=16,
                             reference_price=300, reason="revente ~300 WB", night=False, dry_run=True,
                             status="sim_won", end_at=now)
-    ctx = SimpleNamespace(settings=Settings(_env_file=None), db=db, client=SimpleNamespace(session_ok=True))
+    ctx = SimpleNamespace(settings=Settings(_env_file=None, portfolio_max_positions=15), db=db, client=SimpleNamespace(session_ok=True))
     workers = [
         worker("sniper", last_ok=now, next_due=now + timedelta(seconds=3),
                lines=["40 enchère(s) examinée(s) : pas assez vue vendue 30 · misée 10"]),

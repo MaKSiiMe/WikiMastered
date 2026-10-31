@@ -6,7 +6,7 @@ attendre une de ces 5 places pour être revendue, donc le bot achète peu, mais 
   position ≈ capital × PORTFOLIO_CAPITAL_RATIO / PORTFOLIO_SLOTS, et bénéfice attendu
   (estimation de revente − mise) ≥ max(PORTFOLIO_MIN_PROFIT, budget × PORTFOLIO_MIN_PROFIT_RATIO).
 - Estimation = médiane des dernières ventes réelles de la carte (voir core/pricing.py).
-- Au plus PORTFOLIO_MAX_POSITIONS positions détenues + enchères du bot en cours.
+- Au plus PORTFOLIO_MAX_POSITIONS positions détenues + enchères du bot en cours (0 = sans plafond).
 - Mise toujours le minimum natif du site : prix de départ, puis max(ceil(1,1 × mise), mise + 1)
   [WR market-api.js]. Le site prolonge de 60 s une enchère disputée dans ses 10 dernières
   secondes [WR TECHNIQUE.md] : le bot ré-évalue à chaque passage, sans dépasser son plafond.
@@ -197,15 +197,20 @@ class Portfolio:
         return queued if beat >= queued else max(self.min_profit, math.floor(beat) + 1)
 
 
+NO_CAP = 1_000_000  # PORTFOLIO_MAX_POSITIONS / PORTFOLIO_BUFFER à 0 : pas de plafond
+
+
 def position_cap(s: Settings, sale_slots: int | None, manual_sales: int) -> tuple[int, int]:
     """(positions autorisées, places de vente libres pour le bot).
 
     Au-delà des places libres, une position attend qu'une place se libère (file d'attente,
-    PORTFOLIO_BUFFER au plus) : son capital est immobilisé, d'où un bénéfice exigé plus élevé."""
+    PORTFOLIO_BUFFER au plus, 0 = sans limite) : son capital est immobilisé, d'où un bénéfice exigé plus élevé.
+    PORTFOLIO_MAX_POSITIONS à 0 : pas de plafond absolu."""
+    absolute = s.portfolio_max_positions if s.portfolio_max_positions > 0 else NO_CAP
     if sale_slots is None:
-        return s.portfolio_max_positions, s.portfolio_slots
+        return absolute, s.portfolio_slots
     room = max(0, sale_slots - manual_sales)
-    return min(s.portfolio_max_positions, room + s.portfolio_buffer), room
+    return min(absolute, room + s.portfolio_buffer if s.portfolio_buffer > 0 else NO_CAP), room
 
 
 def portfolio_state(s: Settings, *, balance: int, held_count: int, held_real_cost: int, held_sim_cost: int,
@@ -218,7 +223,7 @@ def portfolio_state(s: Settings, *, balance: int, held_count: int, held_real_cos
     budget = int(capital * s.portfolio_capital_ratio / max(1, s.portfolio_slots))
     min_profit = max(s.portfolio_min_profit, int(budget * s.portfolio_min_profit_ratio))
     return Portfolio(capital, max(0, available), budget, min_profit, held_count + bot_engaged_count,
-                     s.portfolio_max_positions if max_positions is None else max_positions,
+                     position_cap(s, None, 0)[0] if max_positions is None else max_positions,
                      s.portfolio_slots if sale_room is None else sale_room,
                      int(budget * s.portfolio_queue_profit_ratio),
                      max(0, balance - s.sniper_min_balance_reserve), waiting)
@@ -864,6 +869,7 @@ class AuctionSniper(Worker):
 
     async def _refresh_target(self, target: Target) -> None:
         aid = target.auction.id
+        asked = utcnow()
         try:
             # Relecture juste avant de miser, ou d'une mise en tête juste avant la fin : urgente. Une cible misée
             # relue après sa fin ne l'est pas.
@@ -881,6 +887,8 @@ class AuctionSniper(Worker):
         await self._track_outbids([auction], self.api.user_id)
         if auction.status != "active" or auction.seconds_left(now) <= 0:
             self._targets.pop(aid, None)  # terminée : le règlement (_settle) s'en charge
+            if not target.recheck and self._wanted(target.auction):
+                self._log_late_collection(target, auction, asked, now)
             return
         me = self.api.user_id
         if target.recheck and me and (auction.current_bidder_id or "").lower() == me:
@@ -894,6 +902,20 @@ class AuctionSniper(Worker):
             else:
                 self.log.info("%s surenchérie à %.0f s de la fin : rejouée", auction.title, auction.seconds_left(now))
         self._targets[aid] = Target(auction, now, ceiling=target.ceiling)
+
+    def _log_late_collection(self, target: Target, auction: Auction, asked: datetime, now: datetime) -> None:
+        """Carte de collection manquante relue trop tard pour miser. Le 31/10 à 19:24, 5 avril (dernier jour manquant)
+        est partie à 11 WB, lue 4 s après sa fin, sans mise ni ligne dans les logs."""
+        left = auction.seconds_left(now)
+        state = f"relue {-left:.0f} s après sa fin" if left <= 0 else f"plus en vente (statut {auction.status})"
+        window = target.auction.end_at - timedelta(seconds=max(self.settings.sniper_window_seconds,
+                                                               self.settings.night_window_seconds))
+        self.log.warning("collection : %s (%s) à %d WB %s, pas de mise ; requête partie %.0f s avant la fin, réponse "
+                         "en %.0f s, lecture précédente %.0f s avant la fin ; pendant sa fenêtre de mise : %s",
+                         auction.title, auction.rarity, auction.min_bid, state,
+                         (auction.end_at - asked).total_seconds(), (now - asked).total_seconds(),
+                         (target.auction.end_at - target.seen_at).total_seconds(), self._missed_report(window, now))
+        self._outcome(target.auction, "collection : relue après la fin")
 
     async def _prefetch(self, now: datetime) -> bool:
         """Cote à l'avance une cible de revente qui finit dans les 15 min (route des cotes limitée), le plus grand
