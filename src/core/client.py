@@ -1,7 +1,8 @@
 """Client HTTP WikiMasters : session, espacement, backoff et pause globale.
 
 Règles (reprises des garde-fous de WikiRemastered/network.js) :
-- une requête à la fois, espacées de HTTP_MIN_SPACING_SECONDS + jitter aléatoire ;
+- lectures espacées de HTTP_MIN_SPACING_SECONDS + jitter aléatoire, tous workers confondus, et pour un worker de
+  HTTP_WORKER_SPACING_SECONDS s'il en a un ; écritures dans leur propre file (HTTP_WRITE_SPACING_SECONDS) ;
 - 429, 5xx, pages HTML de passerelle : pause globale exponentielle, Retry-After respecté ;
 - 401 (ou 403 confirmé par une sonde) : tous les workers se figent, alerte Discord,
   puis reprise automatique dès qu'un cookie valide est disponible ;
@@ -19,6 +20,8 @@ import logging
 import random
 import re
 import time
+from collections import Counter
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -68,6 +71,8 @@ HALT_FILE = "HALT"  # dans DATA_DIR ; sa présence garde le bot à l'arrêt, mê
 URGENT_WAIT_WARN_SECONDS = 5.0
 SLOW_RESPONSE_SECONDS = 10.0
 ROUTE_ALERT_FAILURES = 3  # refus de suite d'une route limitée (403 + Retry-After) avant un message Discord
+# Worker à l'origine des requêtes de la tâche en cours (posé par main.supervise) : sa file et ses compteurs.
+LANE: ContextVar[str] = ContextVar("lane", default="autres")
 
 
 class UncertainMutation(Exception):
@@ -236,7 +241,7 @@ class WikiMastersClient:
             http2=True,
             headers=headers,
             timeout=httpx.Timeout(settings.http_timeout_seconds),
-            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2, keepalive_expiry=60),
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4, keepalive_expiry=60),
             follow_redirects=False,
         )
 
@@ -248,6 +253,13 @@ class WikiMastersClient:
         self._no_urgent = asyncio.Event()
         self._no_urgent.set()
         self._next_slot = 0.0
+        self._lane_next: dict[str, float] = {}  # prochaine lecture de chaque worker (HTTP_WORKER_SPACING_SECONDS)
+        self._lane_locks: dict[str, asyncio.Lock] = {}
+        self._write_lock = asyncio.Lock()
+        self._next_write = 0.0
+        # Requêtes envoyées par worker (écritures à part) et limitations du site, depuis le dernier récap.
+        self.traffic: Counter[str] = Counter()
+        self.limited = 0
         self._pause_until = 0.0
         self._peak_off_until = float("-inf")  # écart du pic suspendu jusqu'à (le site a limité le bot)
         self._failures = 0
@@ -531,6 +543,28 @@ class WikiMastersClient:
     def _take_slot(self) -> None:
         self._next_slot = time.monotonic() + self.spacing() + random.uniform(0, self.settings.http_jitter_seconds)
 
+    async def _wait_lane(self, lane: str) -> None:
+        """Écart propre au worker (HTTP_WORKER_SPACING_SECONDS) : ses lectures partent dans l'ordre, une toutes les N s,
+        avant de prendre un créneau commun."""
+        spacing = self.settings.http_worker_spacing_seconds.get(lane, 0.0)
+        if spacing <= 0:
+            return
+        async with self._lane_locks.setdefault(lane, asyncio.Lock()):
+            wait = self._lane_next.get(lane, 0.0) - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._lane_next[lane] = time.monotonic() + spacing * random.uniform(1.0, 1.2)
+
+    async def _acquire_write_slot(self) -> None:
+        """Écritures : une toutes les HTTP_WRITE_SPACING_SECONDS, dans l'ordre, sans attendre derrière les lectures."""
+        if self.halted:
+            raise Halted(f"bot arrêté ({self.halted}) : supprime data/{HALT_FILE} pour reprendre")
+        async with self._write_lock:
+            wait = max(self._next_write, self._pause_until) - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._next_write = time.monotonic() + self.settings.http_write_spacing_seconds
+
     async def _acquire_background_slot(self) -> None:
         """Requête de fond (cotes de tout l'inventaire) : seulement quand personne n'attend et que le créneau
         précédent est resté libre, pour ne jamais faire attendre le sniper derrière elle."""
@@ -579,7 +613,15 @@ class WikiMastersClient:
 
     async def _send(self, req: BuiltRequest, urgent: bool = False, background: bool = False) -> httpx.Response:
         asked = time.monotonic()
-        await (self._acquire_background_slot() if background else self._acquire_slot(urgent))
+        lane = LANE.get()
+        if req.is_mutation:
+            await self._acquire_write_slot()
+            self.traffic["écritures"] += 1
+        else:
+            if not urgent:  # relecture juste avant une mise : seul le plafond commun la retient
+                await self._wait_lane(lane)
+            await (self._acquire_background_slot() if background else self._acquire_slot(urgent))
+            self.traffic[lane] += 1
         sent = time.monotonic()
         route = str(req.url).split("?")[0].rsplit("/api/", 1)[-1]
         if urgent and sent - asked > URGENT_WAIT_WARN_SECONDS:
@@ -603,6 +645,7 @@ class WikiMastersClient:
         delay += random.uniform(0, delay * 0.2)
         delay = max(delay, retry_after)
         self._pause_until = max(self._pause_until, time.monotonic() + delay)
+        self.limited += limited
         log.warning("Pause réseau %.0f s (%s, échec #%d)", delay, reason, self._failures)
         # Seule une vraie limite (429) ralentit le pic : le 25/10 au soir, des 500 et délais dépassés d'un site
         # surchargé (pas une limite contre le bot) l'ont fait tourner à 1,5 s pendant 2 h sur 4.
@@ -632,6 +675,7 @@ class WikiMastersClient:
         delay = max(delay + random.uniform(0, delay * 0.2), retry_after)
         self._route_pause[name] = (time.monotonic() + delay, failures)
         self._route_refused.add(name)
+        self.limited += 1
         log.warning("Route %s limitée par le site : pause %.0f s (échec #%d)", name, delay, failures)
         if failures >= 2:  # un refus isolé des cotes arrive aussi à l'écart normal (18/10 : toutes les ~80 min)
             self._peak_cooldown(f"route {name} refusée {failures} fois de suite")
@@ -667,6 +711,12 @@ class WikiMastersClient:
             self._route_server_error(name, cause)
         else:
             self._backoff(f"{name}: {cause}", limited=False, retry_after=retry_after)
+
+    def take_traffic(self) -> tuple[Counter[str], int]:
+        """(requêtes par worker, limitations du site) depuis le dernier appel, remis à zéro (récap)."""
+        traffic, limited = self.traffic, self.limited
+        self.traffic, self.limited = Counter(), 0
+        return traffic, limited
 
     def route_paused_for(self, name: str) -> float:
         until, _ = self._route_pause.get(name, (0.0, 0))
@@ -873,8 +923,8 @@ class WikiMastersClient:
 
     async def mutate(self, name: str, *, live: bool | None = None, urgent: bool = False,
                      **values: Any) -> MutationResult:
-        """Écriture ; `live` force réel/simulé (sinon DRY_RUN, LIVE_WRITES et SIMULATE décident).
-        `urgent` : passe devant les requêtes des autres workers (voir _acquire_slot)."""
+        """Écriture ; `live` force réel/simulé (sinon DRY_RUN, LIVE_WRITES et SIMULATE décident). Elle part dans la
+        file des écritures (voir _acquire_write_slot), jamais derrière les lectures : `urgent` n'y change rien."""
         req = self.endpoints.build(name, **values)
         if not req.is_mutation:
             raise ValueError(f"{name} n'est pas une écriture")

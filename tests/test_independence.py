@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta
 
 import httpx
@@ -10,7 +11,7 @@ import pytest
 
 from src import main
 from src.core.api import WikiMastersAPI
-from src.core.client import RateLimited, UncertainMutation
+from src.core.client import LANE, RateLimited, UncertainMutation
 from src.core.timeutils import PARIS
 from src.workers.base import Worker
 from tests.test_integration import make_client, make_context
@@ -56,6 +57,44 @@ async def test_sniper_bid_jumps_the_request_queue(tmp_path):
     await asyncio.gather(*background)
     assert sent.index("/api/marketplace/a1") == 1  # juste après la requête déjà partie
     assert sent.count("/api/wikibidous") == 4 and client._no_urgent.is_set()
+
+
+@pytest.mark.asyncio
+async def test_each_worker_keeps_its_own_pace(tmp_path):
+    """HTTP_WORKER_SPACING_SECONDS : les lectures d'un worker réglé s'espacent entre elles sans retenir celles du
+    sniper, qui n'a que le plafond commun ; chaque requête est comptée sous le nom de son worker (récap)."""
+    client, _ = make_client(tmp_path, lambda r: httpx.Response(200, json={"balance": 3}),
+                            http_worker_spacing_seconds={"cotes": 0.3})
+
+    async def reads(lane, n):
+        LANE.set(lane)  # comme main.supervise pour chaque worker
+        start = time.monotonic()
+        for _ in range(n):
+            await client.get("balance")
+        return time.monotonic() - start
+
+    cotes, sniper = await asyncio.gather(reads("cotes", 2), reads("sniper", 3))
+    assert cotes >= 0.3 and sniper < 0.2
+    assert client.take_traffic() == ({"cotes": 2, "sniper": 3}, 0) and not client.traffic
+
+
+@pytest.mark.asyncio
+async def test_writes_do_not_wait_behind_reads(tmp_path):
+    """Mises et ventes ont leur propre file : elles ne passent plus derrière les lectures en attente (le 30/10, des
+    mises partaient à 15-18 s), et restent espacées entre elles de HTTP_WRITE_SPACING_SECONDS."""
+    client, _ = make_client(tmp_path, lambda r: httpx.Response(200, json={"balance": 3}), dry_run=False,
+                            http_min_spacing_seconds=0.5, http_write_spacing_seconds=0.2)
+    api = WikiMastersAPI(client)
+    reads = [asyncio.create_task(client.get("balance")) for _ in range(3)]  # 1 s de lectures en file
+    await asyncio.sleep(0.01)
+    start = time.monotonic()
+    await api.achievements_check()
+    assert time.monotonic() - start < 0.1
+    await api.achievements_check()
+    assert time.monotonic() - start >= 0.2
+    assert not all(r.done() for r in reads)
+    await asyncio.gather(*reads)
+    assert client.take_traffic()[0] == {"autres": 3, "écritures": 2}
 
 
 class Flaky(Worker):

@@ -37,7 +37,7 @@ from src.backup import backup_loop
 from src.config import RARITY_RANK, Settings, get_settings
 from src.core import timeutils
 from src.core.api import WikiMastersAPI
-from src.core.client import WikiMastersClient
+from src.core.client import LANE, WikiMastersClient
 from src.core.database import Database
 from src.core.endpoints import Endpoints
 from src.core.models import MarketPage
@@ -453,7 +453,9 @@ SUPERVISE_BASE_SECONDS = 30  # 1re relance d'une tâche arrêtée, doublée à c
 
 
 async def supervise(name: str, start: Callable[[], Awaitable[None]], notifier) -> None:
-    """Fait tourner une tâche et la relance si elle s'arrête : un worker en panne ne coupe jamais les autres."""
+    """Fait tourner une tâche et la relance si elle s'arrête : un worker en panne ne coupe jamais les autres.
+    Ses requêtes au site sont comptées sous son nom, et suivent son écart HTTP_WORKER_SPACING_SECONDS."""
+    LANE.set(name)
     failures = 0
     while True:
         started = asyncio.get_running_loop().time()

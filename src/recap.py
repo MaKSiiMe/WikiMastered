@@ -7,6 +7,7 @@ ne trouve rien) sans attendre le bilan du soir.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from datetime import datetime, timedelta
 
 from src.core import timeutils
@@ -94,6 +95,14 @@ def anomalies(ctx: Context, stats: dict[str, int], pending: dict[str, int]) -> l
     return found
 
 
+def traffic_line(traffic: Counter[str], limited: int, seconds: float) -> str:
+    """Requêtes au site depuis le dernier récap, par worker (les plus gourmands d'abord), et limitations du site."""
+    reads = sum(n for lane, n in traffic.items() if lane != "écritures")
+    parts = [f"{lane} {n}" for lane, n in traffic.most_common() if lane != "écritures"]
+    line = f"Lectures : {reads} ({reads / max(seconds, 1):.2f}/s)" + (" · " + " · ".join(parts) if parts else "")
+    return line + f"\nÉcritures : {traffic['écritures']} · limitées par le site : {limited}"
+
+
 async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
                       started_at: datetime) -> tuple[bool, str, list[tuple[str, str]]]:
     """(anomalie trouvée, description, blocs)."""
@@ -125,6 +134,8 @@ async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
             if problem:
                 problems.append(problem)
         sections.append((title, "\n".join(lines)))
+    if take_traffic := getattr(ctx.client, "take_traffic", None):
+        sections.append(("🌐 Réseau", traffic_line(*take_traffic(), (now - since).total_seconds())))
     if problems:
         sections.insert(0, ("À vérifier", "\n".join(f"• {p}" for p in problems)))
     description = (f"Depuis {since.astimezone(timeutils.PARIS):%H:%M} · bot démarré le "

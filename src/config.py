@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     http_peak_end: time = time(2, 0)
     http_peak_spacing_seconds: float = 1.0
     http_peak_cooldown_minutes: float = 30.0
+    # Les écarts ci-dessus plafonnent les lectures (GET) de tous les workers réunis. En plus, chaque worker peut avoir
+    # son propre écart minimal entre deux de ses lectures, en JSON : {"cotes": 5, "etiquettes": 3}. Un worker absent
+    # n'a que le plafond commun ; le sniper n'y est pas, pour prendre les créneaux que les autres laissent.
+    http_worker_spacing_seconds: dict[str, float] = Field(default_factory=dict)
+    # Écritures (mises, ventes, étiquettes…) : leur propre file, hors du plafond des lectures, une toutes les N s.
+    http_write_spacing_seconds: float = 1.0
     http_timeout_seconds: float = 20.0
     http_get_max_attempts: int = 4
     backoff_base_seconds: float = 30.0
@@ -393,6 +399,9 @@ class Settings(BaseSettings):
         if 0 < self.http_peak_spacing_seconds < self.http_min_spacing_seconds:
             label += (f", une requête toutes les {self.http_peak_spacing_seconds:g} s de {self.http_peak_start:%H:%M} "
                       f"à {self.http_peak_end:%H:%M} ({self.http_min_spacing_seconds:g} s sinon)")
+        if self.http_worker_spacing_seconds:
+            label += ", par worker : " + ", ".join(f"{name} {spacing:g} s"
+                                                   for name, spacing in self.http_worker_spacing_seconds.items())
         return label
 
     @property
