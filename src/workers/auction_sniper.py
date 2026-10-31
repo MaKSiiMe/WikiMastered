@@ -869,6 +869,7 @@ class AuctionSniper(Worker):
 
     async def _refresh_target(self, target: Target) -> None:
         aid = target.auction.id
+        asked = utcnow()
         try:
             # Relecture juste avant de miser, ou d'une mise en tête juste avant la fin : urgente. Une cible misée
             # relue après sa fin ne l'est pas.
@@ -886,6 +887,8 @@ class AuctionSniper(Worker):
         await self._track_outbids([auction], self.api.user_id)
         if auction.status != "active" or auction.seconds_left(now) <= 0:
             self._targets.pop(aid, None)  # terminée : le règlement (_settle) s'en charge
+            if not target.recheck and self._wanted(target.auction):
+                self._log_late_collection(target, auction, asked, now)
             return
         me = self.api.user_id
         if target.recheck and me and (auction.current_bidder_id or "").lower() == me:
@@ -899,6 +902,20 @@ class AuctionSniper(Worker):
             else:
                 self.log.info("%s surenchérie à %.0f s de la fin : rejouée", auction.title, auction.seconds_left(now))
         self._targets[aid] = Target(auction, now, ceiling=target.ceiling)
+
+    def _log_late_collection(self, target: Target, auction: Auction, asked: datetime, now: datetime) -> None:
+        """Carte de collection manquante relue trop tard pour miser. Le 31/10 à 19:24, 5 avril (dernier jour manquant)
+        est partie à 11 WB, lue 4 s après sa fin, sans mise ni ligne dans les logs."""
+        left = auction.seconds_left(now)
+        state = f"relue {-left:.0f} s après sa fin" if left <= 0 else f"plus en vente (statut {auction.status})"
+        window = target.auction.end_at - timedelta(seconds=max(self.settings.sniper_window_seconds,
+                                                               self.settings.night_window_seconds))
+        self.log.warning("collection : %s (%s) à %d WB %s, pas de mise ; requête partie %.0f s avant la fin, réponse "
+                         "en %.0f s, lecture précédente %.0f s avant la fin ; pendant sa fenêtre de mise : %s",
+                         auction.title, auction.rarity, auction.min_bid, state,
+                         (auction.end_at - asked).total_seconds(), (now - asked).total_seconds(),
+                         (target.auction.end_at - target.seen_at).total_seconds(), self._missed_report(window, now))
+        self._outcome(target.auction, "collection : relue après la fin")
 
     async def _prefetch(self, now: datetime) -> bool:
         """Cote à l'avance une cible de revente qui finit dans les 15 min (route des cotes limitée), le plus grand
