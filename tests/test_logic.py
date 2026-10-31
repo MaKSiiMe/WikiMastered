@@ -387,6 +387,15 @@ def test_every_list_setting_accepts_csv_from_the_environment(monkeypatch):
     assert s.achievement_milestones == [100, 250] and s.collection_titles == ["Paris", "Lyon"]
 
 
+@pytest.mark.parametrize("value, expected", [
+    ("0", {}), ("", {}), ("{}", {}),  # 31/10 : HTTP_WORKER_SPACING_SECONDS=0 empêchait le bot de démarrer
+    ("cotes=5, etiquettes=3", {"cotes": 5.0, "etiquettes": 3.0}), ('{"cotes": 5}', {"cotes": 5.0}),
+])
+def test_worker_spacing_accepts_csv_json_or_nothing(monkeypatch, value, expected):
+    monkeypatch.setenv("HTTP_WORKER_SPACING_SECONDS", value)
+    assert Settings(_env_file=None).http_worker_spacing_seconds == expected
+
+
 def test_refusal_names_the_blocking_rule():
     from src.core.models import Auction
     from src.workers.auction_sniper import Portfolio, refusal, snipe_params
