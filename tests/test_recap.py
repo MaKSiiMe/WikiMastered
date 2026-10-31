@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -10,7 +11,7 @@ import pytest
 
 from src.config import Settings
 from src.core.database import Database
-from src.recap import anomalies, build_recap, next_recap
+from src.recap import anomalies, build_recap, next_recap, traffic_line
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -60,6 +61,14 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     assert description.startswith("Depuis ")
     assert workers[2].recent_errors == 0  # erreurs remises à zéro après le récap
     await db.close()
+
+
+def test_traffic_line_per_worker():
+    """Bloc Réseau : lectures par worker (les plus nombreuses d'abord), débit moyen, écritures et limitations."""
+    traffic = Counter({"cotes": 600, "sniper": 7900, "écritures": 45})
+    assert traffic_line(traffic, 1, 4 * 3600) == ("Lectures : 8500 (0.59/s) · sniper 7900 · cotes 600\n"
+                                                  "Écritures : 45 · limitées par le site : 1")
+    assert traffic_line(Counter(), 0, 0) == "Lectures : 0 (0.00/s)\nÉcritures : 0 · limitées par le site : 0"
 
 
 @pytest.mark.asyncio

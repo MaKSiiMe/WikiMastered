@@ -36,15 +36,21 @@ flowchart LR
 
 ## Réseau
 
-Toutes les requêtes passent par une seule file :
+Les lectures de tous les workers passent par une file commune, qui fixe le débit maximal :
 
-| Moment | Écart entre deux requêtes |
+| Moment | Écart entre deux lectures |
 |---|---|
 | Normal | 1,5 s + aléa (`HTTP_MIN_SPACING_SECONDS`) |
 | Pic de ventes, 09:00 → 02:00 | 1 s (`HTTP_PEAK_SPACING_SECONDS`) |
 | Le site limite le bot pendant le pic | retour à 1,5 s pendant 30 min |
 
-Une requête urgente (une mise) passe devant ; une requête de fond (cotes, lecture complète de la collection) passe après toutes les autres.
+Une relecture urgente (juste avant une mise) passe devant ; une requête de fond (cotes, lecture complète de la collection) passe après toutes les autres.
+
+Chaque worker peut en plus avoir son propre écart entre deux de ses lectures (`HTTP_WORKER_SPACING_SECONDS`, en JSON : `{"cotes": 5, "etiquettes": 3}`). Un worker absent de la liste n'a que la file commune : on y laisse le sniper, qui prend les créneaux libérés par les autres.
+
+Les écritures (mises, ventes, étiquettes…) ont leur propre file, une toutes les `HTTP_WRITE_SPACING_SECONDS` (1 s), et ne passent jamais derrière les lectures.
+
+Le récap affiche le bloc « 🌐 Réseau » : lectures par worker, débit moyen, écritures et limitations du site depuis le récap précédent.
 
 ```mermaid
 flowchart TD
