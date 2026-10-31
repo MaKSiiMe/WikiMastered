@@ -164,8 +164,11 @@ class Settings(BaseSettings):
     sniper_max_price_spread: float = 2.0
 
     # --- Module D : sniper ------------------------------------------------------
-    sniper_poll_min_seconds: float = 2.5
-    sniper_poll_max_seconds: float = 4.0
+    # Pause entre deux passages (une requête chacun) quand aucune cible n'attend. À 2,5-4 s, le sniper plafonnait à
+    # ~0,3 lecture/s le 31/10 (1 seule limitation du site en 16 h), et repérait les nouvelles L toutes les 13-23 s au
+    # lieu de 10 : « plus de 50 nouvelles ventes … manquées » chaque heure.
+    sniper_poll_min_seconds: float = 1.0
+    sniper_poll_max_seconds: float = 1.5
     # Le marché est trop gros pour lire les fins imminentes (environ 12 fins par seconde) : le sniper
     # repère les nouvelles ventes de ces raretés (tri « recent ») et ne revend que celles-ci.
     sniper_resale_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
