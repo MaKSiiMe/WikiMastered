@@ -658,22 +658,24 @@ async def test_tagged_pack_card_is_sold_from_its_cote(tmp_path):
 
 
 def test_position_duration_avoids_bad_end_hours():
-    """26/10 : une L gagnée l'après-midi finissait en 6 h à 19-22 h (×0,91-0,96) ; en 12 h, à 01-04 h."""
+    """26/10 : une L gagnée l'après-midi finissait en 6 h à 19-22 h (×0,91-0,96) ; en 12 h, à 01-04 h. Mais le 31/10,
+    5 positions attendaient une place : 6 h n'est plus jamais allongée à 12 h."""
     from src.workers.inventory_manager import position_duration
 
     avoid = [11, 12, 13, 18, 19, 20, 21, 22]
     at = lambda h: datetime(2026, 10, 26, h, 30, tzinfo=PARIS)  # noqa: E731
-    assert position_duration(at(14), 360, 720, prefer_long=False, avoid_hours=avoid) == 720   # 20:30 → 02:30
+    assert position_duration(at(14), 360, 720, prefer_long=False, avoid_hours=avoid) == 360   # 20:30, gardée
     assert position_duration(at(20), 360, 720, prefer_long=False, avoid_hours=avoid) == 360   # 02:30
     assert position_duration(at(9), 360, 720, prefer_long=True, avoid_hours=avoid) == 360     # 21:30 → 15:30
-    assert position_duration(at(7), 360, 720, prefer_long=False, avoid_hours=avoid) == 360    # 13:30 et 19:30 : mauvais
+    assert position_duration(at(14), 360, 720, prefer_long=True, avoid_hours=avoid) == 720    # 02:30 en 12 h
+    assert position_duration(at(7), 360, 720, prefer_long=True, avoid_hours=avoid) == 720     # 19:30 et 13:30 : 12 h
     assert position_duration(at(14), 360, 720, prefer_long=False, avoid_hours=[]) == 360
 
 
 @pytest.mark.asyncio
 async def test_waiting_position_duration_chosen_when_posted(tmp_path, monkeypatch):
     """26/10 : Bordeaux, gagnée à 18:05, programmée pour 12 h, attendait une place jusqu'au lendemain. La durée est
-    revue à la publication : 5 positions détenues (6 h), mais à 14:30 une vente de 6 h finirait à 20:30."""
+    revue à la publication : 5 positions détenues, 6 h (fin à 20:30), et plus 12 h comme avant le 31/10."""
     from src.workers import inventory_manager
     from src.workers.inventory_manager import InventoryManager
     from tests.test_integration import make_client
@@ -692,7 +694,7 @@ async def test_waiting_position_duration_chosen_when_posted(tmp_path, monkeypatc
     monkeypatch.setattr(inventory_manager, "now_local", lambda: datetime(2026, 10, 26, 14, 30, tzinfo=PARIS))
     await InventoryManager(ctx).post_due_listings()
     row = await db._one("SELECT duration_minutes, status FROM listings WHERE title = 'Bordeaux'")
-    assert row["status"] == "simulated" and row["duration_minutes"] == 720
+    assert row["status"] == "simulated" and row["duration_minutes"] == 360
     await db.close()
 
 

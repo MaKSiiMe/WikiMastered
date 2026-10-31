@@ -166,11 +166,19 @@ def test_position_bid_pushed_toward_ceiling_collection_stays_at_minimum():
 
 
 def test_positions_follow_free_sale_slots():
-    s = settings()
+    s = settings(portfolio_max_positions=15, portfolio_buffer=10)
     assert position_cap(s, 5, 4) == (11, 1)   # 1 place libre + 10 en file d'attente
     assert position_cap(s, 5, 5) == (10, 0)   # toutes les places prises : file d'attente seulement
     assert position_cap(s, 5, 0) == (15, 5)   # plafond absolu PORTFOLIO_MAX_POSITIONS
-    assert position_cap(settings(portfolio_buffer=0), 5, 5) == (0, 0)
+
+
+def test_no_position_cap_by_default():
+    """31/10 : 5 positions attendaient une place, plus aucune L achetée depuis 18:40. 0 = pas de plafond."""
+    cap, room = position_cap(settings(), 5, 5)
+    assert room == 0 and cap > 1000
+    cap, _ = position_cap(settings(portfolio_buffer=3), 5, 5)
+    assert cap == 3                           # file d'attente limitée, sans plafond absolu
+    assert position_cap(settings(), None, 0)[0] > 1000
 
 
 def test_queued_positions_need_a_better_deal():

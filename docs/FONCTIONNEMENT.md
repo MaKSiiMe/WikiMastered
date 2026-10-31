@@ -99,13 +99,13 @@ flowchart TD
 | Bénéfice attendu | ≥ 25 % du budget (50 % si la position doit attendre une place) |
 | Mise / estimation | entre 40 % et 70 % (80 % la nuit, 02:00 → 07:30) |
 | Revente estimée | ≤ la vente concurrente la moins chère |
-| Positions | 15 au plus, dont 10 en attente d'une place |
+| Positions | sans plafond (`PORTFOLIO_MAX_POSITIONS`, `PORTFOLIO_BUFFER` : 0 = aucun) |
 
 **Mise** : le minimum du site + la moitié de l'écart jusqu'au plafond. Surenchérie, le bot va droit au plafond, une seule fois. Il ignore toute carte sur laquelle tu mises toi-même.
 
 ## Positions : revendre
 
-Une carte gagnée est mise en vente dès son arrivée, pour 12 h s'il y a moins de 5 positions, sinon pour 6 h. Si cette durée la ferait finir à une heure où les L se vendent mal (11-13 h, 18-22 h), le bot prend l'autre durée quand elle finit mieux. La durée est revue au moment de publier, pour une carte qui a attendu une place. Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher.
+Une carte gagnée est mise en vente dès son arrivée, pour 12 h s'il y a moins de 5 positions, sinon pour 6 h. Si les 12 h la feraient finir à une heure où les L se vendent mal (11-13 h, 18-22 h), le bot prend 6 h quand elles finissent mieux ; 6 h n'est jamais allongée à 12 h, pour libérer les places de vente. La durée est revue au moment de publier, pour une carte qui a attendu une place. Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher.
 
 ```mermaid
 stateDiagram-v2
