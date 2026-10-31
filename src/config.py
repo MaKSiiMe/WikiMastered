@@ -102,9 +102,10 @@ class Settings(BaseSettings):
     http_peak_spacing_seconds: float = 1.0
     http_peak_cooldown_minutes: float = 30.0
     # Les écarts ci-dessus plafonnent les lectures (GET) de tous les workers réunis. En plus, chaque worker peut avoir
-    # son propre écart minimal entre deux de ses lectures, en JSON : {"cotes": 5, "etiquettes": 3}. Un worker absent
-    # n'a que le plafond commun ; le sniper n'y est pas, pour prendre les créneaux que les autres laissent.
-    http_worker_spacing_seconds: dict[str, float] = Field(default_factory=dict)
+    # son propre écart minimal entre deux de ses lectures : cotes=5,etiquettes=3 (ou en JSON). Un worker absent n'a
+    # que le plafond commun ; le sniper n'y est pas, pour prendre les créneaux que les autres laissent. Vide ou 0 :
+    # aucun écart propre (31/10 : la valeur 0 empêchait le bot de démarrer).
+    http_worker_spacing_seconds: Annotated[dict[str, float], NoDecode] = Field(default_factory=dict)
     # Écritures (mises, ventes, étiquettes…) : leur propre file, hors du plafond des lectures, une toutes les N s.
     http_write_spacing_seconds: float = 1.0
     http_timeout_seconds: float = 20.0
@@ -371,6 +372,22 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
         return value
+
+    @field_validator("http_worker_spacing_seconds", mode="before")
+    @classmethod
+    def _worker_spacing(cls, value: Any) -> Any:
+        """worker=écart séparés par des virgules, ou du JSON ; vide ou 0 : aucun."""
+        if not isinstance(value, str | int | float):
+            return value
+        text = str(value).strip().strip("\"'")
+        if text in ("", "0", "{}"):
+            return {}
+        if text.startswith("{"):
+            return json.loads(text)
+        pairs = [part.split("=", 1) for part in text.split(",") if part.strip()]
+        if any(len(pair) != 2 for pair in pairs):
+            raise ValueError(f"attendu worker=secondes séparés par des virgules (ex. cotes=5,etiquettes=3) : {text}")
+        return {name.strip(): float(spacing) for name, spacing in pairs}
 
     @field_validator("discord_owner_id", "discord_guild_id", mode="before")
     @classmethod
