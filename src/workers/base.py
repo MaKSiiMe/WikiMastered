@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -16,6 +17,7 @@ from src.core.client import ApiError, RateLimited, SessionExpired, UncertainMuta
 from src.core.database import Database
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService
+from src.core.stats import PassStats
 from src.core.timeutils import utcnow
 
 
@@ -30,6 +32,7 @@ class Context:
     # Workers en pause (/pause sur Discord) : nom -> fin, ou None jusqu'à /reprise. Voir src/pauses.py.
     pauses: dict[str, datetime | None] = field(default_factory=dict)
     last_backup: dict = field(default_factory=dict)  # dernière sauvegarde de la base (src/backup.py), pour /etat
+    last_stats: dict = field(default_factory=dict)  # dernier relevé de stats_loop (src/main.py), pour /etat
 
 
 class Worker:
@@ -51,6 +54,7 @@ class Worker:
         self.next_due: datetime | None = None
         self.recent_errors = 0
         self.last_error = ""
+        self.passes = PassStats()  # durée des passages et erreurs, relevées par stats_loop (src/main.py)
 
     async def setup(self) -> None:
         """Initialisation (lecture d'état en base...)."""
@@ -74,7 +78,9 @@ class Worker:
                     await self.setup()
                     ready = True
                     self.log.info("démarré")
+                started = time.monotonic()
                 delay = await self.step()
+                self.passes.timings.add(time.monotonic() - started)
                 self._errors = 0
                 self.last_ok = utcnow()
             except asyncio.CancelledError:
@@ -87,6 +93,7 @@ class Worker:
                                            "relira le résultat sur le site et enverra « … vérifiée ».")
                 self._errors += 1
                 self.recent_errors += 1
+                self.passes.errors += 1
                 self.last_error = str(exc)[:200]
                 delay = 60
             except (ApiError, RuntimeError, ValueError, httpx.HTTPError) as exc:
@@ -128,6 +135,10 @@ class Worker:
         """Raison pour laquelle le worker attend une action de ta part (affichée par le récap)."""
         return None
 
+    def stats(self) -> dict:
+        """Détail propre au worker pour le relevé de stats_loop (src/main.py), compteurs remis à zéro ensuite."""
+        return {}
+
     def recap(self) -> list[str]:
         """Lignes d'activité propres au worker pour le récap (compteurs remis à zéro ensuite)."""
         return []
@@ -135,6 +146,7 @@ class Worker:
     def _on_error(self, exc: Exception) -> float:
         self._errors += 1
         self.recent_errors += 1
+        self.passes.errors += 1
         self.last_error = str(exc)[:200]
         self.log.warning("erreur #%d : %s", self._errors, exc)
         if self._errors == self.alert_after_errors:

@@ -35,6 +35,7 @@ from datetime import UTC, datetime, time, timedelta
 
 from src.config import RARITY_RANK, Settings
 from src.core import timeutils
+from src.core import journal
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
 from src.core.models import Auction, BidResult, Card, OwnedCard
@@ -371,6 +372,11 @@ def is_own(auction: Auction, me: str | None) -> bool:
     return me is not None and (auction.seller_id or "").lower() == me
 
 
+def phase_kind(label: str) -> str:
+    """Étape d'un passage sans ce qui varie : « relecture Brésil » -> « relecture », « mises (3 vente(s)) » -> « mises »."""
+    return "relecture" if label.startswith("relecture ") else label.split(" (", 1)[0]
+
+
 def retry_text(seconds: float) -> str:
     """Rythme des mises tant que la vérification anti-bot attend, pour l'alerte."""
     if seconds <= 0:
@@ -408,6 +414,7 @@ class AuctionSniper(Worker):
         self._unread: dict[str, tuple[int, datetime]] = {}
         # Derniers passages : (début, fin, étape la plus lente, sa durée en s).
         self._passes: deque[tuple[datetime, datetime, str, float]] = deque()
+        self._phase_seconds: Counter[str] = Counter()  # temps passé par étape, relevé par stats()
         self._phases: list[tuple[str, datetime]] = []
         self._unread_winnable = 0
         # Fins imminentes : page à lire au prochain passage (par rareté), ids de la dernière page lue, et depuis le
@@ -479,12 +486,18 @@ class AuctionSniper(Worker):
             marks = self._phases + [("fin", end)]
             spans = [(label, (marks[i + 1][1] - at).total_seconds()) for i, (label, at) in enumerate(marks[:-1])]
             slowest, seconds = max(spans, key=lambda s: s[1])
+            for label, spent in spans:
+                self._phase_seconds[phase_kind(label)] += spent
             self._passes.append((started, end, slowest, seconds))
             while self._passes and self._passes[0][1] < end - PASS_HISTORY:
                 self._passes.popleft()
             if (end - started).total_seconds() > SLOW_PASS_SECONDS:
                 self.log.info("passage lent : %.0f s, dont %.0f s pour « %s »", (end - started).total_seconds(),
                               seconds, slowest)
+
+    def stats(self) -> dict:
+        phases, self._phase_seconds = self._phase_seconds, Counter()
+        return {"etapes": {label: round(spent, 1) for label, spent in phases.most_common()}} if phases else {}
 
     def _phase(self, label: str) -> None:
         """Début d'une étape du passage en cours (sa durée va jusqu'à l'étape suivante)."""
@@ -853,7 +866,7 @@ class AuctionSniper(Worker):
             return False
         self.log.debug("%s à %d WB : %s, pas relue", a.title, a.min_bid, why)
         self._targets.pop(a.id, None)
-        self._outcome(a, why)
+        self._outcome(a, why, quote)
         return True
 
     async def _prepare(self, target: Target, now: datetime) -> None:
@@ -1008,7 +1021,8 @@ class AuctionSniper(Worker):
                 self._antibot_remind()
                 continue
             if await self._bid(auction, decision, params):
-                self._outcome(auction, "misée (collection)" if decision.collection else "misée")
+                self._outcome(auction, "misée (collection)" if decision.collection else "misée",
+                              mise=decision.amount, plafond=decision.ceiling, estimation=decision.reference)
                 if not rebid:
                     free -= 1
                     opened += 1
@@ -1230,7 +1244,7 @@ class AuctionSniper(Worker):
         if decision is None:
             self._outcome(auction, "collection : trop chère" if collection_cap is not None else
                           refusal(auction, params, quote, min_sales(self.settings, auction.shiny), portfolio,
-                                  self.settings.sale_fee_pct, resale, push))
+                                  self.settings.sale_fee_pct, resale, push), quote)
         return decision
 
     async def _against_rivals(self, auction: Auction, quote: Quote) -> Quote:
@@ -1249,10 +1263,22 @@ class AuctionSniper(Worker):
                        quote.average)
         return replace(quote, average=float(ask))
 
-    def _outcome(self, auction: Auction, outcome: str) -> None:
-        """Retient l'issue d'une enchère ; une mise placée n'est plus remplacée par un refus ultérieur."""
-        if self._outcomes.get(auction.id) not in PLACED:
-            self._outcomes[auction.id] = outcome
+    def _outcome(self, auction: Auction, outcome: str, quote: Quote | None = None, **detail) -> None:
+        """Retient l'issue d'une enchère ; une mise placée n'est plus remplacée par un refus ultérieur. Chaque
+        nouvelle issue va dans le journal (événement « enchere »), avec l'estimation qui l'a décidée."""
+        previous = self._outcomes.get(auction.id)
+        if previous in PLACED:
+            return
+        self._outcomes[auction.id] = outcome
+        if previous == outcome:
+            return
+        if quote is not None and quote.average is not None:
+            detail.setdefault("estimation", quote.average)
+            detail.update(ventes=quote.count, disputees=quote.contested)
+        if detail.get("estimation") is not None:
+            detail["estimation"] = round(detail["estimation"])
+        journal.event("enchere", id=auction.id, titre=auction.title, rarete=auction.rarity, shiny=auction.shiny,
+                      mise_min=auction.min_bid, reste_s=round(auction.seconds_left()), issue=outcome, **detail)
 
     def _check_quota_spent(self, decision: Decision) -> bool:
         """Mise de collection à ne pas faire : sa part des mises permises par la vérification est prise.

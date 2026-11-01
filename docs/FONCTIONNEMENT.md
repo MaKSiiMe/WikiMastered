@@ -223,6 +223,14 @@ flowchart LR
 | Récap des enchères | 08:00 | toutes les mises sur 24 h, gain réalisé et manqué |
 | Bilan | 23:00 | solde, puis sniper, ventes, positions, collection |
 
+## Logs et journal
+
+| Où | Contenu | Lecture |
+|---|---|---|
+| Console (logs Portainer) | une ligne courte par événement, au niveau `LOG_LEVEL` ; source courte (`sniper`, `reseau`, `discord`…) ; les messages Discord y sont recopiés sans mise en forme | `ssh wm-logs 2h` |
+| Relevé `stats` | toutes les 15 min (`STATS_MINUTES`) : passages de chaque worker (nombre, durée moyenne, p95, max, erreurs), temps du sniper par étape, requêtes au site (débit, échecs, attente d'un créneau par worker, latence des routes les plus appelées) ; le dernier est aussi dans `/etat` | console |
+| Journal `data/logs/journal.jsonl` | tout, DEBUG compris, une ligne JSON par entrée ; plus les événements `stats` (détail par route) et `enchere` (chaque nouvelle issue d'une enchère examinée par le sniper : mise minimale, estimation, ventes, issue) ; un fichier par jour, `JOURNAL_KEEP_DAYS` gardés | `python -m src.main journal --since 6h [--ev stats,enchere] [--events]` |
+
 ## Routes et données
 
 **Routes** : aucune n'est inventée. Elles viennent des extensions communautaires ([WikiMastersTools](https://github.com/qkerman/WikiMastersTools-kzfamily), [WikiRemastered](https://github.com/Lypningeuh/WikiRemastered), [wikimasters-farm](https://github.com/3d3n-pyc/wikimasters-farm), [wikimasters-bot](https://github.com/LockBlock-dev/wikimasters-bot)) et sont décrites dans [config/endpoints.yaml](../config/endpoints.yaml).
@@ -232,4 +240,4 @@ flowchart LR
 | Corriger une route | `python -m src.tools.parse_curl --name place_bid --write < requete.curl` (écrit `config/endpoints.local.yaml`) |
 | Découvrir une route | `python -m src.tools.browser_login --record`, puis naviguer : les appels vont dans `data/inspect/capture/` |
 
-**Données** : le volume `data/` contient la base SQLite, `logs/bot.log`, la session et le `heartbeat` du healthcheck. Après chaque bilan, les cotes et ventes observées de plus de 60 jours sont purgées. Le plus haut prix de chaque carte est gardé.
+**Données** : le volume `data/` contient la base SQLite, le journal `logs/journal.jsonl`, la session et le `heartbeat` du healthcheck. Après chaque bilan, les cotes et ventes observées de plus de 60 jours sont purgées. Le plus haut prix de chaque carte est gardé.

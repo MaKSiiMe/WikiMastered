@@ -33,6 +33,7 @@ import httpx
 from src.config import Settings
 from src.core.endpoints import BuiltRequest, Endpoints
 from src.core.notifier import DiscordNotifier
+from src.core.stats import NetStats
 from src.core.timeutils import in_window, utcnow
 
 log = logging.getLogger(__name__)
@@ -260,6 +261,7 @@ class WikiMastersClient:
         # Requêtes envoyées par worker (écritures à part) et limitations du site, depuis le dernier récap.
         self.traffic: Counter[str] = Counter()
         self.limited = 0
+        self.net = NetStats()  # latence et attente par route et par file, relevées par stats_loop (src/main.py)
         self._pause_until = 0.0
         self._peak_off_until = float("-inf")  # écart du pic suspendu jusqu'à (le site a limité le bot)
         self._failures = 0
@@ -626,17 +628,24 @@ class WikiMastersClient:
         route = str(req.url).split("?")[0].rsplit("/api/", 1)[-1]
         if urgent and sent - asked > URGENT_WAIT_WARN_SECONDS:
             log.warning("requête urgente %s : %.0f s d'attente avant son créneau", route, sent - asked)
+        status = "annulée"
         try:
-            return await self._http.request(
+            resp = await self._http.request(
                 req.method, req.url,
                 params=req.params or None,
                 json=req.json,
                 headers=req.headers or None,
             )
+            status = str(resp.status_code)
+            return resp
+        except httpx.HTTPError as exc:
+            status = type(exc).__name__
+            raise
         finally:
-            if time.monotonic() - sent > SLOW_RESPONSE_SECONDS:
-                log.info("réponse lente du site : %s en %.0f s%s", route, time.monotonic() - sent,
-                         " (requête urgente)" if urgent else "")
+            latency = time.monotonic() - sent
+            self.net.record(req.name, "écritures" if req.is_mutation else lane, sent - asked, latency, status)
+            if latency > SLOW_RESPONSE_SECONDS:
+                log.info("réponse lente du site : %s en %.0f s%s", route, latency, " (requête urgente)" if urgent else "")
 
     def _backoff(self, reason: str, *, limited: bool, retry_after: float = 0.0) -> float:
         self._failures = min(self._failures + 1, 10)

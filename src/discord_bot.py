@@ -28,6 +28,7 @@ from discord import app_commands
 from src import backup, pauses, snipes
 from src.charts import number, profit_bars
 from src.core import timeutils
+from src.core.stats import network_lines
 from src.core.timeutils import utcnow
 from src.recap import STALE_AFTER
 from src.roi import roi_discord, wb
@@ -102,6 +103,13 @@ def worker_line(w: Worker, now: datetime, session_ok: bool) -> str:
     return line
 
 
+def passes_text(stats: dict) -> str:
+    """Passages d'un worker au dernier relevé de stats_loop : « 612 passages, moy 1.3 s, max 8.2 s »."""
+    if not stats.get("n"):
+        return ""
+    return f"{stats['n']} passage(s), moy {stats['moy']:.1f} s, max {stats['max']:.1f} s"
+
+
 def state_embed(ctx: Context, workers: list[Worker], started_at: datetime) -> discord.Embed:
     """/etat : mode, session, vérification anti-bot, routes en pause, puis chaque worker."""
     now = utcnow()
@@ -127,12 +135,18 @@ def state_embed(ctx: Context, workers: list[Worker], started_at: datetime) -> di
     if routes := client.paused_routes():
         lines.append("⏳ Routes du site en pause : " + ", ".join(f"{name} ({ago(timedelta(seconds=left))})"
                                                                for name, left in sorted(routes.items())))
-    states = [f"**{w.name}** : {worker_line(w, now, client.session_ok)}" for w in workers]
+    last = ctx.last_stats
+    passes = last.get("workers", {})
+    states = [f"**{w.name}** : {worker_line(w, now, client.session_ok)}"
+              + (f" · {text}" if (text := passes_text(passes.get(w.name, {}))) else "") for w in workers]
     if color == GREEN and any(w.paused or w.errors_in_a_row for w in workers):
         color = ORANGE
     embed = discord.Embed(title="État du bot", description="\n".join(lines), color=color)
     for i, value in enumerate(fields(states)):
         embed.add_field(name="Workers" if i == 0 else "\u200b", value=value, inline=False)
+    if last:
+        embed.add_field(name=f"R\u00e9seau ({last['seconds'] / 60:.0f} min jusqu'\u00e0 {paris(last['at'])})",
+                        value="\n".join(network_lines(last["net"], last["seconds"], top=4))[:1024], inline=False)
     return embed
 
 

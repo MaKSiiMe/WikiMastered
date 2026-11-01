@@ -15,6 +15,7 @@
     python -m src.main sniper-report [--hours 24] [--summary] [--breakdown]  # enchères misées par le sniper
     python -m src.main sniper-backtest [--days 7] [--capital 20000]  # autres réglages rejoués sur les ventes vues
     python -m src.main reset-simulation [--apply]  # efface les mises et ventes simulées
+    python -m src.main journal [--since 6h] [--ev stats,enchere] [--events]  # journal détaillé, en JSON
 """
 
 from __future__ import annotations
@@ -30,12 +31,11 @@ import sys
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta
-from logging.handlers import RotatingFileHandler
 
 from src.account import bilan_text as account_bilan
 from src.backup import backup_loop
 from src.config import RARITY_RANK, Settings, get_settings
-from src.core import timeutils
+from src.core import journal, timeutils
 from src.core.api import WikiMastersAPI
 from src.core.client import LANE, WikiMastersClient
 from src.core.database import Database
@@ -43,6 +43,7 @@ from src.core.endpoints import Endpoints
 from src.core.models import MarketPage
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService, Quote, advised_bid
+from src.core.stats import network_lines, workers_line
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
 from src.overrides import load as load_overrides
 from src.pauses import load as load_pauses
@@ -68,19 +69,51 @@ from src.workers.value_scan import ValueScan
 log = logging.getLogger("wikimastered")
 
 
-def setup_logging(settings: Settings) -> None:
-    (settings.data_dir / "logs").mkdir(parents=True, exist_ok=True)
-    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S")
-    file_handler = RotatingFileHandler(settings.data_dir / "logs" / "bot.log", maxBytes=5_000_000, backupCount=5,
-                                       encoding="utf-8")
-    console = logging.StreamHandler(sys.stdout)
-    for handler in (file_handler, console):
-        handler.setFormatter(fmt)
-    root = logging.getLogger()
-    root.handlers[:] = [console, file_handler]
-    root.setLevel(settings.log_level.upper())
-    for noisy in ("httpx", "httpcore", "hpack", "aiosqlite", "discord"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+def setup_logging(settings: Settings, *, with_journal: bool) -> None:
+    """Console pour toutes les commandes ; journal détaillé (src/core/journal.py) pour le bot seulement : une
+    commande lancée à côté dans la console du conteneur n'écrit pas dans le fichier du bot."""
+    journal.setup(settings.log_level, settings.data_dir / "logs" if with_journal else None,
+                  settings.journal_keep_days)
+
+
+stats_log = logging.getLogger("stats")
+
+
+async def stats_loop(ctx: Context, workers: list[Worker]) -> None:
+    """Toutes les STATS_MINUTES : passages de chaque worker et requêtes au site, quelques lignes en console et le
+    détail dans le journal (événement « stats »). Le dernier relevé est montré par /etat."""
+    since = utcnow()
+    while True:
+        await asyncio.sleep(ctx.settings.stats_minutes * 60)
+        now = utcnow()
+        seconds = (now - since).total_seconds()
+        passes = {}
+        for w in workers:
+            passes[w.name] = {**w.passes.take(), **({"pause": True} if w.paused else {})}
+            try:
+                passes[w.name] |= w.stats()
+            except Exception:  # noqa: BLE001 - le relevé des autres part quand même
+                log.exception("stats de %s impossibles", w.name)
+        net = ctx.client.net.take()
+        stats_log.info("workers en %.0f min : %s", seconds / 60, workers_line(passes))
+        for name, w in passes.items():
+            if phases := w.get("etapes"):
+                busy = sum(phases.values()) or 1
+                stats_log.info("%s, temps par étape : %s", name,
+                               " · ".join(f"{label} {spent / busy:.0%}" for label, spent in list(phases.items())[:6]))
+        for line in network_lines(net, seconds):
+            stats_log.info("réseau : %s", line)
+        journal.event("stats", depuis=since.isoformat(), secondes=round(seconds), workers=passes, reseau=net)
+        ctx.last_stats = {"at": now, "seconds": seconds, "workers": passes, "net": net}
+        since = now
+
+
+def print_journal(settings: Settings, since: str, kinds: str, events_only: bool) -> None:
+    """Lignes du journal (JSON) sur la sortie : `ssh wm-logs journal 6h` les récupère pour les analyses."""
+    start = datetime.now() - journal.parse_duration(since)
+    wanted = {k.strip() for k in kinds.split(",") if k.strip()} or None
+    for line in journal.read(settings.data_dir / "logs", start, wanted, events_only=events_only):
+        print(line)
 
 
 @contextlib.asynccontextmanager
@@ -519,6 +552,8 @@ async def run_bot(settings: Settings) -> None:
         jobs += [("report", lambda: report_loop(ctx)), ("heartbeat", lambda: heartbeat(ctx))]
         if settings.recap_interval_hours > 0:
             jobs.append(("recap", lambda: recap_loop(ctx, workers, started_at)))
+        if settings.stats_minutes > 0:
+            jobs.append(("stats", lambda: stats_loop(ctx, workers)))
         if settings.enable_sniper and settings.sniper_report_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
         if settings.enable_backup and settings.backup_keep > 0:
@@ -722,6 +757,10 @@ def main(argv: list[str] | None = None) -> None:
     bt.add_argument("--capital", type=int, default=20000, help="WikiBidous + positions (budget d'une position)")
     bt.add_argument("--resale", type=float, default=1.0, help="revente = estimation × ce facteur (défaut 1)")
     bt.add_argument("--rarity", default="L")
+    jr = sub.add_parser("journal", help="lignes JSON du journal détaillé (data/logs/journal.jsonl), lecture seule")
+    jr.add_argument("--since", default="6h", help="période : 90m, 6h, 2j (défaut 6h)")
+    jr.add_argument("--ev", default="", help="seulement ces événements : stats,enchere…")
+    jr.add_argument("--events", action="store_true", help="tous les événements, sans les logs")
     roi = sub.add_parser("roi", help="bénéfice et ROI des reventes du sniper, jour par jour (lecture seule)")
     roi.add_argument("--days", type=int, default=7)
     pr = sub.add_parser("prices", help="ventes observées d'une carte, estimation du bot et ventes en cours "
@@ -736,8 +775,11 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     settings = get_settings()
-    setup_logging(settings)
     command = args.command or "run"
+    setup_logging(settings, with_journal=command == "run")
+    if command == "journal":  # fichiers seuls : ni base ni requête au site
+        print_journal(settings, args.since, args.ev, args.events)
+        return
     if command == "run":
         asyncio.run(run_bot(settings))
         return

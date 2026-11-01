@@ -64,7 +64,9 @@ class Settings(BaseSettings):
     live_writes: CsvList = Field(default_factory=list)
     # Écritures simulées malgré DRY_RUN=false (ex. sniper : tout est réel sauf les mises des positions).
     simulate: CsvList = Field(default_factory=list)
-    log_level: str = "INFO"
+    log_level: str = "INFO"  # console (logs Portainer) ; le journal data/logs/journal.jsonl garde tout, DEBUG compris
+    journal_keep_days: int = 7  # jours de journal gardés (un fichier par jour)
+    stats_minutes: float = 15.0  # relevé des passages des workers et des requêtes au site (0 = aucun)
     timezone: str = "Europe/Paris"
     data_dir: Path = Path("data")
     # Sauvegarde quotidienne de la base (src/backup.py) dans un volume à part ; BACKUP_KEEP archives gardées.
