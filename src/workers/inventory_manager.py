@@ -52,6 +52,9 @@ FAVORITE_HINT = "favori"
 # Remise en vente juste après une vente sans acheteur : « Vous ne possédez pas cette carte » tant que le site ne l'a
 # pas rendue (16/10 à 23:11, Cyril Féraud). Un nouvel essai part N min plus tard, au même prix.
 NOT_OWNED_HINT = "ne possédez pas"
+# Refus tant que la vérification humaine du site n'est pas faite : « Vérification anti-bot requise. » (relevé du
+# 15/10/2026 sur les mises, du 01/11/2026 sur les mises en vente).
+ANTIBOT_HINT = "anti-bot"
 NOT_OWNED_RETRY = timedelta(minutes=5)
 POSITION_MAX_LIST_FAILURES = 3  # mises en vente refusées avant de garder la carte
 # Exemplaire d'une position pas trouvé (ou seul en favori) : nouvel essai dans N min, au lieu de relire la collection
@@ -442,6 +445,8 @@ class InventoryManager(Worker):
         super().__init__(ctx)
         self._starred_warned: set[int] = set()  # positions dont l'exemplaire est en favori (prévenu une fois)
         self._copy_retry: dict[int, tuple[int, datetime]] = {}  # position -> (essais manqués, prochain essai)
+        self._antibot_since: datetime | None = None  # mises en vente refusées : vérification anti-bot à faire
+        self._antibot_retry_at = datetime.min.replace(tzinfo=UTC)  # prochain essai tant qu'elle attend
 
     async def setup(self) -> None:
         self._next_scan = utcnow() + timedelta(minutes=2)
@@ -452,6 +457,9 @@ class InventoryManager(Worker):
         # (lire la collection coûte ~175 requêtes), consommés à chaque place libérée.
         self._sale_queue: list[SaleCandidate] = []
         self._queue_at: datetime | None = None
+        reopened = await self.db.reopen_antibot_positions()
+        if reopened:
+            self.log.info("%d revente(s) abandonnée(s) à cause de la vérification anti-bot : reprise(s)", reopened)
         reopened = await self.db.reopen_favorite_positions()
         if reopened:
             self.log.info("%d revente(s) abandonnée(s) pour une carte en favori : reprise(s)", reopened)
@@ -886,7 +894,34 @@ class InventoryManager(Worker):
         return listing_id
 
     # --------------------------------------------------------- publication
+    @property
+    def blocked(self) -> str | None:
+        if not self._antibot_since:
+            return None
+        return (f"mises en vente refusées depuis {self._antibot_since.astimezone(now_local().tzinfo):%d/%m %H:%M} : "
+                "vérification anti-bot à faire dans ton navigateur")
+
+    def verification_done(self) -> bool:
+        """Vérification faite dans le navigateur (/verif-faite) : la prochaine mise en vente part sans attendre.
+        False si aucune n'attendait."""
+        if not self._antibot_since:
+            return False
+        self._antibot_retry_at = datetime.min.replace(tzinfo=UTC)
+        return True
+
+    def _listing_refused_antibot(self, label: str) -> None:
+        """Pas un échec de la revente : tout reste programmé, un seul essai toutes les SNIPER_ANTIBOT_RETRY_SECONDS.
+        Le 01/11 de 07:04 à 07:59, 58 refus, 74 alertes et 16 reventes abandonnées (carte gardée) après 3 refus."""
+        self._antibot_retry_at = utcnow() + timedelta(seconds=self.settings.sniper_antibot_retry_seconds)
+        if self._antibot_since:
+            return
+        self._antibot_since = utcnow()
+        self.notifier.warning("Mises en vente suspendues", f"Le site demande la vérification anti-bot ({label} "
+                              "refusée). Fais-la dans ton navigateur : les reventes attendent et repartiront seules.")
+
     async def post_due_listings(self) -> None:
+        if utcnow() < self._antibot_retry_at:
+            return
         due = await self.db.due_listings(utcnow())
         if not due:
             return
@@ -940,6 +975,9 @@ class InventoryManager(Worker):
                     self.notifier.info("Mise en vente simulée", label, durée=f"{minutes} min", thread=position_thread(
                         listing_bid(row), f"💰 en vente (simulée) à {price} WB, fin {local_hm(target_end)}"))
             elif result.ok:
+                if self._antibot_since:
+                    self._antibot_since = None
+                    self.notifier.success("Mises en vente reprises", "La vérification est levée.")
                 auction_id = await self._listing_auction_id(result.payload, row["card_id"])
                 await self.db.update_listing(row["id"], status="posted", posted_at=utcnow(), duration_minutes=minutes,
                                              target_end=target_end, auction_id=auction_id)
@@ -952,6 +990,11 @@ class InventoryManager(Worker):
             else:
                 payload = result.payload if isinstance(result.payload, dict) else {}
                 error = payload.get("error") or payload.get("message") or f"HTTP {result.status}"
+                if ANTIBOT_HINT in str(error).lower() or payload.get("human_verification_required"):
+                    if price != row["base_amount"]:  # concurrente relue au prochain essai
+                        await self.db.update_listing(row["id"], base_amount=row["base_amount"])
+                    self._listing_refused_antibot(label)
+                    return
                 if row["bid_id"] and NOT_OWNED_HINT in str(error).lower():
                     # L'invendue revient sous un autre identifiant d'exemplaire : le 18/10, Liste des éclipses
                     # solaires et Les Feux de l'amour, refusées 2 fois en 5 min, étaient retrouvées 30 s après.

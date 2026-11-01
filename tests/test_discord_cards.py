@@ -310,3 +310,67 @@ async def test_top_ranks_cards_by_average_recent_price(tmp_path):
     assert len(first.description.splitlines()) == len(second.description.splitlines()) == 25
     assert second.title.endswith("(suite)") and second.footer.text and not first.footer.text
     await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_antibot_refusal_keeps_the_resale_and_alerts_once(tmp_path):
+    """01/11 : 3 refus « Vérification anti-bot requise » fermaient la position, 74 alertes en 1 h. Maintenant : la
+    revente reste programmée, un seul essai par attente, une alerte, et le prix sous une concurrente n'est pas gardé."""
+    from src.workers.inventory_manager import InventoryManager
+    from tests.test_validation import simulated_position
+
+    posts = {"n": 0, "refuse": True}
+
+    def handler(request):
+        if request.method == "POST":
+            posts["n"] += 1
+            if posts["refuse"]:
+                return httpx.Response(400, json={"error": "Vérification anti-bot requise."})
+            return httpx.Response(201, json={"auction": {"id": "a1"}})
+        return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5, "auctions": []})
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    ctx.settings.dry_run = False
+    db = ctx.db
+    bid_id = await simulated_position(db, 400)
+    await db._exec("UPDATE bids SET dry_run = 0, status = 'won'")
+    await db._exec("UPDATE listings SET status = 'scheduled', dry_run = 0, owned_card_id = 'o1', "
+                   f"post_at = '2020-01-01T00:00:00+00:00', bid_id = {bid_id}")
+    sent = []
+    notifier.send = lambda level, title, description="", **fields: sent.append(title)
+    inv = InventoryManager(ctx)
+    await inv.post_due_listings()
+    await inv.post_due_listings()  # attente : aucun nouvel essai
+    assert posts["n"] == 1 and sent.count("Mises en vente suspendues") == 1
+    row = await db._one("SELECT status FROM listings")
+    assert row["status"] == "scheduled" and await db.failed_listings_count(bid_id) == 0
+    assert "anti-bot" in inv.blocked
+    assert inv.verification_done()
+    posts["refuse"] = False
+    await inv.post_due_listings()
+    assert posts["n"] == 2 and "Mises en vente reprises" in sent and inv.blocked is None
+    assert (await db._one("SELECT status FROM listings"))["status"] == "posted"
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_positions_abandoned_for_antibot_are_reopened_at_their_relist_price(tmp_path):
+    from tests.test_validation import simulated_position
+
+    client, notifier = make_client(tmp_path, trades)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    bid_id = await simulated_position(db, 400)
+    other = await simulated_position(db, 500)
+    await db._exec("UPDATE bids SET dry_run = 0, status = 'won', closed = 1")
+    await db._exec(f"UPDATE listings SET status = 'failed', relist_count = 2, base_amount = 360, "
+                   f"error = 'Vérification anti-bot requise.' WHERE bid_id = {bid_id}")
+    await db._exec(f"UPDATE listings SET status = 'failed', error = 'Autre erreur' WHERE bid_id = {other}")
+    assert await db.reopen_antibot_positions() == 1
+    assert await db.reopen_antibot_positions() == 0  # une seule fois
+    assert (await db.get_bid(bid_id))["closed"] == 0 and (await db.get_bid(other))["closed"] == 1
+    assert await db.failed_listings_count(bid_id) == 0
+    assert (await db.last_failed_relist(bid_id))["base_amount"] == 360
+    await db.close()
+

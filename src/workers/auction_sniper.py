@@ -49,7 +49,7 @@ from src.snipes import remove as remove_snipe
 from src.workers.base import Worker
 from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers.collection import collection_key, record_win, targets as collection_targets
-from src.workers.inventory_manager import RIVAL_MIN_SHARE
+from src.workers.inventory_manager import ANTIBOT_HINT, RIVAL_MIN_SHARE
 
 COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, pas revendues
 # Le site refuse plus de 50 enchères par page (403 dès limit=100, relevé du 15/10/2026).
@@ -68,12 +68,9 @@ SLOW_PASS_SECONDS = 15
 PASS_HISTORY = timedelta(minutes=5)  # passages gardés pour expliquer une carte de collection manquée
 # Issues d'une mise acceptée (ou simulée) : la vente est relue à sa fin.
 PLACED = ("misée", "misée (collection)")
-# Refus d'une mise tant que la vérification humaine du site n'est pas faite : « Vérification anti-bot
-# requise. » (relevé du 15/10/2026, en même temps que celle des paquets).
-ANTIBOT_HINT = "anti-bot"
-# Tant qu'elle attend, une seule mise réelle part toutes les SNIPER_ANTIBOT_RETRY_SECONDS : elle teste si la
-# vérification est levée. Le 16/10, ~45 mises refusées en 1 h 30 (toutes inutiles), puis vérification des paquets
-# demandée à son tour.
+# Tant que la vérification humaine attend (ANTIBOT_HINT), une seule mise réelle part toutes les
+# SNIPER_ANTIBOT_RETRY_SECONDS : elle teste si la vérification est levée. Le 16/10, ~45 mises refusées en 1 h 30 (toutes
+# inutiles), puis vérification des paquets demandée à son tour.
 ANTIBOT_REMIND = timedelta(hours=1)  # alerte renouvelée tant que la vérification n'est pas faite
 PENDING_ANTIBOT = "pas tentée : vérification anti-bot en attente"
 QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
