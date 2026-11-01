@@ -107,8 +107,8 @@ def test_log_line_carries_fields_and_sections(caplog):
     n.info("Boosters ouverts", boosters=7, cartes=35)
     n.warning("Récap", "Depuis 08:00", sections=[("À vérifier", "• vérification humaine en attente")])
     lines = [r.getMessage() for r in caplog.records]
-    assert "[INFO] Boosters ouverts boosters : 7, cartes : 35" in lines
-    assert "[WARNING] Récap Depuis 08:00 | À vérifier : • vérification humaine en attente" in lines
+    assert "Système · Boosters ouverts — boosters : 7, cartes : 35" in lines
+    assert "Système · Récap — Depuis 08:00 | À vérifier : • vérification humaine en attente" in lines
 
 
 def test_two_channels_main_keeps_money_and_alerts():

@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 
+from src.core.journal import plain
 from src.core.timeutils import utcnow
 
 log = logging.getLogger(__name__)
@@ -118,11 +119,14 @@ class DiscordNotifier:
              thumbnail: str | None = None, url: str | None = None, important: bool | None = None,
              actions: dict[str, Any] | None = None, **fields: Any) -> None:
         log_fn = log.warning if level in (Level.WARNING, Level.CRITICAL) else log.info
-        # Les logs reprennent tout le message (champs et blocs), pas seulement le titre.
+        # Les logs reprennent tout le message (champs et blocs), sans sa mise en forme : la console le coupe s'il
+        # est long, le journal le garde entier.
         parts = [description] if description else []
         parts += [", ".join(f"{k} : {v}" for k, v in fields.items() if v is not None)] if fields else []
         parts += [f"{name} : {body}" for name, body in sections or []]
-        log_fn("[%s] %s %s", level.name, title, " | ".join(p for p in parts if p).replace("\n", " | "))
+        text = plain(" | ".join(p for p in parts if p).replace("\n", " | "))
+        log_fn("%s%s · %s%s", "CRITIQUE · " if level is Level.CRITICAL else "", topic.value.split(" ", 1)[-1],
+               plain(title), f" — {text}" if text else "", extra={"data": {"salon": topic.name.lower()}})
         msg = _Message(level, title, description, fields, live, topic, sections or [], thumbnail, url, important,
                        actions)
         if not self._webhook_for(msg):
