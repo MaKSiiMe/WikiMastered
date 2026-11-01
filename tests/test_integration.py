@@ -371,14 +371,15 @@ async def test_listings_respect_concurrent_limit(tmp_path):
     assert rows[0]["status"] == "posted" and rows[1]["status"] == "scheduled"
     assert datetime.fromisoformat(rows[1]["post_at"]) > now + timedelta(hours=12)  # doublon : reporté au lendemain
 
-    # Revente d'une position (16/10, Place publique reportée de 24 h) : nouvel essai dès SELL_CHECK_MINUTES.
+    # Revente d'une position (16/10, Place publique reportée de 24 h) : reste due, nouvel essai au passage suivant
+    # (reventes d'1 h depuis le 01/11 : une place libérée ne reste pas vide 10 min).
     await db.schedule_listing(owned_card_id="p1", card_id="pp", title="Place publique", rarity="L", base_amount=356,
                               duration_minutes=720, post_at=now - timedelta(minutes=1),
                               target_end=now + timedelta(hours=12), reason="position", bid_id=7)
     await inv.post_due_listings()
     row = await db._one("SELECT status, post_at FROM listings WHERE title = 'Place publique'")
-    retry = datetime.fromisoformat(row["post_at"])
-    assert row["status"] == "scheduled" and now < retry <= now + timedelta(minutes=11)
+    assert row["status"] == "scheduled" and datetime.fromisoformat(row["post_at"]) <= now
+    assert [r["title"] for r in await db.due_listings(datetime.now(UTC))] == ["Place publique"]
     await db.close()
 
 

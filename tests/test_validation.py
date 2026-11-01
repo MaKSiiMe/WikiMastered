@@ -19,21 +19,31 @@ from src.workers.inventory_manager import InventoryManager
 from tests.test_integration import make_client, make_context, seed_observed
 
 
-async def simulated_position(db: Database, base_amount: int, auction_id: str = "a1") -> int:
+async def simulated_position(db: Database, base_amount: int, auction_id: str = "a1", minutes: int = 360) -> int:
     now = datetime.now(UTC)
     bid = await db.record_bid(auction_id=auction_id, card_id="c1", title="Mème", rarity="C", is_shiny=False, amount=100,
                               reference_price=400, reason="revente ~400 WB", night=False, dry_run=True,
                               status="sim_won", end_at=now)
     lid = await db.schedule_listing(owned_card_id=f"sim-{bid}", card_id="c1", title="Mème", rarity="C",
-                                    base_amount=base_amount, duration_minutes=360, post_at=now,
+                                    base_amount=base_amount, duration_minutes=minutes, post_at=now,
                                     target_end=now - timedelta(minutes=5), reason="position", bid_id=bid)
     await db.update_listing(lid, status="simulated")
     return bid
 
 
+async def past_unsold(db: Database, bid: int, count: int, minutes: int = 360) -> None:
+    """`count` ventes sans acheteur de `minutes` déjà passées pour cette position (étapes de l'échelle de remises)."""
+    now = datetime.now(UTC)
+    for i in range(count):
+        lid = await db.schedule_listing(owned_card_id=f"sim-{bid}-{i}", card_id="c1", title="Mème", rarity="C",
+                                        base_amount=400, duration_minutes=minutes, post_at=now, target_end=now,
+                                        reason="position", bid_id=bid)
+        await db.update_listing(lid, status="sim_unsold")
+
+
 @pytest.mark.asyncio
 async def test_simulated_resale_follows_the_observed_market(tmp_path):
-    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500))
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_list_duration_minutes=360)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
@@ -68,13 +78,44 @@ async def test_floor_after_relists_without_fire_sale(tmp_path):
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
-    await simulated_position(db, 400)
+    bid = await simulated_position(db, 400)
     await seed_observed(db, "c1", [300, 310, 290])
-    await db._exec("UPDATE listings SET relist_count = 2")
+    await past_unsold(db, bid, 2)
+    await db._exec("UPDATE listings SET relist_count = 2 WHERE status = 'simulated'")
     await inv.settle_listings()
     row = await db._one("SELECT status, base_amount, relist_count FROM listings ORDER BY id DESC LIMIT 1")
     assert (row["status"], row["base_amount"], row["relist_count"]) == ("scheduled", 91, 3)
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_hourly_resales_step_down_every_six_hours(tmp_path):
+    """01/11 : reventes d'1 h. Les remises suivent le temps passé en vente (POSITION_STEP_MINUTES=360), pas le nombre
+    de ventes : même prix 5 h durant, −10 % à 6 h et 12 h, 1 WB à 18 h (comme 3 ventes de 6 h sans acheteur)."""
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    inv = InventoryManager(ctx)
+    await simulated_position(db, 400, minutes=60)
+    await seed_observed(db, "c1", [300, 310, 290])
+    prices = []
+    for _ in range(18):
+        await inv.settle_listings()
+        row = await db._one("SELECT id, base_amount, duration_minutes FROM listings ORDER BY id DESC LIMIT 1")
+        prices.append(row["base_amount"])
+        await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = ?",
+                       ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(), row["id"]))
+    assert prices[:5] == [400] * 5 and prices[5:11] == [360] * 6 and prices[11:17] == [324] * 6
+    assert prices[17] == 1
+    await db.close()
+
+
+def test_unsold_steps_count_time_on_sale():
+    from src.workers.inventory_manager import unsold_steps
+
+    assert unsold_steps([60] * 5, 360) == 0 and unsold_steps([60] * 6, 360) == 1
+    assert unsold_steps([720, 360], 360) == 2  # une vente de 12 h compte pour une étape, comme avant le 01/11
+    assert unsold_steps([60, 60], 0) == 2  # 0 : une étape par vente
 
 
 @pytest.mark.asyncio
@@ -91,7 +132,7 @@ async def test_unsold_position_kept_only_when_every_slot_is_taken(tmp_path):
     db = ctx.db
     inv = InventoryManager(ctx)
     bid = await simulated_position(db, 101)
-    await db._exec("UPDATE listings SET relist_count = 2")
+    await past_unsold(db, bid, 2)
     await inv.settle_listings()  # 5 ventes sur 5 : carte gardée
     assert (await db.get_bid(bid))["closed"] == 1
     assert ("WARNING", "Position invendue") in notifier.sent
@@ -100,10 +141,10 @@ async def test_unsold_position_kept_only_when_every_slot_is_taken(tmp_path):
 
     selling["n"] = 4
     bid = await simulated_position(db, 101, "a2")
-    await db._exec("UPDATE listings SET relist_count = 2 WHERE bid_id = ?", (bid,))
+    await past_unsold(db, bid, 2)
     await inv.settle_listings()  # une place libre : remise en vente au plancher (-10 % après 2 invendus)
     rows = await db._all("SELECT status, base_amount FROM listings WHERE bid_id = ? ORDER BY id", (bid,))
-    assert [r["status"] for r in rows] == ["sim_unsold", "scheduled"] and rows[1]["base_amount"] == 91
+    assert [r["status"] for r in rows] == ["sim_unsold"] * 3 + ["scheduled"] and rows[-1]["base_amount"] == 91
     assert (await db.get_bid(bid))["closed"] == 0
     await db.close()
 
@@ -242,7 +283,8 @@ async def test_inventory_report_values_every_card(tmp_path, capsys):
 async def test_position_listed_12h_until_5_positions_are_held(tmp_path):
     """20/10 : tant que moins de 5 L attendent leur revente, une vente de 12 h est plus vue ; au-delà, 6 h pour
     faire tourner les 5 places de vente."""
-    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}), dry_run=False)
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}), dry_run=False,
+                                   position_list_duration_minutes=360, position_list_long_below=5)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     now = datetime.now(UTC)
@@ -287,7 +329,7 @@ async def test_position_posted_now_and_old_schedules_advanced(tmp_path):
     assert datetime.fromisoformat(rows["Fabrice Arfi"]["post_at"]) <= datetime.now(UTC)
     assert datetime.fromisoformat(rows["doublon"]["post_at"]) > now + timedelta(hours=16)  # doublon : inchangé
     post_at, minutes, end = inv._plan(now, position=True, at_peak=True)
-    assert post_at == now and minutes == 360 and end == now + timedelta(hours=6)
+    assert post_at == now and minutes == 60 and end == now + timedelta(hours=1)
     await db.close()
 
 
@@ -675,7 +717,7 @@ def test_position_duration_avoids_bad_end_hours():
 @pytest.mark.asyncio
 async def test_waiting_position_duration_chosen_when_posted(tmp_path, monkeypatch):
     """26/10 : Bordeaux, gagnée à 18:05, programmée pour 12 h, attendait une place jusqu'au lendemain. La durée est
-    revue à la publication : 5 positions détenues, 6 h (fin à 20:30), et plus 12 h comme avant le 31/10."""
+    revue à la publication : 1 h depuis le 01/11 (6 h le 31/10), et plus 12 h comme avant le 31/10."""
     from src.workers import inventory_manager
     from src.workers.inventory_manager import InventoryManager
     from tests.test_integration import make_client
@@ -694,7 +736,7 @@ async def test_waiting_position_duration_chosen_when_posted(tmp_path, monkeypatc
     monkeypatch.setattr(inventory_manager, "now_local", lambda: datetime(2026, 10, 26, 14, 30, tzinfo=PARIS))
     await InventoryManager(ctx).post_due_listings()
     row = await db._one("SELECT duration_minutes, status FROM listings WHERE title = 'Bordeaux'")
-    assert row["status"] == "simulated" and row["duration_minutes"] == 360
+    assert row["status"] == "simulated" and row["duration_minutes"] == 60
     await db.close()
 
 
@@ -725,7 +767,8 @@ def test_expensive_positions_reach_the_fire_sale_sooner():
 
 @pytest.mark.asyncio
 async def test_expensive_position_fire_sale_after_two_unsold(tmp_path):
-    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_expensive_from=100)
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_expensive_from=100,
+                                   position_list_duration_minutes=360)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
