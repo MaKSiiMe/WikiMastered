@@ -297,15 +297,21 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     guild = discord.Object(id=s.discord_guild_id) if s.discord_guild_id > 0 else None
 
     # ------------------------------------------------------------ pilotage (boutons et commandes)
-    def verify() -> str:
+    def verify(source: str) -> str:
+        """Vérification anti-bot signalée faite ; `source` (bouton ou commande) va dans les logs."""
         if sniper is None:
+            log.info("Discord : vérification signalée faite (%s), sniper désactivé", source)
             return "Sniper désactivé : aucune vérification à tester."
+        since = sniper.antibot_since
         if sniper.verification_done():
+            log.info("Discord : vérification signalée faite (%s), demandée depuis %s, %d mise(s) non placée(s)",
+                     source, paris(since), sniper.antibot_missed)
             return "👍 Noté : la prochaine mise teste la vérification. Je te préviens dès qu'une mise passe."
+        log.info("Discord : vérification signalée faite (%s), mais aucune n'était en attente", source)
         return "Aucune vérification en attente : les mises passent."
 
     async def verify_pressed(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(verify())
+        await interaction.response.send_message(verify("bouton « C'est fait »"))
 
     def pause_label(name: str) -> str:
         worker = next((w for w in workers if w.name == name), None)
@@ -328,7 +334,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                                                 view=state_view())
 
     async def verify_and_refresh(interaction: discord.Interaction, _ref: int = 0) -> None:
-        await refresh(interaction, verify())
+        await refresh(interaction, verify("bouton de /etat"))
 
     async def pause_sniper(interaction: discord.Interaction, _ref: int = 0) -> None:
         await pauses.pause(ctx, ["sniper"], utcnow() + timedelta(hours=1))
@@ -461,7 +467,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
 
     @tree.command(name="verif-faite", description="Vérification anti-bot faite : les mises reprennent sans attendre")
     async def verif_faite(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(verify())
+        await interaction.response.send_message(verify("/verif-faite"))
 
     @tree.command(name="pause", description="Mettre le sniper, les ventes ou tout le bot en pause")
     @app_commands.describe(quoi="sniper par défaut", duree="1 h par défaut")
