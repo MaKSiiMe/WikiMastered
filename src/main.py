@@ -648,7 +648,7 @@ async def run_bot(settings: Settings) -> None:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        ctx.notifier.warning("Bot arrêté")
+        ctx.notifier.warning("Bot arrêté", alert=False)  # à chaque redéploiement : rien à faire
 
 
 async def reset_simulation(settings: Settings, apply: bool) -> None:

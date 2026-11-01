@@ -48,7 +48,8 @@ class TradeWatch(Worker):
             who = (trade.initiator or {}).get("username") or "un joueur"
             self.notifier.send(trades.LEVELS[e.verdict], f"Échange proposé par {who}", e.headline,
                                columns=e.columns, sections=[("\u200b", e.notes)] if e.notes else [],
-                               url=f"{self.ctx.client.endpoints.base_url}/trades", important=True)
+                               url=f"{self.ctx.client.endpoints.base_url}/trades", important=True,
+                               alert=True)  # à accepter ou refuser sur le site
         await self.db.kv_set(KV_KEY, sorted(seen & active))
         minutes = self.settings.trade_check_minutes
         return random.uniform(0.8, 1.2) * minutes * 60
