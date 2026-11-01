@@ -230,24 +230,30 @@ class Settings(BaseSettings):
     position_post_now: bool = True
     position_post_start: time = time(11, 0)  # fenêtre de publication (Paris) si POSITION_POST_NOW=false
     position_post_end: time = time(12, 0)
-    # Durée de la revente : 6 h, pour faire tourner plus vite les 5 places de vente. Moins de
+    # Durée de la revente : 1 h. Le 31/10, ~4 L gagnées par heure pour ~10 ventes par jour (5 places, ventes de 6 et
+    # 12 h) : 20 reventes attendaient une place. Les rivaux revendent en 10-60 min. Moins de
     # POSITION_LIST_LONG_BELOW positions détenues (rien n'attend de place) : POSITION_LIST_LONG_MINUTES, plus vue.
-    position_list_duration_minutes: int = 360
+    position_list_duration_minutes: int = 60
     position_list_long_minutes: int = 720
-    position_list_long_below: int = 5     # 0 = toujours POSITION_LIST_DURATION_MINUTES
+    position_list_long_below: int = 0     # 0 = toujours POSITION_LIST_DURATION_MINUTES
     # Heures de fin (Paris) évitées par la revente de 12 h : 6 h si elle finit hors de ces heures (6 h n'est jamais
     # allongée : des positions attendent une place). Ventes de L du
     # 25/10 19:43 au 26/10 19:18 (prix ÷ médiane des 8 ventes précédentes de la carte) : ×0,91-0,97 et 23-33 % sous
     # ×0,8 pour une fin à 18-22 h, ×0,93-0,95 à 11 h et 13 h, contre ×1,04-1,09 à 00-01 h et 07-09 h. Vide = jamais.
     position_avoid_end_hours: IntList = Field(default_factory=lambda: [11, 12, 13, 18, 19, 20, 21, 22])
-    position_relist_discount: float = 0.9 # invendue : remise en vente à prix × 0,9
+    # Échelle des remises en temps passé en vente sans acheteur : une étape toutes les N minutes (une vente plus longue
+    # n'en compte qu'une). POSITION_MAX_RELISTS, POSITION_LOSS_AFTER et POSITION_FIRE_SALE_AFTER comptent en étapes :
+    # avec des reventes d'1 h, compter les ventes enverrait une carte à 1 WB en 3 h. Même prix entre deux étapes.
+    # 0 = une étape par vente sans acheteur ; vide = 360.
+    position_step_minutes: int = 360
+    position_relist_discount: float = 0.9 # étape franchie : remise en vente à prix × 0,9
     position_max_relists: int = 2         # puis au prix d'achat, tant qu'une place de vente est libre
-    # Après POSITION_LOSS_AFTER mises en vente sans acheteur, la revente peut descendre jusqu'à POSITION_MAX_LOSS
+    # Après POSITION_LOSS_AFTER étapes sans acheteur, la revente peut descendre jusqu'à POSITION_MAX_LOSS
     # sous le prix d'achat : une carte qui ne part pas bloque une des 5 places (~900 WB par revente qui tourne) et son
     # capital (Mark Wahlberg ✨, achetée 6119, invendue à 7037 puis à 6333 le 25/10). 0 = jamais sous le prix d'achat.
     position_max_loss: float = 0.10
     position_loss_after: int = 2
-    # Après POSITION_FIRE_SALE_AFTER mises en vente sans acheteur, la revente part à 1 WB pour environ
+    # Après POSITION_FIRE_SALE_AFTER étapes sans acheteur, la revente part à 1 WB pour environ
     # POSITION_FIRE_SALE_MINUTES, fin entre 00 h et 03 h ou entre 06 h et 09 h (Paris). Du 15 au 26/10, les L parties
     # de ≤ 10 WB se sont vendues ×0,94 leur prix habituel (médiane) : ×1,08-1,11 et 3-4 % sous la moitié pour une fin
     # à 00-03 h ou 06-09 h, contre ×0,81 et 22 % sous la moitié à 18-21 h. 0 = jamais.
@@ -394,6 +400,12 @@ class Settings(BaseSettings):
         if any(len(pair) != 2 for pair in pairs):
             raise ValueError(f"attendu worker=secondes séparés par des virgules (ex. cotes=5,etiquettes=3) : {text}")
         return {name.strip(): float(spacing) for name, spacing in pairs}
+
+    @field_validator("position_step_minutes", mode="before")
+    @classmethod
+    def _step_minutes(cls, value: Any) -> Any:
+        """Vide : la valeur par défaut (Portainer garde les variables vidées)."""
+        return 360 if isinstance(value, str) and not value.strip() else value
 
     @field_validator("discord_owner_id", "discord_guild_id", mode="before")
     @classmethod

@@ -580,6 +580,12 @@ class Database:
                               "WHERE bid_id = ? ORDER BY id DESC LIMIT 1", (bid_id,))
         return row if row and row["status"] == "failed" and row["relist_count"] else None
 
+    async def unsold_durations(self, bid_id: int) -> list[int]:
+        """Durées (minutes) des ventes sans acheteur de cette position, de la plus ancienne à la plus récente."""
+        rows = await self._all("SELECT duration_minutes FROM listings WHERE bid_id = ? "
+                               "AND status IN ('unsold', 'sim_unsold') ORDER BY id", (bid_id,))
+        return [int(r["duration_minutes"] or 0) for r in rows]
+
     async def failed_listings_count(self, bid_id: int) -> int:
         row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE bid_id = ? AND status = 'failed'", (bid_id,))
         return int(row["n"]) if row else 0

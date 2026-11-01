@@ -5,8 +5,9 @@
 - Positions : chaque carte achetée par le sniper est remise en vente en priorité (avant
   les doublons). C'est une enchère : le prix de départ est le prix d'achat + la moitié du bénéfice
   attendu (POSITION_LIST_PROFIT_SHARE), au moins + POSITION_LIST_MARGIN ; les joueurs le font monter.
-  Invendue, elle repart à −10 % (POSITION_MAX_RELISTS fois), puis au prix d'achat tant qu'une place de vente
-  est libre ; jamais sous le prix d'achat. Invendue POSITION_FIRE_SALE_AFTER fois : à 1 WB, fin à 00-03 h ou 06-09 h.
+  Invendue, elle repart au même prix ; toutes les POSITION_STEP_MINUTES passées en vente sans acheteur (une étape),
+  à −10 % (POSITION_MAX_RELISTS fois), puis au prix d'achat tant qu'une place de vente est libre ; jamais sous le
+  prix d'achat. Après POSITION_FIRE_SALE_AFTER étapes : à 1 WB, fin à 00-03 h ou 06-09 h.
 - Places de vente : une place libérée va à la vente qui rapporte le plus (Database.due_listings), revente ou doublon.
   Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
 - Tes cartes (MANUAL_RESALE_TAG) : un exemplaire portant cette étiquette devient une position, revendue comme celles
@@ -95,13 +96,22 @@ def list_price(cost: int, margin: float, fee: float = 0.0, estimate: float | Non
     return price
 
 
-def position_floor(cost: int, listings: int, s: Settings) -> int:
-    """Prix plancher d'une revente après `listings` mises en vente sans acheteur : le prix d'achat (commission
-    comprise), puis jusqu'à POSITION_MAX_LOSS dessous à partir de POSITION_LOSS_AFTER invendus."""
+def position_floor(cost: int, steps: int, s: Settings) -> int:
+    """Prix plancher d'une revente après `steps` étapes sans acheteur (`unsold_steps`) : le prix d'achat (commission
+    comprise), puis jusqu'à POSITION_MAX_LOSS dessous à partir de POSITION_LOSS_AFTER étapes."""
     floor = list_price(cost, 0.0, s.sale_fee_pct)
-    if s.position_max_loss > 0 and listings >= s.position_loss_after:
+    if s.position_max_loss > 0 and steps >= s.position_loss_after:
         floor = max(1, math.ceil(floor * (1 - s.position_max_loss)))
     return floor
+
+
+def unsold_steps(durations: list[int], step: int) -> int:
+    """Étapes de l'échelle de remises franchies après ces ventes sans acheteur (durées en minutes) : une toutes les
+    `step` minutes en vente, une vente plus longue n'en comptant qu'une (12 h = 6 h, comme avant le 01/11) ; 0 : une
+    étape par vente. Le 01/11, reventes passées à 1 h : comptées en ventes, une carte serait partie à 1 WB en 3 h."""
+    if step <= 0:
+        return len(durations)
+    return sum(min(minutes, step) for minutes in durations) // step
 
 
 @dataclass(frozen=True)
@@ -381,13 +391,20 @@ def plan_fire_sale(now: datetime, durations: list[int], preferred: int,
 
 
 def relist_limits(cost: int, s: Settings) -> tuple[int, int]:
-    """(remises à -10 % permises, invendus avant la revente à 1 WB) d'une position achetée `cost` WB : moins pour
+    """(remises à -10 % permises, étapes avant la revente à 1 WB) d'une position achetée `cost` WB : moins pour
     une position chère (POSITION_EXPENSIVE_*)."""
     if s.position_expensive_from and cost >= s.position_expensive_from:
         fire = s.position_expensive_fire_sale_after if s.position_fire_sale_after else 0
         return min(s.position_max_relists, s.position_expensive_max_relists), fire
     return s.position_max_relists, s.position_fire_sale_after
 
+
+
+def fire_sale_delay(s: Settings) -> str:
+    """Temps sans acheteur avant la revente à 1 WB, pour les messages."""
+    if s.position_step_minutes <= 0:
+        return f"{s.position_fire_sale_after} vente(s)"
+    return f"{s.position_fire_sale_after * s.position_step_minutes / 60:g} h"
 
 def position_reason(cost: int) -> str:
     return f"position (achetée {cost})" if cost else "position (paquet)"
@@ -547,8 +564,9 @@ class InventoryManager(Worker):
     async def position_minutes(self, now: datetime | None = None) -> int:
         """Durée de revente d'une position publiée à `now` : longue (12 h, plus vue) tant que moins de
         POSITION_LIST_LONG_BELOW positions sont détenues, carte en cours de programmation comprise ; sinon courte
-        (6 h), pour faire tourner les 5 places de vente. Ventes réelles : seules les positions réelles comptent.
-        12 h qui finirait dans POSITION_AVOID_END_HOURS : 6 h si elle finit ailleurs ; jamais 12 h à la place de 6 h."""
+        (1 h depuis le 01/11), pour faire tourner les 5 places de vente. Ventes réelles : seules les positions
+        réelles comptent. 12 h qui finirait dans POSITION_AVOID_END_HOURS : la courte si elle finit ailleurs ; jamais
+        12 h à la place de la courte."""
         s = self.settings
         prefer_long = False
         if s.position_list_long_below > 0:
@@ -717,7 +735,7 @@ class InventoryManager(Worker):
             start = "au-dessus du prix d'achat" if price is not None else "à sa cote"
             self.notifier.success("Carte à revendre prise en charge",
                                   f"{label} : {origin}{target}. Le bot la revend comme ses positions (départ {start}, "
-                                  f"remises à -10 %, puis à 1 WB après {s.position_fire_sale_after} invendus).",
+                                  f"remises à -10 %, puis à 1 WB après {fire_sale_delay(s)} sans acheteur).",
                                   important=True)
         await self.db.kv_set(MANUAL_KV, {"adopted": sorted(adopted_ids), "missing": sorted(missing_ids)})
         return adopted
@@ -951,7 +969,7 @@ class InventoryManager(Worker):
                   and (a.seller_id or "").lower() != me and a.min_bid >= lowest]
         if not rivals or min(rivals) > row["base_amount"]:
             return row["base_amount"]
-        floor = position_floor(bid["amount"], row["relist_count"], self.settings) if bid else 1
+        floor = position_floor(bid["amount"], await self._steps(bid["id"]), self.settings) if bid else 1
         target = max(floor, min(rivals) - 1)
         if target == row["base_amount"]:
             return target
@@ -1002,12 +1020,15 @@ class InventoryManager(Worker):
                 self.notifier.info("Mise en vente vérifiée", f"{label} : pas créée.{again}")
 
     async def _postpone(self, row) -> None:
-        """Plus de place de vente. Revente d'une position publiée tout de suite (POSITION_POST_NOW), revente à 1 WB ou
-        doublon vendu à toute heure (SELL_ANYTIME) : nouvel essai dans SELL_CHECK_MINUTES, dès qu'une place se libère
-        (le 16/10, Place publique était reportée de 24 h). Sinon : même horaire, le jour suivant."""
+        """Plus de place de vente. Revente d'une position publiée tout de suite (POSITION_POST_NOW) ou revente à 1 WB :
+        nouvel essai au passage suivant (30 s), la place libérée allant à la plus rentable (Database.due_listings) ;
+        reventes d'1 h depuis le 01/11 : 10 min d'attente laisseraient une place vide jusqu'à 1/6 du temps. Doublon
+        vendu à toute heure (SELL_ANYTIME) : dans SELL_CHECK_MINUTES (le 16/10, Place publique était reportée de
+        24 h). Sinon : même horaire, le jour suivant."""
         s = self.settings
-        if (row["bid_id"] is not None and s.position_post_now) or is_fire_sale(row) \
-                or (row["bid_id"] is None and s.sell_anytime):
+        if (row["bid_id"] is not None and s.position_post_now) or is_fire_sale(row):
+            return  # reste due : heure de fin fixée à la publication
+        if row["bid_id"] is None and s.sell_anytime:
             retry = utcnow() + timedelta(minutes=s.sell_check_minutes)
             await self.db.update_listing(row["id"], post_at=retry,
                                          target_end=retry + timedelta(minutes=row["duration_minutes"] or 0))
@@ -1079,10 +1100,11 @@ class InventoryManager(Worker):
         return market if prices and market >= row["base_amount"] else None
 
     async def _unsold(self, row, bid, label: str) -> None:
-        """Invendue : remise en vente à −10 % (POSITION_MAX_RELISTS fois), puis au plancher (`position_floor` : prix
-        d'achat, ou jusqu'à POSITION_MAX_LOSS dessous après POSITION_LOSS_AFTER invendus) tant qu'une place de
-        vente reste libre ; toutes prises, la carte est gardée (réel comme simulé). Le 20/10, Jorge Jesus (achetée
-        216) et Les Feux de l'amour, gardées après 3 essais, se sont vendues à la main (250 et 330)."""
+        """Invendue : remise en vente au même prix, à −10 % à chaque étape franchie (`unsold_steps`,
+        POSITION_MAX_RELISTS fois), puis au plancher (`position_floor` : prix d'achat, ou jusqu'à POSITION_MAX_LOSS
+        dessous après POSITION_LOSS_AFTER étapes) tant qu'une place de vente reste libre ; toutes prises, la carte est
+        gardée (réel comme simulé). Le 20/10, Jorge Jesus (achetée 216) et Les Feux de l'amour, gardées après 3
+        essais, se sont vendues à la main (250 et 330)."""
         if not bid:
             return
         if bid["closed"]:  # gardée sur Discord pendant que sa vente était publiée : pas de remise en vente
@@ -1097,14 +1119,23 @@ class InventoryManager(Worker):
                                "Discord).", important=True)
             return
         max_relists, fire_after = relist_limits(bid["amount"], self.settings)
-        if order == orders.FIRE or 0 < fire_after <= unsold:
+        durations = await self.db.unsold_durations(bid["id"])  # cette vente comprise
+        earlier = list(durations)
+        if row["duration_minutes"] in earlier:
+            earlier.remove(row["duration_minutes"])
+        step = self.settings.position_step_minutes
+        before, after = unsold_steps(earlier, step), unsold_steps(durations, step)
+        if order == orders.FIRE or 0 < fire_after <= after:
             await self._fire_sale(await self._returned_copy(row, bid), bid, unsold)
             return
         # Plancher de la prochaine mise en vente : le prix d'achat, puis un peu dessous après POSITION_LOSS_AFTER
-        # invendus (une carte qui ne part pas bloque une place de vente et son capital).
-        floor = position_floor(bid["amount"], row["relist_count"] + 1, self.settings)
-        if row["relist_count"] < max_relists:
-            price = max(floor, round(row["base_amount"] * self.settings.position_relist_discount))
+        # étapes (une carte qui ne part pas bloque une place de vente et son capital).
+        floor = position_floor(bid["amount"], after, self.settings)
+        if after == before:  # même étape : même prix
+            price = max(floor, row["base_amount"])
+        elif before < max_relists:
+            discounts = min(after, max_relists) - before
+            price = max(floor, round(row["base_amount"] * self.settings.position_relist_discount ** discounts))
         elif await self._slot_for_relist(bid["id"]):
             price = floor
         else:
@@ -1119,10 +1150,10 @@ class InventoryManager(Worker):
                                           reason=position_reason(bid["amount"]), bid_id=bid["id"],
                                           relist_count=row["relist_count"] + 1)
         if not bid["dry_run"]:
-            # Déjà au prix d'achat : message discret, la carte peut tourner plusieurs fois. Boutons (bot Discord) :
-            # changer le prix, brader, garder.
+            # Même prix (reventes d'1 h, toutes les heures) ou déjà au prix d'achat : message discret, la carte peut
+            # tourner plusieurs fois. Boutons (bot Discord) : changer le prix, brader, garder.
             self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
-                               f"(achetée {bid['amount']}).", important=row["base_amount"] > floor,
+                               f"(achetée {bid['amount']}).", important=price < row["base_amount"],
                                actions={"kind": "relist", "listing": listing_id} if listing_id else None)
 
     async def _fire_sale(self, owned_id: str, bid, unsold: int) -> None:
@@ -1157,6 +1188,10 @@ class InventoryManager(Worker):
             self.log.debug("%s : collection illisible (%s), ancien exemplaire gardé", row["title"], exc)
             return row["owned_card_id"]
         return newest_sellable(copies, self._protected_tags()) or row["owned_card_id"]
+
+    async def _steps(self, bid_id: int) -> int:
+        """Étapes sans acheteur déjà franchies par cette position (`unsold_steps`)."""
+        return unsold_steps(await self.db.unsold_durations(bid_id), self.settings.position_step_minutes)
 
     async def _slot_for_relist(self, bid_id: int) -> bool:
         """Place de vente libre pour cette position, une fois servies les ventes programmées et les autres positions
