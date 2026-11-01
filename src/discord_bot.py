@@ -27,21 +27,21 @@ from discord import app_commands
 
 from src import backup, pauses, snipes
 from src.charts import number, profit_bars
-from src.core import timeutils
-from src.core.stats import network_lines
+from src.core import colors, timeutils
+from src.core.stats import network_brief
 from src.core.timeutils import utcnow
 from src.recap import STALE_AFTER
-from src.roi import roi_discord, wb
+from src.roi import plural, roi_discord, wb
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
-from src.workers.collection import progress_lines, targets
+from src.workers.collection import progress_text, recent_cards, targets
 
 log = logging.getLogger("wikimastered.discord")
 
 TEXT_LIMIT = 3900  # description d'un embed : 4096 au plus, avec le bloc de code
 CONFIRM_SECONDS = 120
 RARITIES = ["C", "PC", "R", "SR", "UR", "L"]
-COLOR, GREEN, ORANGE, RED, GREY = 0x5865F2, 0x57F287, 0xFEE75C, 0xED4245, 0x99AAB5
+COLOR, GREEN, ORANGE, RED, GREY = colors.INFO, colors.OK, colors.WARN, colors.ALERT, colors.OFF  # src/core/colors.py
 # /pause et /reprise : ce qui est mis en pause (None : tous les workers, sauf la garde des sanctions).
 # « ventes » arrête aussi la revente des positions du sniper : pour la défausse ou les doublons seuls, /defausse et
 # /doublons.
@@ -88,65 +88,70 @@ def ago(delta: timedelta) -> str:
     return f"{seconds // 3600} h {seconds % 3600 // 60:02d}"
 
 
-def worker_line(w: Worker, now: datetime, session_ok: bool) -> str:
-    """État d'un worker, sans remettre à zéro les compteurs du récap."""
+def worker_cell(w: Worker, now: datetime, session_ok: bool) -> tuple[str, str | None]:
+    """(case de /etat : « ✅ sniper 3 s », problème à détailler sous la grille ou None)."""
     if w.paused:
-        return f"⏸️ {w.paused}"
+        return f"⏸️ {w.name}", None  # voulue (/pause, défausse coupée) : pas un problème
     if w.blocked:
-        return f"🛑 {w.blocked}"
-    if w.last_ok is None:
-        return "⏳ pas encore passé" + (f" · ⚠️ {w.last_error[:80]}" if w.errors_in_a_row else "")
-    stale = session_ok and w.next_due is not None and now - w.next_due > STALE_AFTER
-    line = f"{'❌ arrêté ?' if stale else '✅'} dernier passage il y a {ago(now - w.last_ok)}"
+        return f"🛑 {w.name}", f"{w.name} : {w.blocked}"
+    stale = session_ok and w.next_due is not None and w.last_ok is not None and now - w.next_due > STALE_AFTER
+    if stale:
+        return f"❌ {w.name}", f"{w.name} : aucun passage depuis {ago(now - w.next_due)}"  # type: ignore[operator]
     if w.errors_in_a_row:
-        line += f" · ⚠️ {w.errors_in_a_row} erreur(s) de suite : {w.last_error[:80]}"
-    return line
-
-
-def passes_text(stats: dict) -> str:
-    """Passages d'un worker au dernier relevé de stats_loop : « 612 passages, moy 1.3 s, max 8.2 s »."""
-    if not stats.get("n"):
-        return ""
-    return f"{stats['n']} passage(s), moy {stats['moy']:.1f} s, max {stats['max']:.1f} s"
+        return f"⚠️ {w.name}", (f"{w.name} : {plural(w.errors_in_a_row, 'erreur', 'erreurs')} de suite : "
+                               f"{w.last_error[:120]}")
+    if w.last_ok is None:
+        return f"⏳ {w.name}", None
+    return f"✅ {w.name} · {ago(now - w.last_ok)}", None
 
 
 def state_embed(ctx: Context, workers: list[Worker], started_at: datetime) -> discord.Embed:
-    """/etat : mode, session, vérification anti-bot, routes en pause, puis chaque worker."""
+    """/etat : vert si tout va bien, orange si un worker ou la vérification anti-bot demande ton attention, rouge si
+    le bot ne peut plus rien faire (session perdue, arrêt de la garde). Les workers en grille, le réseau en bas."""
     now = utcnow()
     client = ctx.client
-    lines = [f"Mode **{ctx.settings.mode_label}** · démarré le {paris(started_at)} (il y a {ago(now - started_at)})"]
+    mode, _, spacing = ctx.settings.mode_label.partition(", ")
+    expiry = client.session_expiry()
+    auto = client.auto_refresh()
+    session = (f"session valable jusqu'à {paris(expiry)[-5:]}" if expiry else "session : expiration inconnue") + \
+        (" (auto)" if auto == "actif" else f" · renouvellement {auto}")
+    lines = [f"{mode.capitalize()} · démarré il y a {ago(now - started_at)} · {session}"]
     color = GREEN
     if client.halted:
         lines.append(f"🛑 **Arrêté par la garde** : {client.halted}\nPour reprendre : `rm data/HALT` dans la console, "
                      "puis redémarre la stack.")
         color = RED
-    if client.session_ok:
-        lines.append(f"✅ Session : {client.session_status()}")
-    else:
+    if not client.session_ok:
         lines.append("❌ **Session en pause** : les workers attendent un nouveau cookie.")
         color = RED
     sniper = next((w for w in workers if isinstance(w, AuctionSniper)), None)
     if sniper is not None and sniper.antibot_since:
         lines.append(f"🛑 **Vérification anti-bot** demandée depuis {paris(sniper.antibot_since)} · "
-                     f"{sniper.antibot_missed} mise(s) non placée(s). Fais-la dans ton navigateur, puis "
-                     "« Vérification faite ».")
+                     f"{plural(sniper.antibot_missed, 'mise non placée', 'mises non placées')}. Fais-la dans ton "
+                     "navigateur, puis « Vérification faite ».")
         color = RED if color == RED else ORANGE
-    lines.append(f"💾 Sauvegarde : {backup.describe(ctx.last_backup)}")
+    lines.append(f"💾 Sauvegarde {backup.describe(ctx.last_backup)}")
     if routes := client.paused_routes():
         lines.append("⏳ Routes du site en pause : " + ", ".join(f"{name} ({ago(timedelta(seconds=left))})"
                                                                for name, left in sorted(routes.items())))
-    last = ctx.last_stats
-    passes = last.get("workers", {})
-    states = [f"**{w.name}** : {worker_line(w, now, client.session_ok)}"
-              + (f" · {text}" if (text := passes_text(passes.get(w.name, {}))) else "") for w in workers]
-    if color == GREEN and any(w.paused or w.errors_in_a_row for w in workers):
-        color = ORANGE
-    embed = discord.Embed(title="État du bot", description="\n".join(lines), color=color)
-    for i, value in enumerate(fields(states)):
-        embed.add_field(name="Workers" if i == 0 else "\u200b", value=value, inline=False)
-    if last:
-        embed.add_field(name=f"R\u00e9seau ({last['seconds'] / 60:.0f} min jusqu'\u00e0 {paris(last['at'])})",
-                        value="\n".join(network_lines(last["net"], last["seconds"], top=4))[:1024], inline=False)
+    cells, problems = [], []
+    for w in workers:
+        cell, problem = worker_cell(w, now, client.session_ok)
+        cells.append(cell)
+        if problem and not (w is sniper and sniper.antibot_since):  # déjà dit au-dessus
+            problems.append(f"• {problem}")
+    if problems:
+        lines += ["", "**À vérifier**", *problems]
+        color = RED if color == RED else ORANGE
+    embed = discord.Embed(title="État du bot", description="\n".join(lines)[:4000], color=color)
+    per_column = -(-len(cells) // 3)
+    for i in range(0, len(cells), per_column):
+        embed.add_field(name="Workers" if i == 0 else "\u200b", value="\n".join(cells[i:i + per_column]), inline=True)
+    if last := ctx.last_stats:
+        embed.add_field(name="\u200b", inline=False,
+                        value=f"🌐 Réseau ({last['seconds'] / 60:.0f} min) : {network_brief(last['net'])}")
+    if spacing:
+        embed.set_footer(text=spacing[:1].upper() + spacing[1:2048])
     return embed
 
 
@@ -196,39 +201,98 @@ def fields(lines: list[str], limit: int = 1024) -> list[str]:
     return out
 
 
-def positions_text(rows) -> str:
-    """Une ligne par position (sans bloc de code : lisible sur un téléphone)."""
+def verify_embed(text: str) -> discord.Embed:
+    """Réponse à « vérification faite » : verte si une vérification attendait, grise sinon."""
+    return discord.Embed(title="✅ Vérification signalée" if text.startswith("👍") else "Rien à vérifier",
+                         description=text.removeprefix("👍 "), color=GREEN if text.startswith("👍") else GREY)
+
+
+def short_time(value: str | datetime | None) -> str:
+    """« 03:53 » aujourd'hui, « 02/11 03:53 » un autre jour."""
+    text = paris(value)
+    return text[-5:] if text[:5] == f"{timeutils.now_local():%d/%m}" else text
+
+
+def resumed_embed(resumed: list[str]) -> discord.Embed:
+    if not resumed:
+        return discord.Embed(title="Rien n'était en pause", color=GREY)
+    return discord.Embed(title=f"▶️ Repris : {', '.join(resumed)}", color=GREEN)
+
+
+POSITION_GROUPS = [("🏷️ En vente", ("posted", "uncertain", "simulated")), ("🕒 Programmées", ("scheduled", "waiting")),
+                   ("⏳ Sans vente prévue", (None,))]
+
+
+def positions_embed(rows) -> discord.Embed:
+    """/positions : le capital immobilisé et le gain visé en tête, puis les positions par état de leur vente, une ligne
+    chacune : achat → prix de vente (gain)."""
     if not rows:
-        return "Aucune position détenue."
-    lines = []
+        return discord.Embed(title="💼 Positions (0)", description="Aucune position détenue.", color=GREY)
+    mixed = len({r["rarity"] for r in rows}) > 1
+    groups: dict[str, list[str]] = {name: [] for name, _ in POSITION_GROUPS}
+    target = 0
     for r in rows:
-        sim = " *(simulée)*" if r["dry_run"] else ""
-        if r["listing_status"] in ("posted", "uncertain", "simulated"):
-            sale = f"🏷️ en vente {wb(r['listing_price'])} WB, fin {paris(r['listing_end'])}"
-        elif r["listing_status"]:
-            sale = f"🕒 vente programmée à {wb(r['listing_price'])} WB"
+        name = next((n for n, statuses in POSITION_GROUPS if r["listing_status"] in statuses), POSITION_GROUPS[-1][0])
+        label = f"{r['rarity'] or '?'} · " if mixed else ""
+        label += f"**{r['title'][:50]}**" + (" ✨" if r["is_shiny"] else "") + (" *(simulée)*" if r["dry_run"] else "")
+        if r["listing_price"]:
+            target += r["listing_price"] - r["amount"]
+            line = f"{label} · {wb(r['amount'])} → {wb(r['listing_price'])} WB " \
+                   f"({wb(r['listing_price'] - r['amount'], True)})"
+            if r["listing_status"] in POSITION_GROUPS[0][1] and r["listing_end"]:
+                line += f" · fin {short_time(r['listing_end'])}"
         else:
-            sale = "⏳ attend une place de vente"
-        lines.append(f"**{r['rarity'] or '?'}** {r['title'][:60]}{sim}\nachetée {wb(r['amount'])} WB · {sale}")
-    return "\n".join(lines)
+            line = f"{label} · achetée {wb(r['amount'])} WB"
+        groups[name].append(line)
+    capital = sum(r["amount"] for r in rows if not r["dry_run"])
+    embed = discord.Embed(title=f"💼 Positions ({len(rows)})", color=COLOR,
+                          description=f"**{wb(capital)} WB** immobilisés · gain visé {wb(target, True)} WB")
+    add_groups(embed, groups)
+    return embed
 
 
-def listings_text(rows) -> str:
+LISTING_GROUPS = [("🏷️ En cours", ("posted",)), ("🕒 Programmées", ("scheduled",)), ("⏳ En attente d'une place", ("waiting",)),
+                  ("❓ À vérifier", ("uncertain",)), ("🧪 Simulées", ("simulated",))]
+
+
+def listings_embed(rows) -> discord.Embed:
+    """/ventes : par état (en cours, programmées…), une ligne par vente : prix, fin ou publication prévue."""
     if not rows:
-        return "Aucune vente programmée ni en cours."
-    lines = []
+        return discord.Embed(title="🏷️ Ventes (0)", description="Aucune vente programmée ni en cours.", color=GREY)
+    mixed = len({r["rarity"] for r in rows}) > 1
+    groups: dict[str, list[str]] = {name: [] for name, _ in LISTING_GROUPS}
     for r in rows:
-        when = f"fin {paris(r['target_end'])}" if r["status"] != "scheduled" else f"publiée {paris(r['post_at'])}"
-        kind = {"scheduled": "🕒 programmée", "simulated": "🧪 simulée", "uncertain": "❓ à vérifier",
-                "waiting": "⏳ en attente"}.get(r["status"], "🏷️ en cours")
-        lines.append(f"**{r['rarity'] or '?'}** {r['title'][:60]}\n{wb(r['base_amount'])} WB · {kind} · {when}")
-    return "\n".join(lines)
+        name = next((n for n, statuses in LISTING_GROUPS if r["status"] in statuses), LISTING_GROUPS[0][0])
+        label = (f"{r['rarity'] or '?'} · " if mixed else "") + f"**{r['title'][:50]}** · {wb(r['base_amount'])} WB"
+        if r["status"] in ("posted", "uncertain", "simulated") and r["target_end"]:
+            label += f" · fin {short_time(r['target_end'])}"
+        elif r["post_at"]:  # heure passée : elle attend qu'une place de vente se libère
+            past = datetime.fromisoformat(r["post_at"]) <= utcnow()
+            label += f" · {'attend une place depuis' if past else 'prévue'} {short_time(r['post_at'])}"
+        groups[name].append(label)
+    embed = discord.Embed(title=f"🏷️ Ventes ({len(rows)})", color=COLOR,
+                          description=f"**{wb(sum(r['base_amount'] for r in rows))} WB** au prix de départ")
+    add_groups(embed, groups)
+    return embed
+
+
+def add_groups(embed: discord.Embed, groups: dict[str, list[str]]) -> None:
+    """Un bloc par groupe non vide (« 🕒 Programmées (22) »), coupé en champs de 1024 caractères ; au-delà de la
+    limite d'un message (6000), la suite est remplacée par un renvoi."""
+    used = len(embed.description or "") + len(embed.title or "")
+    for name, lines in groups.items():
+        for i, value in enumerate(fields(lines)):
+            if used + len(value) > 5500:
+                embed.add_field(name="\u200b", value="… et d'autres, trop pour un message", inline=False)
+                return
+            embed.add_field(name=f"{name} ({len(lines)})" if i == 0 else "\u200b", value=value, inline=False)
+            used += len(value) + len(name)
 
 
 def snipes_text(found: dict[str, snipes.Snipe]) -> str:
     if not found:
-        return "Aucune carte demandée. /snipe pour en ajouter une."
-    return "\n".join(f"🎯 **{s.label}** (depuis le {paris(s.added_at)})" for s in found.values())
+        return "Aucune carte demandée."
+    return "\n".join(f"• **{s.label}** · depuis le {paris(s.added_at)}" for s in found.values())
 
 
 class Confirm(discord.ui.View):
@@ -311,7 +375,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         return "Aucune vérification en attente : les mises passent."
 
     async def verify_pressed(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(verify("bouton « C'est fait »"))
+        await interaction.response.send_message(embed=verify_embed(verify("bouton « C'est fait »")))
 
     def pause_label(name: str) -> str:
         worker = next((w for w in workers if w.name == name), None)
@@ -452,22 +516,27 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @tree.command(name="sauvegarde", description="Sauvegarder la base maintenant (avant un gros changement)")
     async def sauvegarde(interaction: discord.Interaction) -> None:
         if not s.enable_backup:
-            await interaction.response.send_message("Sauvegardes désactivées (ENABLE_BACKUP).")
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Sauvegardes désactivées", description="ENABLE_BACKUP=false : aucune sauvegarde n'est faite.",
+                color=GREY))
             return
         await interaction.response.defer(thinking=True)
         try:
             result = await backup.run_backup(ctx)
         except Exception as exc:  # noqa: BLE001 - l'erreur est dite à l'utilisateur
             log.exception("Sauvegarde demandée impossible")
-            await interaction.followup.send(f"❌ Sauvegarde impossible : {type(exc).__name__} : {exc}"[:1900])
+            await interaction.followup.send(embed=discord.Embed(
+                title="❌ Sauvegarde impossible", description=f"{type(exc).__name__} : {exc}"[:4000], color=RED))
             return
-        await interaction.followup.send(f"💾 **{result.path.name}** : {result.size >> 20} Mo (base "
-                                        f"{result.db_size >> 20} Mo) en {result.seconds:.0f} s. "
-                                        f"{s.backup_keep} sauvegardes gardées au plus.")
+        embed = discord.Embed(title="💾 Sauvegarde faite", color=GREEN,
+                              description=f"`{result.path.name}`\n{result.size >> 20} Mo (base {result.db_size >> 20} "
+                                          f"Mo) en {result.seconds:.0f} s")
+        embed.set_footer(text=f"{s.backup_keep} sauvegardes gardées au plus")
+        await interaction.followup.send(embed=embed)
 
     @tree.command(name="verif-faite", description="Vérification anti-bot faite : les mises reprennent sans attendre")
     async def verif_faite(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(verify("/verif-faite"))
+        await interaction.response.send_message(embed=verify_embed(verify("/verif-faite")))
 
     @tree.command(name="pause", description="Mettre le sniper, les ventes ou tout le bot en pause")
     @app_commands.describe(quoi="sniper par défaut", duree="1 h par défaut")
@@ -481,20 +550,21 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         until = utcnow() + timedelta(minutes=minutes) if minutes else None
         paused = await pauses.pause(ctx, [n for n in names if any(w.name == n for w in workers)], until)
         if not paused:
-            await interaction.response.send_message(f"Rien à mettre en pause : « {what} » n'est pas actif.")
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Rien à mettre en pause", description=f"« {what} » n'est pas actif.", color=GREY))
             return
         log.info("Discord : pause de %s jusqu'à %s", ", ".join(paused), until or "/reprise")
-        end = f"jusqu'à {until.astimezone(timeutils.PARIS):%H:%M}" if until else "jusqu'à /reprise"
-        text = (f"⏸️ **{', '.join(paused)}** en pause {end}.\nLes mises déjà placées et les ventes en cours ne "
-                "sont pas annulées ; leurs résultats sont relus à la reprise.")
+        end = f"Jusqu'à {until.astimezone(timeutils.PARIS):%H:%M}" if until else "Jusqu'à /reprise"
+        embed = discord.Embed(title=f"⏸️ En pause : {', '.join(paused)}", color=GREY,
+                              description=f"{end}.\nLes mises déjà placées et les ventes en cours continuent ; leurs "
+                                          "résultats sont relus à la reprise.")
 
         async def resume_now(button_interaction: discord.Interaction) -> None:
             resumed = await pauses.resume(ctx, paused)
             log.info("Discord : reprise de %s (bouton)", ", ".join(resumed) or "rien")
-            await button_interaction.response.edit_message(
-                content=f"▶️ Repris : {', '.join(resumed) or 'déjà repris'}.", view=None)
+            await button_interaction.response.edit_message(embed=resumed_embed(resumed), view=None)
 
-        await interaction.response.send_message(text, view=Buttons(s.discord_owner_id, [
+        await interaction.response.send_message(embed=embed, view=Buttons(s.discord_owner_id, [
             ("▶️ Reprendre", discord.ButtonStyle.primary, resume_now)]))
 
     @tree.command(name="reprise", description="Reprendre ce qui est en pause")
@@ -504,8 +574,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         names = PAUSE_TARGETS[quoi.value] if quoi else None
         resumed = await pauses.resume(ctx, names)
         log.info("Discord : reprise de %s", ", ".join(resumed) or "rien")
-        await interaction.response.send_message(f"▶️ Repris : {', '.join(resumed)}." if resumed
-                                                else "Rien n'était en pause.")
+        await interaction.response.send_message(embed=resumed_embed(resumed))
 
     @client.event
     async def on_ready() -> None:
@@ -520,10 +589,12 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @tree.command(name="bilan", description="Le bilan du jour, comme celui du soir")
     async def bilan(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        _, description, sections = await cli.daily_report_parts(ctx)
-        embed = discord.Embed(title=f"Bilan du {timeutils.now_local():%d/%m} (à {timeutils.now_local():%H:%M})",
-                              description=description, color=COLOR)
-        for name, value in sections:
+        report = await cli.daily_report_parts(ctx)
+        embed = discord.Embed(title=f"📊 Bilan du {timeutils.now_local():%d/%m} · {timeutils.now_local():%H:%M}",
+                              description=report.description, color=COLOR)
+        for name, value in report.columns:
+            embed.add_field(name=name, value=value[:1024] or "—", inline=True)
+        for name, value in report.sections:
             embed.add_field(name=name, value=value[:1024] or "—", inline=False)
         await interaction.followup.send(embed=embed)
 
@@ -531,8 +602,12 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @app_commands.describe(jours="nombre de jours, aujourd'hui compris (7 par défaut)")
     async def roi(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 60] = 7) -> None:
         report = await cli.roi_report(ctx, jours)
-        head, days = roi_discord(report)
-        embed = discord.Embed(title=f"ROI des reventes · {jours} jour(s)", description=head, color=COLOR)
+        head, columns, days = roi_discord(report)
+        profit = report.totals.profit
+        embed = discord.Embed(title=f"📈 ROI des reventes · {plural(jours, 'jour')}", description=head,
+                              color=GREEN if profit > 0 else RED if profit < 0 else GREY)
+        for name, value in columns:
+            embed.add_field(name=name, value=value, inline=True)
         for i, value in enumerate(fields(days)):
             embed.add_field(name="Par jour" if i == 0 else "\u200b", value=value, inline=False)
         files = []
@@ -550,19 +625,20 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         await interaction.response.defer(thinking=True)
         balance = await ctx.api.balance()
         held = await ctx.db.positions_summary()
-        text = f"Solde : **{balance} WB**\nPositions : {held['real_count']} détenue(s), {held['real_cost']} WB " \
-               f"immobilisés\nTotal : **{balance + held['real_cost']} WB**"
-        await reply(interaction, "Solde", text, code=False)
+        embed = discord.Embed(title=f"💰 Solde : {wb(balance)} WB", color=COLOR)
+        embed.add_field(name="Positions", inline=True,
+                        value=f"{wb(held['real_cost'])} WB ({plural(held['real_count'], 'carte')})")
+        embed.add_field(name="Solde + positions", value=f"**{wb(balance + held['real_cost'])} WB**", inline=True)
+        embed.set_footer(text="/valeur : la valeur complète du compte (cartes, ventes en cours)")
+        await interaction.followup.send(embed=embed)
 
     @tree.command(name="positions", description="Cartes achetées pour la revente, pas encore revendues")
     async def positions(interaction: discord.Interaction) -> None:
-        rows = await ctx.db.held_positions()
-        await reply(interaction, f"Positions ({len(rows)})", positions_text(rows), code=False)
+        await interaction.response.send_message(embed=positions_embed(await ctx.db.held_positions()))
 
     @tree.command(name="ventes", description="Ventes programmées et en cours")
     async def ventes(interaction: discord.Interaction) -> None:
-        rows = await ctx.db.open_listings()
-        await reply(interaction, f"Ventes ({len(rows)})", listings_text(rows), code=False)
+        await interaction.response.send_message(embed=listings_embed(await ctx.db.open_listings()))
 
     @tree.command(name="prix", description="Ventes observées d'une carte, estimation du bot, ventes en cours")
     @app_commands.describe(titre="titre exact de la carte", shiny="exemplaires shiny seulement (non par défaut)")
@@ -577,25 +653,51 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                         "dans la liste qui s'affiche pendant la frappe.", code=False)
             return
         name = f"{exact or titre} ✨" if shiny else exact or titre
-        await reply(interaction, name[:250], await cli.prices_status(ctx, exact or titre, md=True, shiny=shiny),
-                    code=False)
+        embed, file = text_embed(name[:250], await cli.prices_status(ctx, exact or titre, md=True, shiny=shiny),
+                                 code=False)
+        embed.set_footer(text=cli.PRICES_FOOTER)
+        from src.discord_cards import card_image  # même module chargé par build_client
+        if image := await card_image(ctx, exact or titre):
+            embed.set_thumbnail(url=image)
+        await interaction.followup.send(embed=embed, **({"file": file} if file else {}))
 
     @tree.command(name="collection", description="Avancement des collections et cartes manquantes")
     async def collection(interaction: discord.Interaction) -> None:
         state = await ctx.db.kv_get("collection")
+        if not state:
+            await interaction.response.send_message(embed=discord.Embed(
+                title="📅 Collection", description="Pas encore lue : le worker collection la lit au démarrage.",
+                color=GREY))
+            return
         by_key = targets(ctx)
-        lines = progress_lines(state, by_key, utcnow(), days=7)
-        if state:
-            missing = [by_key.get(k, k) for k in state["missing"]]
-            lines.append(f"\n**Manquantes ({len(missing)})** : " + (", ".join(missing) or "aucune"))
-            lines.append(f"Mise max. par carte manquante : {s.collection_max_price} WB (/plafond-collection)")
-        await reply(interaction, "Collection", "\n".join(lines), code=False)
+        progress = progress_text(state)
+        missing = [by_key.get(k, k) for k in state["missing"]]
+        lines = progress[1:] if len(progress) == 1 else []
+        recent = recent_cards(state, utcnow())
+        if recent:
+            names = ", ".join(f"{by_key.get(k, k)} ({at.astimezone(timeutils.PARIS):%d/%m})" for at, k in recent[:5])
+            lines.append(f"+{len(recent)} en 7 jours · dernières : {names}{'…' if len(recent) > 5 else ''}")
+        else:
+            lines.append("Aucune nouvelle carte en 7 jours")
+        if missing:
+            lines.append(f"\n**Manquantes ({len(missing)})** : " + ", ".join(missing))
+        embed = discord.Embed(title="📅 " + (progress[0] if len(progress) == 1 else "Collection"),
+                              description="\n".join(([*progress, ""] if len(progress) > 1 else []) + lines)[:4000],
+                              color=COLOR if missing else GREEN)
+        embed.set_footer(text=f"Plafond par carte manquante : {s.collection_max_price} WB · /plafond-collection")
+        await interaction.response.send_message(embed=embed)
 
     @tree.command(name="sniper", description="Récap des enchères misées par le sniper")
     @app_commands.describe(heures="période, en heures (24 par défaut)")
     async def sniper_report(interaction: discord.Interaction, heures: app_commands.Range[float, 1, 168] = 24) -> None:
-        text = await cli.sniper_report_status(ctx, heures, True)  # en gras (**…**) : pas de bloc de code
-        await reply(interaction, f"Sniper, {heures:g} dernières heures", text, code=False)
+        until = utcnow()
+        since = until - timedelta(hours=heures)
+        _, summary, _ = await cli.sniper_report(ctx.db, since, until, s.sale_fee_pct)
+        embed = discord.Embed(title=f"🎯 Sniper · {plural(heures, 'dernière heure', 'dernières heures')}",
+                              description=summary[:4000], color=COLOR)
+        embed.set_footer(text=f"Du {paris(since)} au {paris(until)} · le détail de chaque enchère dans le récap de "
+                              f"{s.sniper_report_time:%H:%M}")
+        await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------ actions
     @tree.command(name="snipe", description="Demander une carte au sniper : il la mise jusqu'à ta mise maximale")
@@ -615,26 +717,35 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         elif not s.is_live("collection_bid"):
             notes.append("ℹ️ Mises de collection simulées (DRY_RUN / SIMULATE) : la mise sera simulée.")
         label = snipes.Snipe(titre, prix_max, rarity, shiny=shiny).label
-        embed = discord.Embed(title="Demander cette carte ?", color=COLOR,
-                              description=f"**{label}**\nMise au minimum, jusqu'à {prix_max} WB ; gardée, pas "
-                                          "revendue." + ("\n\n" + "\n".join(notes) if notes else ""))
+        embed = discord.Embed(title=f"🎯 Demander {label} ?", color=ORANGE if notes else COLOR,
+                              description="\n".join([f"Le sniper la mise au minimum, jusqu'à **{wb(prix_max)} WB**. "
+                                                     "Gagnée, elle est gardée, pas revendue.", *notes]))
+        await interaction.response.defer()
+        from src.discord_cards import card_image  # même module chargé par build_client
+        if image := await card_image(ctx, titre):
+            embed.set_thumbnail(url=image)
         view = Confirm(s.discord_owner_id)
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)  # le message modifié ensuite
         await view.wait()
         if not view.value:
-            embed.title, embed.color = ("Annulé" if view.value is False else "Annulé (pas de réponse)"), 0x99AAB5
+            embed.title = "Demande annulée" if view.value is False else "Demande annulée (pas de réponse)"
+            embed.color = GREY
             await interaction.edit_original_response(embed=embed, view=None)
             return
         added = await snipes.add(ctx.db, titre, prix_max, rarity, shiny)
         if sniper is not None:
             await sniper.reload_snipes()
         log.info("Discord : carte demandée %s", added.label)
-        embed.title, embed.color = "Carte demandée", 0x57F287
+        embed.title, embed.color = f"🎯 Carte demandée : {added.label}", GREEN
         await interaction.edit_original_response(embed=embed, view=None)
 
     @tree.command(name="snipes", description="Cartes demandées au sniper")
     async def snipes_list(interaction: discord.Interaction) -> None:
-        await reply(interaction, "Cartes demandées", snipes_text(await snipes.load(ctx.db)), code=False)
+        found = await snipes.load(ctx.db)
+        embed = discord.Embed(title=f"🎯 Cartes demandées ({len(found)})", description=snipes_text(found)[:4000],
+                              color=COLOR if found else GREY)
+        embed.set_footer(text="/snipe pour en ajouter une · /annuler pour en retirer une")
+        await interaction.response.send_message(embed=embed)
 
     async def snipe_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         return [app_commands.Choice(name=sn.label[:100], value=sn.title[:100])
@@ -647,8 +758,18 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         removed = await snipes.remove(ctx.db, titre)
         if sniper is not None:
             await sniper.reload_snipes()
-        text = f"Retirée : {removed.label}" if removed else f"« {titre} » n'était pas demandée."
-        await reply(interaction, "Carte demandée", text, code=False)
+        if not removed:
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Rien à annuler", description=f"« {titre} » n'était pas demandée au sniper.", color=GREY))
+            return
+        await interaction.response.defer()
+        embed = discord.Embed(title=f"🎯 Demande annulée : {removed.title}", color=GREY,
+                              description=f"Le sniper ne la mise plus (il allait jusqu'à {wb(removed.max_price)} WB"
+                                          + (f", {removed.rarity} seulement" if removed.rarity else "") + ").")
+        from src.discord_cards import card_image  # même module chargé par build_client
+        if image := await card_image(ctx, removed.title):
+            embed.set_thumbnail(url=image)
+        await interaction.followup.send(embed=embed)
 
     return client
 

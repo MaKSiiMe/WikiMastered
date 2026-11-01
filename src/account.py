@@ -97,9 +97,10 @@ async def account_value(ctx: Context, snapshot: dict, balance: int | None = None
             "previous": previous[-1] if previous else None}
 
 
-async def bilan_text(ctx: Context, balance: int | None) -> str | None:
-    """Bloc « Compte » du bilan du soir : total et évolution, d'après la dernière collection comptée (jamais relue
-    pour le bilan : None si elle a plus de 24 h ou n'existe pas)."""
+async def bilan_text(ctx: Context, balance: int | None) -> tuple[str, list[tuple[str, str]]] | None:
+    """Haut du bilan du soir : total du compte et évolution, puis solde, cartes, ventes (et mises en tête) côte à côte,
+    d'après la dernière collection comptée (jamais relue pour le bilan : None si elle a plus de 24 h ou n'existe
+    pas)."""
     snapshot = await ctx.db.kv_get(KV_KEY)
     if not snapshot or utcnow() - datetime.fromisoformat(snapshot["at"]) > timedelta(hours=24):
         return None
@@ -108,5 +109,8 @@ async def bilan_text(ctx: Context, balance: int | None) -> str | None:
     if value["previous"]:
         day, before = value["previous"]
         change = f" ({wb(value['total'] - before, True)} WB depuis le {day[8:10]}/{day[5:7]})"
-    return (f"**{wb(value['total'])} WB**{change}\nSolde {wb(value['balance'])} · cartes {wb(value['cards'])} · "
-            f"en vente {wb(value['selling'])} · mises en tête {wb(value['bids'])}")
+    columns = [("Solde", f"{wb(value['balance'])} WB"), ("Cartes", f"{wb(value['cards'])} WB"),
+               ("En vente", f"{wb(value['selling'])} WB")]
+    if value["bids"]:
+        columns.append(("Mises en tête", f"{wb(value['bids'])} WB"))
+    return f"Compte : **{wb(value['total'])} WB**{change}", columns

@@ -30,6 +30,7 @@ import statistics as st
 import sys
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
 from src.account import bilan_text as account_bilan
@@ -48,7 +49,7 @@ from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sl
 from src.overrides import load as load_overrides
 from src.pauses import load as load_pauses
 from src.recap import recap_loop
-from src.roi import Roi, roi, roi_text
+from src.roi import Roi, plural, roi, roi_text, wb
 from src.sniper_backtest import cases_from
 from src.sniper_backtest import render as backtest_text
 from src.sniper_report import breakdown, sniper_report
@@ -144,13 +145,24 @@ async def build_context(settings: Settings):
 
 
 async def daily_report(ctx: Context, *, send: bool = True) -> dict:
-    stats, description, sections = await daily_report_parts(ctx)
+    report = await daily_report_parts(ctx)
     if send:
-        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", description, topic=Topic.REPORT, sections=sections)
-    return stats
+        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", report.description, topic=Topic.REPORT,
+                          columns=report.columns, sections=report.sections)
+    return report.stats
 
 
-async def daily_report_parts(ctx: Context) -> tuple[dict, str, list[tuple[str, str]]]:
+@dataclass
+class Report:
+    """Bilan du jour : la ligne du haut, les chiffres clés côte à côte, puis un bloc par activité."""
+
+    stats: dict
+    description: str
+    columns: list[tuple[str, str]]
+    sections: list[tuple[str, str]]
+
+
+async def daily_report_parts(ctx: Context) -> Report:
     """Chiffres du jour, puis le bilan tel qu'envoyé le soir (aussi demandé par /bilan sur Discord)."""
     since = local_dt(now_local().date(), time(0, 0))
     stats = await ctx.db.report(since)
@@ -159,53 +171,56 @@ async def daily_report_parts(ctx: Context) -> tuple[dict, str, list[tuple[str, s
     except Exception:  # noqa: BLE001 - le bilan part même sans solde
         stats["balance"] = "?"
     description, sections = report_sections(stats, live_bids=ctx.settings.is_live("place_bid"))
-    extra = []
     if not ctx.settings.is_live("place_bid"):  # sniper simulé : on juge la simulation
-        extra.append(validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales)))
+        sections.append(as_section(validation_text(await ctx.db.validation_stats(since,
+                                                                                 ctx.settings.price_min_sales))))
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
-        extra.append(summary_line(await ctx.db.kv_get("collection"), targets(ctx)))
-    sections += [as_section(text) for text in extra]
+        sections.append((Topic.COLLECTION.value, summary_line(await ctx.db.kv_get("collection"), targets(ctx))))
+    columns: list[tuple[str, str]] = []
     try:
         value = await account_bilan(ctx, stats["balance"] if isinstance(stats["balance"], int) else None)
     except Exception:  # noqa: BLE001 - le bilan part sans la valeur du compte
         log.exception("Valeur du compte indisponible pour le bilan")
         value = None
     if value:
-        sections.insert(0, ("Compte", value))
-    return stats, description, sections
+        description, columns = value
+    return Report(stats, description, columns, sections)
 
 
 def report_sections(stats: dict, *, live_bids: bool) -> tuple[str, list[tuple[str, str]]]:
-    """Bilan du soir : le solde en tête, puis un bloc par activité de la journée."""
+    """Bilan du soir : le solde en tête, puis un bloc par activité de la journée, sans les compteurs à zéro."""
     balance = stats["balance"]
-    description = f"Solde : **{balance} WB**" if isinstance(balance, int) else "Solde : inconnu"
+    description = f"Solde : **{wb(balance)} WB**" if isinstance(balance, int) else "Solde : inconnu"
     # Positions simulées et mises de collection réelles (SIMULATE=sniper) : les deux comptes, sinon les cartes
     # gagnées (toujours réelles) semblaient venir des mises simulées.
     rejected = stats.get("bids_rejected", 0)
-    counts = [f"{stats['bids_placed']} mise(s) placée(s)" if live_bids or stats["bids_placed"] else "",
-              f"{rejected} refusée(s) par le site" if rejected else "",
-              f"{stats['bids_simulated']} mise(s) simulée(s)" if not live_bids or stats["bids_simulated"] else ""]
-    bids = ", ".join(c for c in counts if c)
-    won = [f"{stats['auctions_won']} position(s) pour {stats['spent_won']} WB" if stats["auctions_won"] else "",
-           f"{stats.get('won_collection', 0)} carte(s) de collection pour {stats.get('spent_collection', 0)} WB"
-           if stats.get("won_collection") else ""]
-    if any(won):
-        bids += "\nGagnées : " + ", ".join(w for w in won if w)
-    sales = [f"{stats['doublons_vendus']} doublon(s) vendu(s) pour {stats['doublons_recette']} WB"]
-    if stats["listings_posted"] or stats["listings_scheduled"]:
-        sales.append(f"{stats['listings_posted']} mise(s) en vente, {stats['listings_scheduled']} programmée(s)")
-    if stats["discarded"]:
-        sales.append(f"{stats['discarded']} carte(s) défaussée(s)")
-    positions = [f"{stats['positions_held']} réelle(s) détenue(s), {stats['capital_in_positions']} WB immobilisés"]
+    bids = [plural(stats["bids_placed"], "mise placée", "mises placées")
+            if live_bids or stats["bids_placed"] else "",
+            plural(rejected, "refusée", "refusées") + " par le site" if rejected else "",
+            plural(stats["bids_simulated"], "mise simulée", "mises simulées")
+            if not live_bids or stats["bids_simulated"] else ""]
+    won = [f"{plural(stats['auctions_won'], 'position gagnée', 'positions gagnées')} ({wb(stats['spent_won'])} WB)"
+           if stats["auctions_won"] else "",
+           f"{plural(stats.get('won_collection', 0), 'carte de collection', 'cartes de collection')} "
+           f"({wb(stats.get('spent_collection', 0))} WB)" if stats.get("won_collection") else ""]
+    sniper = " · ".join(b for b in bids if b) + ("\n" + " · ".join(w for w in won if w) if any(won) else "")
+    positions = [f"{plural(stats['positions_held'], 'détenue', 'détenues')} · "
+                 f"{wb(stats['capital_in_positions'])} WB immobilisés"]
     if stats.get("positions_held_sim"):
-        positions.append(f"{stats['positions_held_sim']} simulée(s) ("
-                         f"{stats.get('capital_simulated', 0)} WB fictifs)")
+        positions.append(f"{plural(stats['positions_held_sim'], 'simulée', 'simulées')} "
+                         f"({wb(stats.get('capital_simulated', 0))} WB fictifs)")
     if stats["positions_sold"]:
-        positions.append(f"{stats['positions_sold']} revendue(s), bénéfice {stats['profit']:+d} WB")
+        positions.append(f"{plural(stats['positions_sold'], 'revendue', 'revendues')} · "
+                         f"bénéfice **{wb(stats['profit'], True)} WB**")
     if stats["profit_simulated"]:
-        positions.append(f"Bénéfice simulé : {stats['profit_simulated']:+d} WB")
-    return description, [("Sniper", bids), ("Ventes", "\n".join(sales)),
-                         ("Positions", "\n".join(positions))]
+        positions.append(f"Bénéfice simulé : {wb(stats['profit_simulated'], True)} WB")
+    sales = [plural(stats["listings_posted"], "en vente", "en vente") if stats["listings_posted"] else "",
+             plural(stats["listings_scheduled"], "programmée", "programmées") if stats["listings_scheduled"] else "",
+             f"{plural(stats['doublons_vendus'], 'doublon vendu', 'doublons vendus')} "
+             f"({wb(stats['doublons_recette'])} WB)" if stats["doublons_vendus"] else "",
+             plural(stats["discarded"], "carte défaussée", "cartes défaussées") if stats["discarded"] else ""]
+    return description, [(Topic.SNIPER.value, sniper), ("💼 Positions", "\n".join(positions)),
+                         (Topic.SALES.value, " · ".join(x for x in sales if x) or "rien aujourd'hui")]
 
 
 def as_section(text: str) -> tuple[str, str]:
@@ -355,13 +370,12 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
                 md: bool = False, resale: dict[tuple[str, bool], Quote] | None = None, fee: float = 0.0,
                 shiny: bool = False) -> str:
     """Ventes observées d'une carte, estimation du bot, achats du bot et ventes en cours (commande prices).
-    `md` : version Discord (/prix), lignes courtes en markdown, sans bloc de code. `resale` : revente estimée par
+    `md` : version Discord (/prix, voir prices_md). `resale` : revente estimée par
     (rareté, shiny) sur les ventes observées seules, d'où la mise conseillée pour l'acheter. `shiny` : les exemplaires
     shiny seuls (ventes, estimation, achats, ventes en cours), sans la cote du site qui ne les distingue pas."""
     def paris(value) -> str:
         moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
-        text = f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
-        return f"`{text}`" if md else text
+        return f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
 
     def bid_line(rarity: str, version: bool) -> str | None:
         """Mise conseillée : la plus petite dont la relance minimale (+10 %) atteint la revente (voir advised_bid)."""
@@ -373,20 +387,17 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
         kind = f"✨ shiny ({quote.count} vente(s))" if version and not shiny else "Pour revendre"
         if profit <= 0:
             return f"{kind} : revente ~{quote.average:.0f} WB, pas rentable"
-        amount = f"**{bid} WB**" if md else f"{bid} WB"
-        return (f"{kind} : miser {amount} au plus (revente ~{quote.average:.0f} WB, médiane des dernières ventes "
+        return (f"{kind} : miser {bid} WB au plus (revente ~{quote.average:.0f} WB, médiane des dernières ventes "
                 f"sans la cote du site ; +{profit:.0f} WB)")
 
     observed = [r for r in observed if bool(r["is_shiny"]) == shiny]
     bought = [b for b in bought if bool(b["is_shiny"]) == shiny]
     selling = [a for a in selling if a.shiny == shiny]
     if md:
-        lines = (["✨ **Shiny seulement.**"] if shiny else []) + \
-            ["Ventes finies avec au moins une mise, vues par le bot (une mise de dernière seconde peut manquer)."]
-    else:
-        lines = [f"{title}{' ✨ shiny' if shiny else ''}",
-                 "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de 2 min avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais "
-                 "comptée."]
+        return prices_md(observed, bought, selling, quotes, site, me, now, resale or {}, fee, shiny)
+    lines = [f"{title}{' ✨ shiny' if shiny else ''}",
+             "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de 2 min avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais "
+             "comptée."]
     rarities = sorted({r["rarity"] for r in observed} | set(quotes), key=lambda r: -RARITY_RANK.get(r, -1))
     if not rarities:
         lines.append("  aucune")
@@ -397,30 +408,21 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
         average = site.get(rarity, (None, None))[0]
         site_text = f"{average:.0f} WB" if average is not None else "inconnue"
         if shiny:
-            lines.append(f"\n**{rarity}** ✨ · {len(sales)} vente(s) · estimation du bot **{estimate}** (médiane des 5 "
-                         f"dernières ventes shiny, sans la cote du site)" if md else
-                         f"\n{rarity} ✨ : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
+            lines.append(f"\n{rarity} ✨ : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
                          f"5 dernières ventes shiny, sans la moyenne du site)")
-        elif md:
-            lines.append(f"\n**{rarity}** · {len(sales)} vente(s) · estimation du bot **{estimate}** (médiane des 5 "
-                         f"dernières, plafonnée par la cote du site : {site_text})")
         else:
             lines.append(f"\n{rarity} : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
                          f"5 dernières, plafonnée par la moyenne du site : {site_text})")
         for version in ((True,) if shiny else (False, True)):
             if line := bid_line(rarity, version):
-                lines.append((("" if version and not shiny else "🎯 ") if md else "  ") + line)
+                lines.append("  " + line)
         for r in sales[:PRICES_SHOWN]:
             notes = []
             if r["base_amount"] and r["price"] <= r["base_amount"]:
-                notes.append("sans surenchère" if md else "au prix de départ, sans surenchère")
+                notes.append("au prix de départ, sans surenchère")
             if r["suspect"]:
                 notes.append("suspecte, ignorée")
             start = f"départ {r['base_amount']}" if r["base_amount"] else "départ ?"
-            if md:
-                lines.append(f"{paris(r['ended_at'])} **{r['price']} WB** ({start})"
-                             + (f" · {', '.join(notes)}" if notes else ""))
-                continue
             notes_text = "  " + ", ".join(notes) if notes else ""
             lines.append(f"  {paris(r['ended_at'])}  {r['price']:>6} WB  ({start}){notes_text}")
         if len(sales) > PRICES_SHOWN:
@@ -433,20 +435,79 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
             ref = f"{b['reference_price']:.0f}" if b["reference_price"] else "?"
             lines.append(f"  {paris(b['placed_at'])}  {b['rarity']}  {kind} : {b['amount']} WB, estimée ~{ref}{sold}")
     heading = f"En vente maintenant ({len(selling)})" if selling else "En vente maintenant : aucune"
-    lines.append(f"\n**{heading}**" if md else f"\n{heading}" + (" :" if selling else ""))
+    lines.append(f"\n{heading}" + (" :" if selling else ""))
     for a in sorted(selling, key=lambda a: a.min_bid):
         price = f"mise actuelle {a.current_bid}" if a.current_bid else f"départ {a.base_amount}, aucune mise"
         mine = "  (toi)" if me and (a.seller_id or "").lower() == me.lower() else ""
         left = int(a.seconds_left(now) // 60)
-        if md:
-            amount = f"**{a.current_bid} WB** (mise)" if a.current_bid else \
-                f"**{a.base_amount} WB** (départ, aucune mise)"
-            lines.append(f"`fin dans {left // 60} h {left % 60:02d}` **{a.rarity or '?'}**{' ✨' if a.shiny else ''} "
-                         f"{amount}{' · toi' if mine else ''}")
-            continue
         lines.append(f"  {a.rarity or '?':<3}{' ✨' if a.shiny else ''} {price}, fin dans {left // 60} h "
                      f"{left % 60:02d}{mine}")
     return "\n".join(lines)
+
+
+PRICES_MD_SHOWN = 10  # ventes listées par rareté sur Discord (/prix)
+PRICES_FOOTER = ("Ventes finies avec au moins une mise, vues par le bot (une mise de dernière seconde peut manquer). "
+                 "Revente : médiane des dernières ventes, sans la cote du site.")
+
+
+def prices_md(observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime,
+              resale: dict[tuple[str, bool], Quote], fee: float, shiny: bool) -> str:
+    """/prix : par rareté, l'estimation et la mise conseillée en tête, puis les dernières ventes ; ensuite les achats
+    du bot et les ventes en cours. Ce qui explique les chiffres est dans le pied du message (PRICES_FOOTER)."""
+    def when(value) -> str:
+        moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+        return f"`{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}`"
+
+    def bid_line(rarity: str, version: bool) -> str | None:
+        quote = resale.get((rarity, version))
+        if quote is None or quote.average is None:
+            return None
+        bid, profit = advised_bid(quote.average, fee)
+        kind = f"✨ Shiny ({plural(quote.count or 0, 'vente')})" if version and not shiny else "🎯 Pour revendre"
+        if profit <= 0:
+            return f"{kind} : revente ~{wb(quote.average)} WB, pas rentable"
+        return f"{kind} : miser **{wb(bid)} WB** au plus · revente ~{wb(quote.average)} WB ({wb(profit, True)})"
+
+    lines = ["✨ **Shiny seulement.**"] if shiny else []
+    rarities = sorted({r["rarity"] for r in observed} | set(quotes), key=lambda r: -RARITY_RANK.get(r, -1))
+    if not rarities:
+        lines.append("Aucune vente observée.")
+    for rarity in rarities:
+        sales = [r for r in observed if r["rarity"] == rarity]
+        quote = quotes.get(rarity)
+        estimate = f"**~{wb(quote.average)} WB**" if quote and quote.average is not None else "aucune"
+        average = site.get(rarity, (None, None))[0]
+        how = "médiane des 5 dernières ventes shiny" if shiny else \
+            "médiane des 5 dernières, plafonnée par la cote du site" + \
+            (f" ({wb(average)} WB)" if average is not None else " (inconnue)")
+        lines += ["" if lines else None, f"**{rarity}**{' ✨' if shiny else ''} · {plural(len(sales), 'vente')} · "
+                  f"estimation {estimate}", f"*{how}*"]
+        lines += [line for version in ((True,) if shiny else (False, True)) if (line := bid_line(rarity, version))]
+        for r in sales[:PRICES_MD_SHOWN]:
+            notes = [f"départ {wb(r['base_amount'])}" if r["base_amount"] else "départ ?"]
+            if r["base_amount"] and r["price"] <= r["base_amount"]:
+                notes.append("sans surenchère")
+            if r["suspect"]:
+                notes.append("⚠️ suspecte, ignorée")
+            lines.append(f"{when(r['ended_at'])} **{wb(r['price'])} WB** · {' · '.join(notes)}")
+        if len(sales) > PRICES_MD_SHOWN:
+            lines.append(f"… et {plural(len(sales) - PRICES_MD_SHOWN, 'plus ancienne', 'plus anciennes')}")
+    if bought:
+        lines += ["", "**Achats du bot**"]
+        for b in bought:
+            sold = f" · revendue {wb(b['sale_price'])} WB" if b["sale_price"] else ""
+            ref = f" (estimée ~{wb(b['reference_price'])})" if b["reference_price"] else ""
+            sim = " *(simulé)*" if b["dry_run"] else ""
+            lines.append(f"{when(b['placed_at'])} {b['rarity']} · {wb(b['amount'])} WB{ref}{sold}{sim}")
+    lines += ["", f"**En vente maintenant ({len(selling)})**" if selling else "**En vente maintenant** : aucune"]
+    for a in sorted(selling, key=lambda a: a.min_bid):
+        left = int(a.seconds_left(now) // 60)
+        amount = f"**{wb(a.current_bid)} WB** (mise)" if a.current_bid else \
+            f"**{wb(a.base_amount)} WB** (départ, aucune mise)"
+        mine = " · toi" if me and (a.seller_id or "").lower() == me.lower() else ""
+        lines.append(f"`fin dans {left // 60} h {left % 60:02d}` {a.rarity or '?'}{' ✨' if a.shiny else ''} · "
+                     f"{amount}{mine}")
+    return "\n".join(line for line in lines if line is not None)
 
 
 async def prices_status(ctx: Context, title: str, md: bool = False, shiny: bool = False) -> str:

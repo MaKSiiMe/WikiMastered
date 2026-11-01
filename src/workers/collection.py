@@ -193,9 +193,7 @@ def progress_lines(state: dict | None, titles: dict[str, str], now: datetime, da
     lines = [f"{name} : {owned}/{total} ({f'{100 * owned / total:.1f}'.replace('.', ',')} %)" if total
              else f"{name} : vide"
              for name, (owned, total) in progress.items()]
-    since = now - timedelta(days=days)
-    recent = sorted(((datetime.fromisoformat(at), key) for key, at in (state.get("first_owned") or {}).items()
-                     if at and datetime.fromisoformat(at) >= since), reverse=True)
+    recent = recent_cards(state, now, days)
     if recent:
         names = ", ".join(f"{titles.get(k, k)} ({at.astimezone(timeutils.PARIS):%d/%m})" for at, k in recent[:5])
         lines.append(f"+{len(recent)} en {days} jours : {names}{'…' if len(recent) > 5 else ''}")
@@ -273,13 +271,30 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: It
     return out
 
 
+def progress_text(state: dict) -> list[str]:
+    """« Jours de l'année : 366/366 ✅ », « Jours de l'année : 33/366 » : une par collection."""
+    progress = state.get("sets") or {"Collection": [len(state["owned"]), state["total"]]}
+    return [f"{name} : {owned}/{total}" + (" ✅" if owned >= total else "") if total else f"{name} : vide"
+            for name, (owned, total) in progress.items()]
+
+
+def recent_cards(state: dict, now: datetime, days: int = 7) -> list[tuple[datetime, str]]:
+    """(obtenue le, clé) des cartes obtenues ces `days` derniers jours, les plus récentes d'abord."""
+    since = now - timedelta(days=days)
+    return sorted(((datetime.fromisoformat(at), key) for key, at in (state.get("first_owned") or {}).items()
+                   if at and datetime.fromisoformat(at) >= since), reverse=True)
+
+
 def summary_line(state: dict | None, targets_by_key: dict[str, str]) -> str:
+    """Bloc collection du bilan : avancement, nouvelles cartes de la semaine, cartes manquantes."""
     if not state:
-        return "Collection : pas encore lue."
+        return "pas encore lue"
     missing = [targets_by_key.get(k, k) for k in state["missing"]]
-    shown = ", ".join(missing[:12]) + (f"… (+{len(missing) - 12})" if len(missing) > 12 else "")
-    progress = " · ".join(progress_lines(state, targets_by_key, utcnow()))
-    return f"**Collection** : {progress} — il manque : {shown or 'rien !'}"
+    recent = len(recent_cards(state, utcnow()))
+    line = " · ".join(progress_text(state)) + (f" · +{recent} en 7 jours" if recent else "")
+    if missing:
+        line += "\nIl manque : " + ", ".join(missing[:12]) + (f"… (+{len(missing) - 12})" if len(missing) > 12 else "")
+    return line
 
 
 class CollectionWorker(Worker):

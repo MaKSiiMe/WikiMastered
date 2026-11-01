@@ -14,10 +14,12 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from src.core import colors
+
 WIDTH, HEIGHT = 900, 420
 LEFT, RIGHT, TOP, BOTTOM = 84, 24, 58, 46
 BACKGROUND, GRID, TEXT, MUTED = "#2b2d31", "#3b3d44", "#dbdee1", "#949ba4"
-GREEN, RED, BLUE = "#3ba55c", "#ed4245", "#5865f2"
+GREEN, RED, BLUE = (f"#{c:06x}" for c in (colors.OK, colors.ALERT, colors.INFO))  # même code couleur que Discord
 MAX_VALUE_LABELS = 16  # au-delà, les barres n'ont plus de chiffre au-dessus (illisible)
 MAX_DATE_LABELS = 12
 

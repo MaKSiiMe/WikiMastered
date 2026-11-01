@@ -9,6 +9,7 @@ import pytest
 
 from src import snipes
 from src.core.models import Auction
+from src.core import colors
 from src.roi import roi, roi_discord, roi_text
 from src.workers.auction_sniper import AuctionSniper, Target, snipe_params
 from tests.test_integration import make_client, make_context, seed_observed
@@ -28,10 +29,10 @@ def test_roi_groups_resales_by_paris_day():
     day25, day26 = text.splitlines()[-2:]
     assert day25.startswith("25/10") and "+50" in day25 and "+50 %" in day25
     assert day26.startswith("26/10") and "-20" in day26 and "1 (300 WB)" in day26
-    head, days = roi_discord(report)
-    assert head.startswith("## +30 WB") and "ROI **+10,0 %**" in head
-    assert days == ["`26/10 ███·····` 🔴 **-20 WB** · -10 % · 1 vente(s) · 1 gardée(s)",
-                    "`25/10 ████████` 🟢 **+50 WB** · +50 % · 1 vente(s)"]
+    head, columns, days = roi_discord(report)
+    assert head.startswith("## +30 WB") and ("ROI", "+10,0 %") in columns
+    assert days == ["`26/10 ███·····` 🔴 **-20 WB** · -10 % · 1 vente · 1 gardée",
+                    "`25/10 ████████` 🟢 **+50 WB** · +50 % · 1 vente"]
 
 
 @pytest.mark.asyncio
@@ -47,7 +48,7 @@ async def test_snipes_are_stored_by_title(tmp_path):
     assert not only_l.matches(Auction.model_validate(sale("b", "Ada", "UR", 60)))
     # 29/10 : The Weeknd L shiny (~6 fois la L normale) ; sans « shiny », le sniper aurait gardé une L normale.
     shiny = snipes.Snipe("The Weeknd", 35000, "L", shiny=True)
-    assert shiny.label == "The Weeknd (L) ✨ shiny ≤ 35000 WB"
+    assert shiny.label == "The Weeknd (L) ✨ shiny ≤ 35 000 WB"
     assert shiny.matches(Auction.model_validate({**sale("s", "The Weeknd", "L", 60), "is_shiny": True}))
     assert not shiny.matches(Auction.model_validate(sale("n", "The Weeknd", "L", 60)))
     await snipes.add(ctx.db, "The Weeknd", 35000, "L", shiny=True)
@@ -199,7 +200,7 @@ async def test_state_shows_antibot_and_verification_done_unblocks_next_bid(tmp_p
     sniper._antibot_retry_at = datetime.now(UTC) + timedelta(minutes=10)
     ctx.pauses["inventory"] = None
     embed = state_embed(ctx, [sniper], datetime.now(UTC) - timedelta(hours=2))
-    assert "Vérification anti-bot" in embed.description and embed.color.value == 0xFEE75C
-    assert "**sniper** : 🛑" in embed.fields[0].value
+    assert "Vérification anti-bot" in embed.description and embed.color.value == colors.WARN
+    assert "🛑 sniper" in embed.fields[0].value and "À vérifier" not in embed.description  # dit une seule fois
     assert sniper.verification_done() and sniper._antibot_retry_at == _EPOCH
     await ctx.db.close()

@@ -383,18 +383,23 @@ class WikiMastersClient:
         now = time.monotonic()
         return {name: end - now for name, (end, _) in self._route_pause.items() if end > now}
 
-    def session_status(self) -> str:
+    def session_expiry(self) -> datetime | None:
         session = self.auth_session()
-        expires = session.expires_at if session else None
-        when = (datetime.fromtimestamp(expires, UTC).astimezone().strftime("%d/%m %H:%M")
-                if expires else "inconnue")
+        return datetime.fromtimestamp(session.expires_at, UTC) if session and session.expires_at else None
+
+    def auto_refresh(self) -> str:
+        """« actif », ou pourquoi le renouvellement automatique de la session ne peut pas se faire."""
+        session = self.auth_session()
         if not self.settings.supabase_anon_key:
-            auto = "inactif (SUPABASE_ANON_KEY vide)"
-        elif session is None or not session.refresh_token:
-            auto = "impossible (pas de refresh_token dans le cookie)"
-        else:
-            auto = "bloqué (jeton refusé)" if self._refresh_blocked else "actif"
-        return f"jeton d'accès valable jusqu'au {when}, renouvellement automatique {auto}"
+            return "inactif (SUPABASE_ANON_KEY vide)"
+        if session is None or not session.refresh_token:
+            return "impossible (pas de refresh_token dans le cookie)"
+        return "bloqué (jeton refusé)" if self._refresh_blocked else "actif"
+
+    def session_status(self) -> str:
+        expires = self.session_expiry()
+        when = expires.astimezone().strftime("%d/%m %H:%M") if expires else "inconnue"
+        return f"jeton d'accès valable jusqu'au {when}, renouvellement automatique {self.auto_refresh()}"
 
     def adopt_saved_session(self) -> bool:
         """Reprend la session de data/session.json si elle est plus récente que la nôtre.

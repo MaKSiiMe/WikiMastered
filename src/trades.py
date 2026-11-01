@@ -21,9 +21,13 @@ from src.config import RARITIES
 from src.core.models import Trade
 from src.core.pricing import robust_median
 from src.core.timeutils import utcnow
-from src.roi import wb
+from src.core.notifier import Level
+from src.roi import plural, wb
 from src.workers.base import Context
 
+# Couleur d'un échange (src/core/colors.py), sur /echange comme dans le salon des ventes.
+LEVELS = {"equitable": Level.INFO, "avantage": Level.SUCCESS, "defavorable": Level.WARNING,
+          "incomplet": Level.WARNING}
 TRADE_DAYS = 7
 TRADE_MIN_SALES = 3  # en dessous, sur TRADE_DAYS jours : l'estimation du bot (5 dernières ventes observées)
 SUGGESTED_CARDS = 4  # cartes proposées à demander en plus
@@ -46,9 +50,10 @@ class Priced:
 
     @property
     def line(self) -> str:
+        """Une carte dans une colonne de l'échange : son nom, puis sa valeur et ses ventes."""
         if self.value is None:
-            return f"• {self.label} : ⚠️ jamais vue vendue, valeur inconnue"
-        return f"• {self.label} : ~{wb(self.value)} WB ({self.sales} vente(s) en {TRADE_DAYS} j)"
+            return f"**{self.label}**\n⚠️ jamais vue vendue"
+        return f"**{self.label}**\n~{wb(self.value)} WB · {plural(self.sales, 'vente')} en {TRADE_DAYS} j"
 
 
 @dataclass
@@ -99,29 +104,40 @@ class Evaluation:
     @property
     def headline(self) -> str:
         if self.verdict == "incomplet":
-            return f"❓ À vérifier : {len(self.unknown)} carte(s) sans valeur connue"
+            return f"❓ À vérifier : {plural(len(self.unknown), 'carte sans valeur connue', 'cartes sans valeur connue')}"
         if self.verdict == "equitable":
             return f"🤝 Équitable (écart ~{wb(abs(self.gap))} WB)"
         if self.verdict == "avantage":
-            return f"✅ À ton avantage : tu gagnes ~{wb(self.gap)} WB"
-        return f"❌ Défavorable : tu perds ~{wb(-self.gap)} WB"
+            return f"✅ À ton avantage : {wb(self.gap, True)} WB"
+        return f"❌ Défavorable : {wb(self.gap, True)} WB"
 
     def side(self, cards: list[Priced], extra: int) -> str:
-        lines = [c.line for c in cards] + ([f"• {wb(extra)} WB"] if extra else [])
-        return "\n".join(lines) or "• rien"
+        lines = [c.line for c in cards] + ([f"**+ {wb(extra)} WB**"] if extra else [])
+        return "\n".join(lines) or "rien"
 
     @property
-    def text(self) -> str:
-        parts = [f"**Tu donnes** (~{wb(self.given_total)} WB)\n{self.side(self.given, self.wb_given)}",
-                 f"**Tu reçois** (~{wb(self.received_total)} WB)\n{self.side(self.received, self.wb_received)}"]
+    def columns(self) -> list[tuple[str, str]]:
+        """Les deux côtés de l'échange, l'un à côté de l'autre."""
+        return [(f"Tu donnes ~{wb(self.given_total)} WB", self.side(self.given, self.wb_given)),
+                (f"Tu reçois ~{wb(self.received_total)} WB", self.side(self.received, self.wb_received))]
+
+    @property
+    def notes(self) -> str:
+        """Sous les deux colonnes : le rapport, les cartes sans valeur, la contre-offre."""
+        parts = []
         if self.given_total and self.received_total:
             parts.append(f"Tu reçois {self.received_total * 100 / self.given_total:.0f} % de ce que tu donnes.")
         if self.unknown:
             parts.append("⚠️ Verdict incomplet : " + ", ".join(c.label for c in self.unknown)
-                         + " jamais vue(s) vendue(s), comptée(s) 0.")
+                         + (" jamais vue vendue, comptée 0." if len(self.unknown) == 1
+                            else " jamais vues vendues, comptées 0."))
         if self.offers:
             parts.append("**Contre-offre à envoyer**\n" + "\n".join(f"• {o}" for o in self.offers))
         return "\n\n".join(parts)
+
+    @property
+    def text(self) -> str:
+        return "\n\n".join([*(f"**{name}**\n{value}" for name, value in self.columns), self.notes]).strip()
 
 
 async def card_value(ctx: Context, card_id: str | None, title: str, rarity: str | None, shiny: bool) -> Priced:

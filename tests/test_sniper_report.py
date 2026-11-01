@@ -57,9 +57,9 @@ async def test_night_report_counts_every_bid_and_its_money(tmp_path):
     assert "⛔ **Squid Game** (L) : 300 WB refusée (Vérification anti-bot requise.)" in text
     assert "gain non acquis ~500 WB (dont ~450 dans nos limites)" in summary
     # Chiffres pour régler la stratégie (17/10) : lisibles dans le récap, sans la liste complète.
-    assert ("↳ 6 mise(s) pour 5 enchère(s) · perdues : 1/2 dans nos limites, prix final médian = notre mise ×1.54"
-            " · refus : anti-bot 1, mise trop basse 0, autres 0 · revendues : 1, prix / estimation médian ×0.73"
-            ) in summary
+    assert ("↳ 6 mises pour 5 enchères · perdues dans nos limites : 1/2, prix final médian ×1,54 notre mise"
+            " · refus : anti-bot 1 · 1 revendue, prix / estimation médian ×0,73") in summary
+    assert "**Positions réelles**\n5 enchères · **2 gagnées** (631 WB) · 2 perdues · 1 refusée\n" in summary
     assert title.startswith("Sniper : récap du ")
     await db.close()
 

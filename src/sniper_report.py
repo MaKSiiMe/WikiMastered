@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from src.core import timeutils
+from src.roi import plural, wb
 
 COLLECTION_PREFIX = "collection"
 WON = ("won", "sim_won")
@@ -50,32 +51,40 @@ class Block:
 
     def figures(self) -> str:
         """Une ligne de chiffres : mises par enchère, perdues gagnables, surenchère des rivaux, refus, reventes."""
-        parts = [f"{self.requests} mise(s) pour {self.bids} enchère(s)"]
+        parts = [f"{plural(self.requests, 'mise')} pour {plural(self.bids, 'enchère')}"]
         if self.lost_steps:
-            parts.append(f"perdues : {self.lost_within}/{len(self.lost_steps)} dans nos limites, prix final "
-                         f"médian = notre mise ×{statistics.median(self.lost_steps):.2f}")
+            parts.append(f"perdues dans nos limites : {self.lost_within}/{len(self.lost_steps)}, prix final médian "
+                         f"×{_ratio(statistics.median(self.lost_steps))} notre mise")
         if self.refused:
-            parts.append(f"refus : anti-bot {self.refused_antibot}, mise trop basse {self.refused_low}, "
-                         f"autres {self.refused - self.refused_antibot - self.refused_low}")
+            other = self.refused - self.refused_antibot - self.refused_low
+            parts.append("refus : " + ", ".join(f"{name} {n}" for name, n in (
+                ("anti-bot", self.refused_antibot), ("mise trop basse", self.refused_low), ("autres", other)) if n))
         if self.sold_ratio:
-            parts.append(f"revendues : {len(self.sold_ratio)}, prix / estimation médian "
-                         f"×{statistics.median(self.sold_ratio):.2f}")
+            parts.append(f"{plural(len(self.sold_ratio), 'revendue')}, prix / estimation médian "
+                         f"×{_ratio(statistics.median(self.sold_ratio))}")
         return " · ".join(parts)
 
     def summary(self) -> str:
-        parts = [f"{self.bids} enchère(s) : {self.won} gagnée(s) pour {self.spent} WB, {self.lost} perdue(s)"]
+        """Enchères et leur issue, puis l'argent : plus-value latente, gain réalisé, gain manqué (une ligne chacun)."""
+        parts = [plural(self.bids, "enchère"), f"**{plural(self.won, 'gagnée')}** ({wb(self.spent)} WB)",
+                 plural(self.lost, "perdue")]
         if self.pending:
-            parts.append(f"{self.pending} en cours")
+            parts.append(f"{wb(self.pending)} en cours")
         if self.refused:
-            parts.append(f"{self.refused} refusée(s)")
+            parts.append(plural(self.refused, "refusée"))
         money = []
         if self.latent:
-            money.append(f"plus-value latente {self.latent:+.0f} WB")
+            money.append(f"plus-value latente **{wb(self.latent, True)} WB**")
         if self.realized:
-            money.append(f"gain réalisé {self.realized:+d} WB")
+            money.append(f"gain réalisé {wb(self.realized, True)} WB")
+        lines = [" · ".join(parts)] + ([" · ".join(money)] if money else [])
         if self.missed:
-            money.append(f"gain non acquis ~{self.missed:.0f} WB (dont ~{self.missed_within:.0f} dans nos limites)")
-        return ", ".join(parts) + (" · " + " · ".join(money) if money else "")
+            lines.append(f"gain non acquis ~{wb(self.missed)} WB (dont ~{wb(self.missed_within)} dans nos limites)")
+        return "\n".join(lines)
+
+
+def _ratio(value: float) -> str:
+    return f"{value:.2f}".replace(".", ",")
 
 
 def _when(value: str | None) -> str:
@@ -175,11 +184,9 @@ def render(blocks: dict[str, Block], since: datetime, until: datetime, *,
         block = blocks[key]
         if not block.bids:
             continue
-        summary.append(f"**{name}** : {block.summary()}")
-        if key != "collection":
-            summary.append(f"↳ {block.figures()}")
+        summary.append(f"**{name}**\n{block.summary()}" + (f"\n↳ {block.figures()}" if key != "collection" else ""))
         sections.append((name, "\n".join(_lines(block, limit))))
-    return title, "\n".join(summary) or "Aucune enchère misée sur la période.", sections
+    return title, "\n\n".join(summary) or "Aucune enchère misée sur la période.", sections
 
 
 # Ventilation (sniper-report --breakdown) : quelles enchères sont gagnables ? Chaque mise use le quota de la
