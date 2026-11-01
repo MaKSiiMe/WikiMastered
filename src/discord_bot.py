@@ -27,21 +27,21 @@ from discord import app_commands
 
 from src import backup, pauses, snipes
 from src.charts import number, profit_bars
-from src.core import timeutils
-from src.core.stats import network_lines
+from src.core import colors, timeutils
+from src.core.stats import network_brief
 from src.core.timeutils import utcnow
 from src.recap import STALE_AFTER
-from src.roi import roi_discord, wb
+from src.roi import plural, roi_discord, wb
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
-from src.workers.collection import progress_lines, targets
+from src.workers.collection import progress_text, recent_cards, targets
 
 log = logging.getLogger("wikimastered.discord")
 
 TEXT_LIMIT = 3900  # description d'un embed : 4096 au plus, avec le bloc de code
 CONFIRM_SECONDS = 120
 RARITIES = ["C", "PC", "R", "SR", "UR", "L"]
-COLOR, GREEN, ORANGE, RED, GREY = 0x5865F2, 0x57F287, 0xFEE75C, 0xED4245, 0x99AAB5
+COLOR, GREEN, ORANGE, RED, GREY = colors.INFO, colors.OK, colors.WARN, colors.ALERT, colors.OFF  # src/core/colors.py
 # /pause et /reprise : ce qui est mis en pause (None : tous les workers, sauf la garde des sanctions).
 # « ventes » arrête aussi la revente des positions du sniper : pour la défausse ou les doublons seuls, /defausse et
 # /doublons.
@@ -88,65 +88,70 @@ def ago(delta: timedelta) -> str:
     return f"{seconds // 3600} h {seconds % 3600 // 60:02d}"
 
 
-def worker_line(w: Worker, now: datetime, session_ok: bool) -> str:
-    """État d'un worker, sans remettre à zéro les compteurs du récap."""
+def worker_cell(w: Worker, now: datetime, session_ok: bool) -> tuple[str, str | None]:
+    """(case de /etat : « ✅ sniper 3 s », problème à détailler sous la grille ou None)."""
     if w.paused:
-        return f"⏸️ {w.paused}"
+        return f"⏸️ {w.name}", None  # voulue (/pause, défausse coupée) : pas un problème
     if w.blocked:
-        return f"🛑 {w.blocked}"
-    if w.last_ok is None:
-        return "⏳ pas encore passé" + (f" · ⚠️ {w.last_error[:80]}" if w.errors_in_a_row else "")
-    stale = session_ok and w.next_due is not None and now - w.next_due > STALE_AFTER
-    line = f"{'❌ arrêté ?' if stale else '✅'} dernier passage il y a {ago(now - w.last_ok)}"
+        return f"🛑 {w.name}", f"{w.name} : {w.blocked}"
+    stale = session_ok and w.next_due is not None and w.last_ok is not None and now - w.next_due > STALE_AFTER
+    if stale:
+        return f"❌ {w.name}", f"{w.name} : aucun passage depuis {ago(now - w.next_due)}"  # type: ignore[operator]
     if w.errors_in_a_row:
-        line += f" · ⚠️ {w.errors_in_a_row} erreur(s) de suite : {w.last_error[:80]}"
-    return line
-
-
-def passes_text(stats: dict) -> str:
-    """Passages d'un worker au dernier relevé de stats_loop : « 612 passages, moy 1.3 s, max 8.2 s »."""
-    if not stats.get("n"):
-        return ""
-    return f"{stats['n']} passage(s), moy {stats['moy']:.1f} s, max {stats['max']:.1f} s"
+        return f"⚠️ {w.name}", (f"{w.name} : {plural(w.errors_in_a_row, 'erreur', 'erreurs')} de suite : "
+                               f"{w.last_error[:120]}")
+    if w.last_ok is None:
+        return f"⏳ {w.name}", None
+    return f"✅ {w.name} · {ago(now - w.last_ok)}", None
 
 
 def state_embed(ctx: Context, workers: list[Worker], started_at: datetime) -> discord.Embed:
-    """/etat : mode, session, vérification anti-bot, routes en pause, puis chaque worker."""
+    """/etat : vert si tout va bien, orange si un worker ou la vérification anti-bot demande ton attention, rouge si
+    le bot ne peut plus rien faire (session perdue, arrêt de la garde). Les workers en grille, le réseau en bas."""
     now = utcnow()
     client = ctx.client
-    lines = [f"Mode **{ctx.settings.mode_label}** · démarré le {paris(started_at)} (il y a {ago(now - started_at)})"]
+    mode, _, spacing = ctx.settings.mode_label.partition(", ")
+    expiry = client.session_expiry()
+    auto = client.auto_refresh()
+    session = (f"session valable jusqu'à {paris(expiry)[-5:]}" if expiry else "session : expiration inconnue") + \
+        (" (auto)" if auto == "actif" else f" · renouvellement {auto}")
+    lines = [f"{mode.capitalize()} · démarré il y a {ago(now - started_at)} · {session}"]
     color = GREEN
     if client.halted:
         lines.append(f"🛑 **Arrêté par la garde** : {client.halted}\nPour reprendre : `rm data/HALT` dans la console, "
                      "puis redémarre la stack.")
         color = RED
-    if client.session_ok:
-        lines.append(f"✅ Session : {client.session_status()}")
-    else:
+    if not client.session_ok:
         lines.append("❌ **Session en pause** : les workers attendent un nouveau cookie.")
         color = RED
     sniper = next((w for w in workers if isinstance(w, AuctionSniper)), None)
     if sniper is not None and sniper.antibot_since:
         lines.append(f"🛑 **Vérification anti-bot** demandée depuis {paris(sniper.antibot_since)} · "
-                     f"{sniper.antibot_missed} mise(s) non placée(s). Fais-la dans ton navigateur, puis "
-                     "« Vérification faite ».")
+                     f"{plural(sniper.antibot_missed, 'mise non placée', 'mises non placées')}. Fais-la dans ton "
+                     "navigateur, puis « Vérification faite ».")
         color = RED if color == RED else ORANGE
-    lines.append(f"💾 Sauvegarde : {backup.describe(ctx.last_backup)}")
+    lines.append(f"💾 Sauvegarde {backup.describe(ctx.last_backup)}")
     if routes := client.paused_routes():
         lines.append("⏳ Routes du site en pause : " + ", ".join(f"{name} ({ago(timedelta(seconds=left))})"
                                                                for name, left in sorted(routes.items())))
-    last = ctx.last_stats
-    passes = last.get("workers", {})
-    states = [f"**{w.name}** : {worker_line(w, now, client.session_ok)}"
-              + (f" · {text}" if (text := passes_text(passes.get(w.name, {}))) else "") for w in workers]
-    if color == GREEN and any(w.paused or w.errors_in_a_row for w in workers):
-        color = ORANGE
-    embed = discord.Embed(title="État du bot", description="\n".join(lines), color=color)
-    for i, value in enumerate(fields(states)):
-        embed.add_field(name="Workers" if i == 0 else "\u200b", value=value, inline=False)
-    if last:
-        embed.add_field(name=f"R\u00e9seau ({last['seconds'] / 60:.0f} min jusqu'\u00e0 {paris(last['at'])})",
-                        value="\n".join(network_lines(last["net"], last["seconds"], top=4))[:1024], inline=False)
+    cells, problems = [], []
+    for w in workers:
+        cell, problem = worker_cell(w, now, client.session_ok)
+        cells.append(cell)
+        if problem and not (w is sniper and sniper.antibot_since):  # déjà dit au-dessus
+            problems.append(f"• {problem}")
+    if problems:
+        lines += ["", "**À vérifier**", *problems]
+        color = RED if color == RED else ORANGE
+    embed = discord.Embed(title="État du bot", description="\n".join(lines)[:4000], color=color)
+    per_column = -(-len(cells) // 3)
+    for i in range(0, len(cells), per_column):
+        embed.add_field(name="Workers" if i == 0 else "\u200b", value="\n".join(cells[i:i + per_column]), inline=True)
+    if last := ctx.last_stats:
+        embed.add_field(name="\u200b", inline=False,
+                        value=f"🌐 Réseau ({last['seconds'] / 60:.0f} min) : {network_brief(last['net'])}")
+    if spacing:
+        embed.set_footer(text=spacing[:1].upper() + spacing[1:2048])
     return embed
 
 
@@ -520,10 +525,12 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @tree.command(name="bilan", description="Le bilan du jour, comme celui du soir")
     async def bilan(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        _, description, sections = await cli.daily_report_parts(ctx)
-        embed = discord.Embed(title=f"Bilan du {timeutils.now_local():%d/%m} (à {timeutils.now_local():%H:%M})",
-                              description=description, color=COLOR)
-        for name, value in sections:
+        report = await cli.daily_report_parts(ctx)
+        embed = discord.Embed(title=f"📊 Bilan du {timeutils.now_local():%d/%m} · {timeutils.now_local():%H:%M}",
+                              description=report.description, color=COLOR)
+        for name, value in report.columns:
+            embed.add_field(name=name, value=value[:1024] or "—", inline=True)
+        for name, value in report.sections:
             embed.add_field(name=name, value=value[:1024] or "—", inline=False)
         await interaction.followup.send(embed=embed)
 
@@ -583,13 +590,28 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @tree.command(name="collection", description="Avancement des collections et cartes manquantes")
     async def collection(interaction: discord.Interaction) -> None:
         state = await ctx.db.kv_get("collection")
+        if not state:
+            await interaction.response.send_message(embed=discord.Embed(
+                title="📅 Collection", description="Pas encore lue : le worker collection la lit au démarrage.",
+                color=GREY))
+            return
         by_key = targets(ctx)
-        lines = progress_lines(state, by_key, utcnow(), days=7)
-        if state:
-            missing = [by_key.get(k, k) for k in state["missing"]]
-            lines.append(f"\n**Manquantes ({len(missing)})** : " + (", ".join(missing) or "aucune"))
-            lines.append(f"Mise max. par carte manquante : {s.collection_max_price} WB (/plafond-collection)")
-        await reply(interaction, "Collection", "\n".join(lines), code=False)
+        progress = progress_text(state)
+        missing = [by_key.get(k, k) for k in state["missing"]]
+        lines = progress[1:] if len(progress) == 1 else []
+        recent = recent_cards(state, utcnow())
+        if recent:
+            names = ", ".join(f"{by_key.get(k, k)} ({at.astimezone(timeutils.PARIS):%d/%m})" for at, k in recent[:5])
+            lines.append(f"+{len(recent)} en 7 jours · dernières : {names}{'…' if len(recent) > 5 else ''}")
+        else:
+            lines.append("Aucune nouvelle carte en 7 jours")
+        if missing:
+            lines.append(f"\n**Manquantes ({len(missing)})** : " + ", ".join(missing))
+        embed = discord.Embed(title="📅 " + (progress[0] if len(progress) == 1 else "Collection"),
+                              description="\n".join(([*progress, ""] if len(progress) > 1 else []) + lines)[:4000],
+                              color=COLOR if missing else GREEN)
+        embed.set_footer(text=f"Plafond par carte manquante : {s.collection_max_price} WB · /plafond-collection")
+        await interaction.response.send_message(embed=embed)
 
     @tree.command(name="sniper", description="Récap des enchères misées par le sniper")
     @app_commands.describe(heures="période, en heures (24 par défaut)")
@@ -622,14 +644,14 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         await interaction.response.send_message(embed=embed, view=view)
         await view.wait()
         if not view.value:
-            embed.title, embed.color = ("Annulé" if view.value is False else "Annulé (pas de réponse)"), 0x99AAB5
+            embed.title, embed.color = ("Annulé" if view.value is False else "Annulé (pas de réponse)"), GREY
             await interaction.edit_original_response(embed=embed, view=None)
             return
         added = await snipes.add(ctx.db, titre, prix_max, rarity, shiny)
         if sniper is not None:
             await sniper.reload_snipes()
         log.info("Discord : carte demandée %s", added.label)
-        embed.title, embed.color = "Carte demandée", 0x57F287
+        embed.title, embed.color = "Carte demandée", GREEN
         await interaction.edit_original_response(embed=embed, view=None)
 
     @tree.command(name="snipes", description="Cartes demandées au sniper")
@@ -647,8 +669,18 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         removed = await snipes.remove(ctx.db, titre)
         if sniper is not None:
             await sniper.reload_snipes()
-        text = f"Retirée : {removed.label}" if removed else f"« {titre} » n'était pas demandée."
-        await reply(interaction, "Carte demandée", text, code=False)
+        if not removed:
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Rien à annuler", description=f"« {titre} » n'était pas demandée au sniper.", color=GREY))
+            return
+        await interaction.response.defer()
+        embed = discord.Embed(title=f"🎯 Demande annulée : {removed.title}", color=GREY,
+                              description=f"Le sniper ne la mise plus (il allait jusqu'à {wb(removed.max_price)} WB"
+                                          + (f", {removed.rarity} seulement" if removed.rarity else "") + ").")
+        from src.discord_cards import card_image  # même module chargé par build_client
+        if image := await card_image(ctx, removed.title):
+            embed.set_thumbnail(url=image)
+        await interaction.followup.send(embed=embed)
 
     return client
 

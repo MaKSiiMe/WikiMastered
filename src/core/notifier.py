@@ -24,6 +24,7 @@ from typing import Any
 
 import httpx
 
+from src.core import colors
 from src.core.journal import plain
 from src.core.timeutils import now_local, utcnow
 
@@ -81,10 +82,10 @@ def position_thread(bid: Any, line: str, *, head: str | None = None, ring: bool 
 
 
 class Level(Enum):
-    INFO = 0x3B82F6
-    SUCCESS = 0x22C55E
-    WARNING = 0xF59E0B
-    CRITICAL = 0xEF4444
+    INFO = colors.INFO
+    SUCCESS = colors.OK
+    WARNING = colors.WARN
+    CRITICAL = colors.ALERT
 
 
 @dataclass
@@ -103,6 +104,7 @@ class _Message:
     # message part par le webhook, sans boutons. Jamais de message privé : tout va dans les salons.
     actions: dict[str, Any] | None = None
     thread: Thread | None = None
+    columns: list[tuple[str, str]] = field(default_factory=list)  # chiffres clés côte à côte, avant les blocs
 
     @property
     def main_channel(self) -> bool:
@@ -164,18 +166,20 @@ class DiscordNotifier:
     def send(self, level: Level, title: str, description: str = "", *, live: bool = False,
              topic: Topic = Topic.SYSTEM, sections: list[tuple[str, str]] | None = None,
              thumbnail: str | None = None, url: str | None = None, important: bool | None = None,
-             actions: dict[str, Any] | None = None, thread: Thread | None = None, **fields: Any) -> None:
+             actions: dict[str, Any] | None = None, thread: Thread | None = None,
+             columns: list[tuple[str, str]] | None = None, **fields: Any) -> None:
         log_fn = log.warning if level in (Level.WARNING, Level.CRITICAL) else log.info
         # Les logs reprennent tout le message (champs et blocs), sans sa mise en forme : la console le coupe s'il
         # est long, le journal le garde entier.
         parts = [description] if description else []
-        parts += [", ".join(f"{k} : {v}" for k, v in fields.items() if v is not None)] if fields else []
+        parts += [", ".join(f"{k} : {v}" for k, v in [*(columns or []), *fields.items()] if v is not None)] \
+            if fields or columns else []
         parts += [f"{name} : {body}" for name, body in sections or []]
         text = plain(" | ".join(p for p in parts if p).replace("\n", " | "))
         log_fn("%s%s · %s%s", "CRITIQUE · " if level is Level.CRITICAL else "", topic.value.split(" ", 1)[-1],
                plain(title), f" — {text}" if text else "", extra={"data": {"salon": topic.name.lower()}})
         msg = _Message(level, title, description, fields, live, topic, sections or [], thumbnail, url, important,
-                       actions, thread)
+                       actions, thread, columns or [])
         if not self._webhook_for(msg):
             return
         try:
@@ -211,8 +215,10 @@ class DiscordNotifier:
 
     def embed(self, msg: _Message) -> dict[str, Any]:
         title = f"[DRY RUN] {msg.title}" if self._dry_run and not msg.live else msg.title
-        fields = [{"name": str(name)[:256], "value": str(value)[:_FIELD_MAX] or "-", "inline": False}
-                  for name, value in msg.sections]
+        fields = [{"name": str(name)[:256], "value": str(value)[:_FIELD_MAX] or "-", "inline": True}
+                  for name, value in msg.columns]
+        fields += [{"name": str(name)[:256], "value": str(value)[:_FIELD_MAX] or "-", "inline": False}
+                   for name, value in msg.sections]
         fields += [{"name": str(k)[:256], "value": str(v)[:_FIELD_MAX] or "-", "inline": True}
                    for k, v in msg.fields.items()]
         kept, used = [], len(msg.topic.value) + len(title[:256]) + len(self._footer)

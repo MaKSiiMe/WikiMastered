@@ -28,13 +28,15 @@ from discord import app_commands
 
 from src import account, keeps, orders, overrides, pauses, snipes, trades
 from src.charts import number, value_line
+from src.config import RARITY_RANK
 from src.core.models import OwnedCard
 from src.core.pricing import advised_bid
 from src.core.timeutils import utcnow
-from src.discord_bot import COLOR, CONFIRM_SECONDS, GREEN, GREY, RARITIES, RED, Buttons, ago, paris
-from src.roi import wb
+from src.discord_bot import COLOR, CONFIRM_SECONDS, GREEN, GREY, RARITIES, Buttons, ago, paris
+from src.roi import plural, wb
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
+from src.workers.collection import collection_key
 from src.workers.inventory_manager import InventoryManager, copies_of, newest_sellable, stop_resale
 
 log = logging.getLogger("wikimastered.discord")
@@ -132,17 +134,45 @@ def card_lines(copies: list[OwnedCard], excluded: set[str], kept: list[keeps.Kee
             notes.append("⭐ favori")
         if c.id in selling:
             notes.append("🏷️ en vente")
-        if any(k.matches(c.title, c.rarity) for k in kept):
-            notes.append("🔒 gardée")
         if c.tag_names & protected_tags:
             notes.append("🛡️ étiquette protégée")
         elif c.id in excluded and c.id not in selling and not any(k.matches(c.title, c.rarity) for k in kept):
             notes.append("🤝 en échange")
         if c.tag_names:
-            notes.append("étiquettes : " + ", ".join(sorted(c.tag_names)))
-        got = f"obtenue le {paris(c.obtained_at)}" if c.obtained_at else ""
-        lines.append(f"**{c.rarity or '?'}** {got}" + (f" · {' · '.join(notes)}" if notes else ""))
+            notes.append(", ".join(sorted(c.tag_names)))
+        got = [f"obtenue le {paris(c.obtained_at)[:5]}"] if c.obtained_at else []
+        lines.append(" · ".join([f"• **{c.rarity or '?'}**", *got, *notes]))
     return lines
+
+
+_IMAGES: dict[str, str | None] = {}  # image de chaque carte déjà cherchée sur le marché (clé : titre normalisé)
+
+
+async def card_image(ctx: Context, title: str, copies: list[OwnedCard] | None = None) -> str | None:
+    """Image d'une carte : celle d'un exemplaire, sinon celle d'une vente du marché (une requête, gardée en mémoire).
+    None si rien n'est trouvé : le message part sans vignette."""
+    for c in copies or []:
+        if c.card.image_url and c.card.image_url.startswith(("https://", "http://")):
+            return c.card.image_url
+    key = collection_key(title)
+    if key not in _IMAGES:
+        try:
+            auctions, _ = await asyncio.wait_for(ctx.api.market_page(sort="recent", q=title, limit=10), timeout=10)
+        except Exception:  # noqa: BLE001 - pas de vignette, pas d'erreur : réessayé la prochaine fois
+            log.debug("image de %s introuvable sur le marché", title, exc_info=True)
+            return None
+        _IMAGES[key] = next((a.card.image_url for a in auctions
+                             if collection_key(a.title) == key and (a.card.image_url or "").startswith("http")),
+                            None)
+    return _IMAGES[key]
+
+
+def switch_embed(title: str, on: bool, text: str, command: str) -> discord.Embed:
+    """Réglage activé (vert) ou coupé (gris), avec ce que ça change ; le pied rappelle la commande inverse."""
+    embed = discord.Embed(title=f"{title} : {'activée' if on else 'coupée'}", description=text or None,
+                          color=GREEN if on else GREY)
+    embed.set_footer(text=f"Gardé après les redémarrages · {command}")
+    return embed
 
 
 def value_embed(value: dict, snapshot: dict) -> discord.Embed:
@@ -265,10 +295,12 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     @tree.command(name="gardees", description="Cartes gardées (jamais vendues ni défaussées)")
     async def gardees(interaction: discord.Interaction) -> None:
         kept = await keeps.load(ctx.db)
-        text = "\n".join(f"🔒 **{k.label}** (depuis le {paris(k.added_at)})" for k in kept) or \
-            "Aucune carte gardée. /garder pour en ajouter une."
-        await interaction.response.send_message(embed=discord.Embed(title=f"Cartes gardées ({len(kept)})",
-                                                                    description=text[:4000], color=COLOR))
+        text = "\n".join(f"• **{k.label}**" + (f" · depuis le {paris(k.added_at)}" if k.added_at else "")
+                         for k in kept) or "Aucune carte gardée."
+        embed = discord.Embed(title=f"🔒 Cartes gardées ({len(kept)})", description=text[:4000],
+                              color=COLOR if kept else GREY)
+        embed.set_footer(text="/garder pour en ajouter une · /liberer pour en retirer une")
+        await interaction.response.send_message(embed=embed)
 
     async def kept_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         return [app_commands.Choice(name=k.label[:100], value=k.label[:100]) for k in await keeps.load(ctx.db)
@@ -369,10 +401,10 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     @app_commands.choices(etat=switch)
     async def defausse(interaction: discord.Interaction, etat: app_commands.Choice[int] | None = None) -> None:
         if etat is None:
-            paused = "cotes" in ctx.pauses
-            await interaction.response.send_message(
-                f"Défausse automatique : **{'activée' if s.auto_discard else 'coupée'}**"
-                + (" · worker cotes en pause" if paused else ""))
+            await interaction.response.send_message(embed=switch_embed(
+                "🗑️ Défausse automatique", s.auto_discard,
+                "Le worker cotes est en pause (il ne sert qu'à elle)." if "cotes" in ctx.pauses else "",
+                "/defausse activer" if not s.auto_discard else "/defausse couper"))
             return
         on = bool(etat.value)
         await overrides.set_value(ctx, "auto_discard", on)
@@ -383,28 +415,31 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         else:
             await pauses.pause(ctx, ["cotes"], None)
         log.info("Discord : défausse %s", "activée" if on else "coupée")
-        await interaction.response.send_message(
-            "🗑️ Défausse automatique **activée**, worker cotes repris." if on else
-            "🗑️ Défausse automatique **coupée** et worker cotes en pause (il ne servait qu'à elle). Les reventes du "
-            "sniper et tes ventes continuent. Gardé après les redémarrages ; `/defausse activer` pour reprendre.")
+        await interaction.response.send_message(embed=switch_embed(
+            "🗑️ Défausse automatique", on,
+            "Le worker cotes reprend." if on else
+            "Le worker cotes est en pause (il ne sert qu'à elle). Les reventes du sniper et tes ventes continuent.",
+            "/defausse couper" if on else "/defausse activer"))
 
     @tree.command(name="doublons", description="Activer ou couper la vente automatique des doublons")
     @app_commands.describe(etat="sans valeur : affiche l'état actuel")
     @app_commands.choices(etat=switch)
     async def doublons(interaction: discord.Interaction, etat: app_commands.Choice[int] | None = None) -> None:
         if etat is None:
-            await interaction.response.send_message(
-                f"Vente automatique des doublons : **{'activée' if s.auto_list else 'coupée'}**")
+            await interaction.response.send_message(embed=switch_embed(
+                "💰 Vente automatique des doublons", s.auto_list, "",
+                "/doublons couper" if s.auto_list else "/doublons activer"))
             return
         on = bool(etat.value)
         await overrides.set_value(ctx, "auto_list", on)
         log.info("Discord : vente des doublons %s", "activée" if on else "coupée")
         cancelled = 0 if on else await ctx.db.cancel_scheduled_duplicates()
-        extra = f" {cancelled} doublon(s) programmé(s) annulé(s)." if cancelled else ""
-        await interaction.response.send_message(
-            ("💰 Vente automatique des doublons **activée**." if on else
-             "💰 Vente automatique des doublons **coupée** : les places de vente restent aux reventes du sniper et "
-             "à tes ventes.") + extra + " Gardé après les redémarrages.")
+        extra = f"\n{plural(cancelled, 'doublon programmé annulé', 'doublons programmés annulés')}." if cancelled else ""
+        await interaction.response.send_message(embed=switch_embed(
+            "💰 Vente automatique des doublons", on,
+            ("Les doublons sont de nouveau mis en vente." if on else
+             "Les places de vente restent aux reventes du sniper et à tes ventes.") + extra,
+            "/doublons couper" if on else "/doublons activer"))
 
     # ------------------------------------------------------------ fiche d'une carte
     @tree.command(name="carte", description="Tes exemplaires d'une carte, sa cote et ce que le bot en fait")
@@ -414,38 +449,47 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         await interaction.response.defer(thinking=True)
         copies, excluded = await copies_of(ctx, carte)
         kept = await keeps.load(ctx.db)
-        is_kept = any(k.matches(carte, None) and not k.rarity for k in kept)
-        embed = discord.Embed(title=copies[0].title if copies else carte, color=COLOR)
-        lines = card_lines(copies, excluded, kept, await ctx.db.scheduled_owned_ids(),
-                           s.protected_tag_keys)
-        embed.add_field(name=f"Tes exemplaires ({len(copies)})", value="\n".join(lines)[:1024] or "aucun",
-                        inline=False)
+        card_keeps = [k for k in kept if collection_key(k.title) == collection_key(carte)]
+        is_kept = bool(card_keeps)
+        title = copies[0].title if copies else carte
+        rarities = sorted({c.rarity for c in copies if c.rarity}, key=lambda r: RARITIES.index(r) if r in RARITIES else 9)
+        embed = discord.Embed(title=f"{title} ({rarities[0]})" if len(rarities) == 1 else title, color=COLOR)
+        if image := await card_image(ctx, title, copies):
+            embed.set_thumbnail(url=image)
+        # Ce que le bot en fait, en tête : gardée, demandée au sniper, position, ventes.
+        status = [f"🔒 Gardée{f' ({k.rarity})' if k.rarity and len(rarities) != 1 else ''}"
+                  + (f" depuis le {paris(k.added_at)[:5]}" if k.added_at else "") for k in card_keeps]
+        wanted = (await snipes.load(ctx.db)).get(snipes.Snipe(carte, 0).key)
+        if wanted:
+            status.append(f"🎯 Demandée au sniper : {wanted.label}")
+        status += [f"💼 Position achetée {wb(b['amount'])} WB ({b['rarity']})"
+                   for b in await ctx.db.held_for_title(carte)]
+        status += [f"🏷️ En vente {wb(r['base_amount'])} WB ({r['rarity']}), "
+                   + (f"fin {paris(r['target_end'])}" if r["status"] not in OPEN_STATUSES else "programmée")
+                   for r in await ctx.db.open_listings() if r["title"].casefold() == carte.casefold()]
         card_ids = {c.catalog_id for c in copies} | {r["card_id"] for r in await ctx.db.observed_for_title(carte)}
         quotes: dict[str, Any] = {}
         for card_id in card_ids:
             quotes.update(await ctx.prices.observed_quote(card_id))
-        if quotes:
-            embed.add_field(name="Ventes observées", inline=False, value="\n".join(
-                f"**{r}** ~{wb(q.average)} WB ({q.count} vente(s))" for r, q in sorted(quotes.items())
-                if q.average)[:1024] or "—")
-        bot = [f"🎯 position achetée {wb(b['amount'])} WB ({b['rarity']})" for b in await ctx.db.held_for_title(carte)]
-        bot += [f"🏷️ en vente {wb(r['base_amount'])} WB ({r['rarity']}), "
-                + (f"fin {paris(r['target_end'])}" if r["status"] not in OPEN_STATUSES else "programmée")
-                for r in await ctx.db.open_listings() if r["title"].casefold() == carte.casefold()]
-        wanted = (await snipes.load(ctx.db)).get(snipes.Snipe(carte, 0).key)
-        if wanted:
-            bot.append(f"🎯 demandée au sniper : {wanted.label}")
-        bot += [f"🔒 gardée : {k.label}" for k in kept if k.matches(carte, k.rarity or None)]
-        if bot:
-            embed.add_field(name="Le bot", value="\n".join(bot)[:1024], inline=False)
+        known = [(r, q) for r, q in sorted(quotes.items(), key=lambda rq: -RARITY_RANK.get(rq[0], -1)) if q.average]
+        if len(known) == 1 and (len(rarities) != 1 or known[0][0] == rarities[0]):
+            quote = f"Cote : **~{wb(known[0][1].average)} WB** ({plural(known[0][1].count, 'vente')})"
+        elif known:
+            quote = "Cote : " + " · ".join(f"**{r}** ~{wb(q.average)} WB ({plural(q.count, 'vente')})" for r, q in known)
+        else:
+            quote = "Cote : jamais vue vendue"
+        embed.description = "\n".join([*status, quote])[:4000]
+        lines = card_lines(copies, excluded, kept, await ctx.db.scheduled_owned_ids(), s.protected_tag_keys)
+        embed.add_field(name=f"Tes exemplaires ({len(copies)})", value="\n".join(lines)[:1024] or "Tu n'en as aucun.",
+                        inline=False)
 
         async def keep_pressed(button: discord.Interaction) -> None:
             await button.response.send_message(await keep_card(carte))
 
         async def free_pressed(button: discord.Interaction) -> None:
-            removed = await keeps.remove(ctx.db, carte)
+            removed = [k for k in card_keeps if await keeps.remove(ctx.db, k.label)]
             await button.response.send_message(f"🔓 **{carte}** n'est plus gardée." if removed
-                                               else "Elle n'était pas gardée (ou seulement une rareté : /liberer).")
+                                               else "Elle n'était plus gardée.")
 
         async def sell_pressed(button: discord.Interaction) -> None:
             async def priced(submit: discord.Interaction, price: int) -> None:
@@ -461,9 +505,11 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                 await submit.response.send_message(f"🎯 Carte demandée : **{added.label}**.")
             await button.response.send_modal(PriceModal(f"Mise max. pour {carte}", priced))
 
-        buttons: list[tuple[str, discord.ButtonStyle, Any]] = [
-            ("🔓 Ne plus garder", discord.ButtonStyle.secondary, free_pressed) if is_kept else
-            ("🔒 Garder", discord.ButtonStyle.secondary, keep_pressed)]
+        buttons: list[tuple[str, discord.ButtonStyle, Any]] = []
+        if is_kept:
+            buttons.append(("🔓 Libérer", discord.ButtonStyle.secondary, free_pressed))
+        elif copies:
+            buttons.append(("🔒 Garder", discord.ButtonStyle.secondary, keep_pressed))
         if inventory is not None and copies:
             buttons.append(("💰 Vendre…", discord.ButtonStyle.primary, sell_pressed))
         if sniper is not None:
@@ -567,8 +613,11 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         given = [await trades.value_of_title(ctx, t) for t in (je_donne, je_donne_2, je_donne_3) if t.strip()]
         received = [await trades.value_of_title(ctx, t) for t in (je_recois, je_recois_2, je_recois_3) if t.strip()]
         e = await trades.evaluate(ctx, given, received, wb_donnes, wb_recus)
-        color = {"equitable": COLOR, "avantage": GREEN, "defavorable": RED, "incomplet": GREY}[e.verdict]
-        embed = discord.Embed(title=e.headline, description=e.text[:4000], color=color)
+        embed = discord.Embed(title=e.headline, color=trades.LEVELS[e.verdict].value)
+        for name, value in e.columns:
+            embed.add_field(name=name[:256], value=value[:1024], inline=True)
+        if e.notes:
+            embed.add_field(name="\u200b", value=e.notes[:1024], inline=False)
         embed.set_footer(text=f"Médiane des ventes observées sur {trades.TRADE_DAYS} jours (même rareté, shiny à "
                               f"part). Équitable : écart de {s.trade_fair_margin:.0%} au plus.")
         await interaction.followup.send(embed=embed)

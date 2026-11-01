@@ -109,18 +109,17 @@ async def test_evening_report_shows_the_account_value_only_from_a_recent_count(t
     client, notifier = make_client(tmp_path, handler)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
-    _, _, sections = await daily_report_parts(ctx)
-    assert "Compte" not in dict(sections)  # collection jamais comptée : pas de valeur inventée
+    report = await daily_report_parts(ctx)
+    assert report.description.startswith("Solde") and not report.columns  # jamais comptée : pas de valeur inventée
     await seed_observed(db, "ada", [500, 520, 480], rarity="L")
     await account.store_collection(ctx, [owned("o1", "ada", "L")])
     await db.kv_set(account.HISTORY_KEY, {"2000-01-01": 1000})
-    _, _, sections = await daily_report_parts(ctx)
-    assert sections[0][0] == "Compte"
-    assert sections[0][1].startswith("**1 500 WB** (+500 WB depuis le 01/01)")
-    assert "Solde 1 000 · cartes 500" in sections[0][1]
+    report = await daily_report_parts(ctx)
+    assert report.description == "Compte : **1 500 WB** (+500 WB depuis le 01/01)"
+    assert report.columns == [("Solde", "1 000 WB"), ("Cartes", "500 WB"), ("En vente", "0 WB")]
     snapshot = await db.kv_get(account.KV_KEY)
     snapshot["at"] = (datetime.now(UTC) - timedelta(hours=30)).isoformat()
     await db.kv_set(account.KV_KEY, snapshot)
-    _, _, sections = await daily_report_parts(ctx)
-    assert "Compte" not in dict(sections)  # comptée il y a plus de 24 h
+    report = await daily_report_parts(ctx)
+    assert not report.columns  # comptée il y a plus de 24 h
     await db.close()

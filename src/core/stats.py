@@ -136,3 +136,15 @@ def network_lines(net: dict[str, Any], seconds: float, top: int = 6) -> list[str
         "attente d'un créneau : " + " · ".join(waits),
         "routes : " + " · ".join(busiest),
     ]
+
+
+def network_brief(net: dict[str, Any], lane: str = "sniper") -> str:
+    """« 1 830 requêtes · aucun échec · attente sniper 0,1 s » (/etat)."""
+    routes: dict[str, dict[str, Any]] = net["routes"]
+    total = sum(r["n"] for r in routes.values())
+    failed = sum(n for r in routes.values() for status, n in r["codes"].items() if is_failure(status))
+    parts = [f"{total:,} requête{'s' if total > 1 else ''}".replace(",", " "),
+             f"{failed} échec{'s' if failed > 1 else ''}" if failed else "aucun échec"]
+    if (wait := net["attente"].get(lane)) and wait.get("n"):
+        parts.append(f"attente {lane} {wait['moy']:.1f} s".replace(".", ","))
+    return " · ".join(parts)

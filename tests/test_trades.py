@@ -49,10 +49,10 @@ async def context(tmp_path, active: list[dict]):
 
 class Sent:
     def __init__(self):
-        self.messages: list[tuple[Level, str, str]] = []
+        self.messages: list[tuple[Level, str, str, dict]] = []
 
-    def send(self, level, title, description="", **_kwargs):
-        self.messages.append((level, title, description))
+    def send(self, level, title, description="", **kwargs):
+        self.messages.append((level, title, description, kwargs))
 
 
 @pytest.mark.asyncio
@@ -66,11 +66,12 @@ async def test_unfair_offer_is_announced_once_with_a_counter_offer(tmp_path):
     await worker.setup()
     await worker.step()
     assert len(sent.messages) == 1  # le mien (t0) n'est pas évalué
-    level, title, text = sent.messages[0]
+    level, title, headline, kwargs = sent.messages[0]
+    text = "\n".join([headline, *(f"{n}\n{v}" for n, v in kwargs["columns"] + kwargs["sections"])])
     text = text.replace("\u202f", " ")  # wb() : espace fine entre les milliers
     assert level is Level.WARNING and title == "Échange proposé par Olé"
-    assert "❌ Défavorable : tu perds ~6 650 WB" in text
-    assert "L · Jeffrey Epstein : ~12 150 WB (6 vente(s) en 7 j)" in text
+    assert "❌ Défavorable : -6 650 WB" in text
+    assert "Tu donnes ~12 150 WB\n**L · Jeffrey Epstein**\n~12 150 WB · 6 ventes en 7 j" in text
     assert "L · Emma Watson + **6 700 WB**" in text
     assert "une carte vers 6 650 WB" not in text  # Zendaya (~5 675) est hors de la fourchette 0,9 – 1,6 × l'écart
     await worker.step()
@@ -87,7 +88,7 @@ async def test_two_for_one_is_fair_and_counter_offer_suggests_a_liquid_card(tmp_
     assert (emma.title, emma.rarity, emma.value, emma.sales) == ("Emma Watson", "L", 5500, 5)
     fair = await trades.evaluate(ctx, [jeffrey], [emma, zendaya])
     assert fair.verdict == "equitable" and fair.offers == []
-    assert "Tu reçois 92 % de ce que tu donnes." in fair.text and "L · Zendaya :" in fair.text
+    assert "Tu reçois 92 % de ce que tu donnes." in fair.text and "**L · Zendaya**" in fair.text
     # Emma contre 1 500 WB : il manque 4 000 ; Zendaya est proposée, pas Jeffrey (trop cher) ni Emma (déjà là).
     bad = await trades.evaluate(ctx, [emma], [], 0, 1500)
     assert bad.verdict == "defavorable"
@@ -100,7 +101,7 @@ async def test_two_for_one_is_fair_and_counter_offer_suggests_a_liquid_card(tmp_
     unknown = await trades.value_of_title(ctx, "Carte inconnue ✨")
     assert unknown.shiny and unknown.value is None
     partial = await trades.evaluate(ctx, [unknown], [emma])
-    assert "jamais vue(s) vendue(s)" in partial.text and partial.verdict == "incomplet"
+    assert "jamais vue vendue, comptée 0" in partial.text and partial.verdict == "incomplet"
     # Cartes illisibles contre rien (jarry0, 30/10) : pas « Équitable ».
     blind = await trades.evaluate(ctx, [trades.Priced("?", None), trades.Priced("?", None)], [])
     assert blind.verdict == "incomplet" and blind.headline.startswith("❓") and blind.offers == []

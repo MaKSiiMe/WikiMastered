@@ -64,6 +64,11 @@ def wb(value: float, sign: bool = False) -> str:
     return f"{value:{'+' if sign else ''},.0f}".replace(",", " ")
 
 
+def plural(n: float, one: str, many: str | None = None) -> str:
+    """« 1 mise placée », « 43 mises placées » (`many` : forme plurielle, sinon `one` + s) ; 0 et 1 au singulier."""
+    return f"{wb(n)} {one if abs(n) < 2 else many or one + 's'}"
+
+
 def pct(value: float | None, digits: int = 0) -> str:
     return "-" if value is None else f"{value:+.{digits}f}".replace(".", ",") + " %"
 

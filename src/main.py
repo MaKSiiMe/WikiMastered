@@ -30,6 +30,7 @@ import statistics as st
 import sys
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
 from src.account import bilan_text as account_bilan
@@ -48,7 +49,7 @@ from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sl
 from src.overrides import load as load_overrides
 from src.pauses import load as load_pauses
 from src.recap import recap_loop
-from src.roi import Roi, roi, roi_text
+from src.roi import Roi, plural, roi, roi_text, wb
 from src.sniper_backtest import cases_from
 from src.sniper_backtest import render as backtest_text
 from src.sniper_report import breakdown, sniper_report
@@ -144,13 +145,24 @@ async def build_context(settings: Settings):
 
 
 async def daily_report(ctx: Context, *, send: bool = True) -> dict:
-    stats, description, sections = await daily_report_parts(ctx)
+    report = await daily_report_parts(ctx)
     if send:
-        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", description, topic=Topic.REPORT, sections=sections)
-    return stats
+        ctx.notifier.info(f"Bilan du {now_local():%d/%m}", report.description, topic=Topic.REPORT,
+                          columns=report.columns, sections=report.sections)
+    return report.stats
 
 
-async def daily_report_parts(ctx: Context) -> tuple[dict, str, list[tuple[str, str]]]:
+@dataclass
+class Report:
+    """Bilan du jour : la ligne du haut, les chiffres clés côte à côte, puis un bloc par activité."""
+
+    stats: dict
+    description: str
+    columns: list[tuple[str, str]]
+    sections: list[tuple[str, str]]
+
+
+async def daily_report_parts(ctx: Context) -> Report:
     """Chiffres du jour, puis le bilan tel qu'envoyé le soir (aussi demandé par /bilan sur Discord)."""
     since = local_dt(now_local().date(), time(0, 0))
     stats = await ctx.db.report(since)
@@ -159,53 +171,56 @@ async def daily_report_parts(ctx: Context) -> tuple[dict, str, list[tuple[str, s
     except Exception:  # noqa: BLE001 - le bilan part même sans solde
         stats["balance"] = "?"
     description, sections = report_sections(stats, live_bids=ctx.settings.is_live("place_bid"))
-    extra = []
     if not ctx.settings.is_live("place_bid"):  # sniper simulé : on juge la simulation
-        extra.append(validation_text(await ctx.db.validation_stats(since, ctx.settings.price_min_sales)))
+        sections.append(as_section(validation_text(await ctx.db.validation_stats(since,
+                                                                                 ctx.settings.price_min_sales))))
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
-        extra.append(summary_line(await ctx.db.kv_get("collection"), targets(ctx)))
-    sections += [as_section(text) for text in extra]
+        sections.append((Topic.COLLECTION.value, summary_line(await ctx.db.kv_get("collection"), targets(ctx))))
+    columns: list[tuple[str, str]] = []
     try:
         value = await account_bilan(ctx, stats["balance"] if isinstance(stats["balance"], int) else None)
     except Exception:  # noqa: BLE001 - le bilan part sans la valeur du compte
         log.exception("Valeur du compte indisponible pour le bilan")
         value = None
     if value:
-        sections.insert(0, ("Compte", value))
-    return stats, description, sections
+        description, columns = value
+    return Report(stats, description, columns, sections)
 
 
 def report_sections(stats: dict, *, live_bids: bool) -> tuple[str, list[tuple[str, str]]]:
-    """Bilan du soir : le solde en tête, puis un bloc par activité de la journée."""
+    """Bilan du soir : le solde en tête, puis un bloc par activité de la journée, sans les compteurs à zéro."""
     balance = stats["balance"]
-    description = f"Solde : **{balance} WB**" if isinstance(balance, int) else "Solde : inconnu"
+    description = f"Solde : **{wb(balance)} WB**" if isinstance(balance, int) else "Solde : inconnu"
     # Positions simulées et mises de collection réelles (SIMULATE=sniper) : les deux comptes, sinon les cartes
     # gagnées (toujours réelles) semblaient venir des mises simulées.
     rejected = stats.get("bids_rejected", 0)
-    counts = [f"{stats['bids_placed']} mise(s) placée(s)" if live_bids or stats["bids_placed"] else "",
-              f"{rejected} refusée(s) par le site" if rejected else "",
-              f"{stats['bids_simulated']} mise(s) simulée(s)" if not live_bids or stats["bids_simulated"] else ""]
-    bids = ", ".join(c for c in counts if c)
-    won = [f"{stats['auctions_won']} position(s) pour {stats['spent_won']} WB" if stats["auctions_won"] else "",
-           f"{stats.get('won_collection', 0)} carte(s) de collection pour {stats.get('spent_collection', 0)} WB"
-           if stats.get("won_collection") else ""]
-    if any(won):
-        bids += "\nGagnées : " + ", ".join(w for w in won if w)
-    sales = [f"{stats['doublons_vendus']} doublon(s) vendu(s) pour {stats['doublons_recette']} WB"]
-    if stats["listings_posted"] or stats["listings_scheduled"]:
-        sales.append(f"{stats['listings_posted']} mise(s) en vente, {stats['listings_scheduled']} programmée(s)")
-    if stats["discarded"]:
-        sales.append(f"{stats['discarded']} carte(s) défaussée(s)")
-    positions = [f"{stats['positions_held']} réelle(s) détenue(s), {stats['capital_in_positions']} WB immobilisés"]
+    bids = [plural(stats["bids_placed"], "mise placée", "mises placées")
+            if live_bids or stats["bids_placed"] else "",
+            plural(rejected, "refusée", "refusées") + " par le site" if rejected else "",
+            plural(stats["bids_simulated"], "mise simulée", "mises simulées")
+            if not live_bids or stats["bids_simulated"] else ""]
+    won = [f"{plural(stats['auctions_won'], 'position gagnée', 'positions gagnées')} ({wb(stats['spent_won'])} WB)"
+           if stats["auctions_won"] else "",
+           f"{plural(stats.get('won_collection', 0), 'carte de collection', 'cartes de collection')} "
+           f"({wb(stats.get('spent_collection', 0))} WB)" if stats.get("won_collection") else ""]
+    sniper = " · ".join(b for b in bids if b) + ("\n" + " · ".join(w for w in won if w) if any(won) else "")
+    positions = [f"{plural(stats['positions_held'], 'détenue', 'détenues')} · "
+                 f"{wb(stats['capital_in_positions'])} WB immobilisés"]
     if stats.get("positions_held_sim"):
-        positions.append(f"{stats['positions_held_sim']} simulée(s) ("
-                         f"{stats.get('capital_simulated', 0)} WB fictifs)")
+        positions.append(f"{plural(stats['positions_held_sim'], 'simulée', 'simulées')} "
+                         f"({wb(stats.get('capital_simulated', 0))} WB fictifs)")
     if stats["positions_sold"]:
-        positions.append(f"{stats['positions_sold']} revendue(s), bénéfice {stats['profit']:+d} WB")
+        positions.append(f"{plural(stats['positions_sold'], 'revendue', 'revendues')} · "
+                         f"bénéfice **{wb(stats['profit'], True)} WB**")
     if stats["profit_simulated"]:
-        positions.append(f"Bénéfice simulé : {stats['profit_simulated']:+d} WB")
-    return description, [("Sniper", bids), ("Ventes", "\n".join(sales)),
-                         ("Positions", "\n".join(positions))]
+        positions.append(f"Bénéfice simulé : {wb(stats['profit_simulated'], True)} WB")
+    sales = [plural(stats["listings_posted"], "en vente", "en vente") if stats["listings_posted"] else "",
+             plural(stats["listings_scheduled"], "programmée", "programmées") if stats["listings_scheduled"] else "",
+             f"{plural(stats['doublons_vendus'], 'doublon vendu', 'doublons vendus')} "
+             f"({wb(stats['doublons_recette'])} WB)" if stats["doublons_vendus"] else "",
+             plural(stats["discarded"], "carte défaussée", "cartes défaussées") if stats["discarded"] else ""]
+    return description, [(Topic.SNIPER.value, sniper), ("💼 Positions", "\n".join(positions)),
+                         (Topic.SALES.value, " · ".join(x for x in sales if x) or "rien aujourd'hui")]
 
 
 def as_section(text: str) -> tuple[str, str]:

@@ -9,6 +9,7 @@ import pytest
 
 from src import snipes
 from src.core.models import Auction
+from src.core import colors
 from src.roi import roi, roi_discord, roi_text
 from src.workers.auction_sniper import AuctionSniper, Target, snipe_params
 from tests.test_integration import make_client, make_context, seed_observed
@@ -199,7 +200,7 @@ async def test_state_shows_antibot_and_verification_done_unblocks_next_bid(tmp_p
     sniper._antibot_retry_at = datetime.now(UTC) + timedelta(minutes=10)
     ctx.pauses["inventory"] = None
     embed = state_embed(ctx, [sniper], datetime.now(UTC) - timedelta(hours=2))
-    assert "Vérification anti-bot" in embed.description and embed.color.value == 0xFEE75C
-    assert "**sniper** : 🛑" in embed.fields[0].value
+    assert "Vérification anti-bot" in embed.description and embed.color.value == colors.WARN
+    assert "🛑 sniper" in embed.fields[0].value and "À vérifier" not in embed.description  # dit une seule fois
     assert sniper.verification_done() and sniper._antibot_retry_at == _EPOCH
     await ctx.db.close()

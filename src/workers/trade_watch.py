@@ -12,12 +12,10 @@ import random
 
 from src import trades
 from src.core.models import TradesList
-from src.core.notifier import Level, Topic
+from src.core.notifier import Topic
 from src.workers.base import Worker
 
 KV_KEY = "trades_seen"  # échanges déjà annoncés (seulement ceux encore actifs)
-LEVELS = {"equitable": Level.INFO, "avantage": Level.SUCCESS, "defavorable": Level.WARNING,
-          "incomplet": Level.WARNING}
 
 
 class TradeWatch(Worker):
@@ -48,7 +46,8 @@ class TradeWatch(Worker):
             seen.add(trade.id)
             e = await trades.evaluate_trade(self.ctx, trade, me)
             who = (trade.initiator or {}).get("username") or "un joueur"
-            self.notifier.send(LEVELS[e.verdict], f"Échange proposé par {who}", f"{e.headline}\n\n{e.text}",
+            self.notifier.send(trades.LEVELS[e.verdict], f"Échange proposé par {who}", e.headline,
+                               columns=e.columns, sections=[("\u200b", e.notes)] if e.notes else [],
                                url=f"{self.ctx.client.endpoints.base_url}/trades", important=True)
         await self.db.kv_set(KV_KEY, sorted(seen & active))
         minutes = self.settings.trade_check_minutes
