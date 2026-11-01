@@ -113,8 +113,8 @@ def test_portfolio_decision_needs_real_profit():
 def test_position_skipped_when_our_bid_is_far_below_the_estimate():
     """17-20/10 : mises sous 40 % de l'estimation, 0 gagnée sur 33 (parties à ~2 fois notre mise). Sautées :
     la place du quota anti-bot sert à une enchère gagnable."""
-    s = settings()
-    assert s.sniper_min_bid_share == 0.40
+    assert settings().sniper_min_bid_share == 0.50  # 31/10-01/11 : sous 50 %, 0 gagnée sur 18
+    s = settings(sniper_min_bid_share=0.40)
     params = snipe_params(s, night=False)
     pf = portfolio_state(s, balance=3000, held_count=0, held_real_cost=0, held_sim_cost=0,
                          engaged_real=0, engaged_sim=0, bot_engaged_count=0)
