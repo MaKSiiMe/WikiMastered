@@ -578,7 +578,7 @@ class Database:
         """Dernière remise en vente (après une vente sans acheteur) de cette position, si elle a échoué."""
         row = await self._one("SELECT status, base_amount, relist_count, reason, duration_minutes FROM listings "
                               "WHERE bid_id = ? ORDER BY id DESC LIMIT 1", (bid_id,))
-        return row if row and row["status"] == "failed" and row["relist_count"] else None
+        return row if row and row["status"] in ("failed", "antibot") and row["relist_count"] else None
 
     async def unsold_durations(self, bid_id: int) -> list[int]:
         """Durées (minutes) des ventes sans acheteur de cette position, de la plus ancienne à la plus récente."""
@@ -620,6 +620,17 @@ class Database:
         for r in rows:
             await self.update_bid(r["id"], closed=0, sold_at=None)
         await self._exec(f"UPDATE listings SET status = 'favorite' WHERE {favorite}")
+        return len(rows)
+
+    async def reopen_antibot_positions(self) -> int:
+        """Positions closes après des refus « Vérification anti-bot requise » (01/11 : 16 cartes, 17 162 WB, abandonnées
+        de 07:04 à 07:59) : rouvertes, et ces refus ne comptent plus comme des échecs. Renvoie leur nombre."""
+        antibot = "status = 'failed' AND error LIKE '%anti-bot%'"
+        rows = await self._all(f"SELECT id FROM bids WHERE closed = 1 AND sale_price IS NULL AND id IN "
+                               f"(SELECT bid_id FROM listings WHERE {antibot})")
+        for r in rows:
+            await self.update_bid(r["id"], closed=0, sold_at=None)
+        await self._exec(f"UPDATE listings SET status = 'antibot' WHERE {antibot}")
         return len(rows)
 
     async def reopen_same_card_positions(self, since: datetime) -> int:

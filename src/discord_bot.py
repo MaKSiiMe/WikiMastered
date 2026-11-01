@@ -33,6 +33,7 @@ from src.core.timeutils import utcnow
 from src.recap import STALE_AFTER
 from src.roi import plural, roi_discord, wb
 from src.workers.auction_sniper import AuctionSniper
+from src.workers.inventory_manager import InventoryManager
 from src.workers.base import Context, Worker
 from src.workers.collection import progress_text, recent_cards, targets
 
@@ -363,6 +364,11 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     # ------------------------------------------------------------ pilotage (boutons et commandes)
     def verify(source: str) -> str:
         """Vérification anti-bot signalée faite ; `source` (bouton ou commande) va dans les logs."""
+        inventory = next((w for w in workers if isinstance(w, InventoryManager)), None)
+        if inventory is not None and inventory.verification_done():
+            log.info("Discord : vérification signalée faite (%s), la prochaine mise en vente la teste", source)
+            if sniper is None or not sniper.antibot_since:
+                return "👍 Noté : la prochaine mise en vente teste la vérification."
         if sniper is None:
             log.info("Discord : vérification signalée faite (%s), sniper désactivé", source)
             return "Sniper désactivé : aucune vérification à tester."
