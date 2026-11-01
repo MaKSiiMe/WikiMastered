@@ -39,7 +39,7 @@ class Snipe:
     @property
     def label(self) -> str:
         rarity = f" ({self.rarity})" if self.rarity else ""
-        return f"{self.title}{rarity}{' ✨ shiny' if self.shiny else ''} ≤ {self.max_price} WB"
+        return f"{self.title}{rarity}{' ✨ shiny' if self.shiny else ''} ≤ {self.max_price:,} WB".replace(",", "\u202f")
 
 
 async def load(db: Database) -> dict[str, Snipe]:

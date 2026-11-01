@@ -181,13 +181,14 @@ def value_embed(value: dict, snapshot: dict) -> discord.Embed:
     if value["previous"]:
         day, before = value["previous"]
         lines.append(f"{wb(value['total'] - before, True)} WB depuis le {day[8:10]}/{day[5:7]}")
-    unknown = f" · {snapshot['unknown']} sans estimation" if snapshot["unknown"] else ""
+    unknown = f" · {wb(snapshot['unknown'])} sans estimation" if snapshot["unknown"] else ""
     lines += ["", f"💰 Solde : **{wb(value['balance'])} WB**",
-              f"🃏 Cartes : **{wb(value['cards'])} WB** ({wb(snapshot['copies'])} exemplaires{unknown})",
-              f"🏷️ En vente : **{wb(value['selling'])} WB** ({value['listings']} vente(s), au prix de départ)",
-              f"⏳ Mises en tête : **{wb(value['bids'])} WB** ({value['leading']} enchère(s))"]
-    embed = discord.Embed(title="Valeur du compte", description="\n".join(lines), color=COLOR)
-    rarities = [f"**{r}** {wb(n)} · {wb(v)} WB" for r, (n, v) in snapshot["by_rarity"].items() if n]
+              f"🃏 Cartes : **{wb(value['cards'])} WB** ({plural(snapshot['copies'], 'exemplaire')}{unknown})",
+              f"🏷️ En vente : **{wb(value['selling'])} WB** ({plural(value['listings'], 'vente')}, au prix de départ)"]
+    if value["bids"]:
+        lines.append(f"⏳ Mises en tête : **{wb(value['bids'])} WB** ({plural(value['leading'], 'enchère')})")
+    embed = discord.Embed(title="💎 Valeur du compte", description="\n".join(lines), color=COLOR)
+    rarities = [f"**{r}** · {plural(n, 'carte')} · {wb(v)} WB" for r, (n, v) in snapshot["by_rarity"].items() if n]
     if rarities:
         embed.add_field(name="Cartes par rareté", value="\n".join(rarities)[:1024], inline=True)
     if snapshot["top"]:
@@ -235,18 +236,16 @@ async def top_embeds(ctx: Context, size: int, shiny: bool) -> list[discord.Embed
                      f"ventes · {wb(r['low'])}–{wb(r['high'])}"
                      + top_bid(quote.average if quote else None, ctx.settings.sale_fee_pct))
     kind = "shiny" if shiny else "normales"
-    title = f"Top {size} des cartes {kind} les plus chères"
+    title = f"🏆 Top {size} des cartes {kind} les plus chères"
     if not lines:
         return [discord.Embed(title=title, color=COLOR,
                               description="Aucune carte vendue assez souvent ces derniers jours.")]
     pages = [lines[i:i + TOP_PER_EMBED] for i in range(0, len(lines), TOP_PER_EMBED)]
     embeds = [discord.Embed(title=title if not n else f"{title} (suite)", color=COLOR, description="\n".join(page))
               for n, page in enumerate(pages)]
-    embeds[-1].set_footer(text=f"Moyenne des ventes observées sur {TOP_DAYS} jours (au moins {TOP_MIN_SALES} "
-                               "ventes), prix le plus bas et le plus haut. Miser : la plus petite mise dont la "
-                               "relance minimale (+10 %) atteint le prix de revente (médiane des dernières ventes) : "
-                               "qui te surenchérit paie plus que la carte ne se revend. Entre parenthèses, le "
-                               "bénéfice si tu la gagnes à ce prix.")
+    embeds[-1].set_footer(text=f"Moyenne des ventes sur {TOP_DAYS} jours ({TOP_MIN_SALES} ventes au moins), prix le "
+                               "plus bas et le plus haut. Miser : la plus petite mise dont la relance (+10 %) atteint "
+                               "la revente ; entre parenthèses, le bénéfice à ce prix.")
     return embeds
 
 
@@ -331,21 +330,27 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------ vendre
-    async def sell(title: str, price: int, rarity: str = "") -> str:
+    async def sell(title: str, price: int, rarity: str = "") -> discord.Embed:
         """Programme la vente d'un exemplaire ; renvoie le message pour l'utilisateur."""
         if inventory is None:
-            return "Ventes désactivées (ENABLE_INVENTORY) : rien n'est vendu."
+            return discord.Embed(title="Ventes désactivées", description="ENABLE_INVENTORY : rien n'est vendu.",
+                                 color=GREY)
         copies, excluded = await copies_of(ctx, title)
         copy, why = sellable(copies, excluded, rarity)
         if copy is None:
-            return f"Impossible de vendre « {title} » : {why}."
+            return discord.Embed(title="Rien à vendre", description=f"« {title} » : {why}.", color=GREY)
         listing_id = await inventory.sell_copy(copy, price)
         if not listing_id:
-            return f"« {title} » : cet exemplaire est déjà en vente."
+            return discord.Embed(title="Déjà en vente", description=f"« {title} » : cet exemplaire est déjà en vente.",
+                                 color=GREY)
         log.info("Discord : vente demandée %s (%s) à %d WB", copy.title, copy.rarity, price)
-        mode = "" if inventory.listing_live else " (simulée : ventes en DRY_RUN)"
-        return f"💰 **{copy.title}** ({copy.rarity}) mise en vente à **{wb(price)} WB**{mode}, à la première place " \
-               "libre, avant les autres ventes. Je te préviens quand elle est vendue."
+        embed = discord.Embed(title=f"💰 Mise en vente : {copy.title} ({copy.rarity}) à {wb(price)} WB", color=GREEN,
+                              description="À la première place libre, avant les autres ventes. Je te préviens quand "
+                                          "elle est vendue." + ("" if inventory.listing_live else
+                                                                "\nℹ️ Simulée : ventes en DRY_RUN."))
+        if image := await card_image(ctx, copy.title, [copy]):
+            embed.set_thumbnail(url=image)
+        return embed
 
     async def sale_check(title: str, price: int, rarity: str) -> tuple[discord.Embed, bool]:
         """Embed de confirmation de /vendre ; False si rien n'est vendable."""
@@ -359,14 +364,17 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             notes.append(f"⚠️ C'est ton seul exemplaire en {copy.rarity}.")
         quote = (await ctx.prices.observed_quote(copy.catalog_id)).get(copy.rarity or "")
         if quote and quote.average:
-            notes.append(f"Ventes observées : ~{wb(quote.average)} WB ({quote.count} vente(s)).")
+            notes.append(f"Cote : ~{wb(quote.average)} WB ({plural(quote.count or 0, 'vente')}).")
             if price < quote.average * 0.5:
                 notes.append("⚠️ Moins de la moitié de ce qui se vend d'habitude.")
         if inventory is not None and not inventory.listing_live:
             notes.append("ℹ️ Ventes simulées (DRY_RUN) : rien ne sera vraiment mis en vente.")
-        description = f"**{copy.title}** ({copy.rarity}) à **{wb(price)} WB**, à la première place de vente libre." + \
-            ("\n\n" + "\n".join(notes) if notes else "")
-        return discord.Embed(title="Vendre cette carte ?", description=description, color=COLOR), True
+        embed = discord.Embed(title=f"💰 Vendre {copy.title} ({copy.rarity}) à {wb(price)} WB ?",
+                              description="\n".join(["À la première place de vente libre.", *notes]),
+                              color=ORANGE if any(n.startswith("⚠️") for n in notes) else COLOR)
+        if image := await card_image(ctx, copy.title, [copy]):
+            embed.set_thumbnail(url=image)
+        return embed, True
 
     @tree.command(name="vendre", description="Vendre un exemplaire au prix choisi, à la première place libre")
     @app_commands.describe(carte="titre exact", prix="prix de départ en WB", rarete="rareté de l'exemplaire")
@@ -375,7 +383,8 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     async def vendre(interaction: discord.Interaction, carte: str, prix: app_commands.Range[int, 1, 1_000_000],
                      rarete: app_commands.Choice[str] | None = None) -> None:
         if inventory is None:
-            await interaction.response.send_message("Ventes désactivées (ENABLE_INVENTORY).")
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Ventes désactivées", description="ENABLE_INVENTORY : rien n'est vendu.", color=GREY))
             return
         await interaction.response.defer(thinking=True)
         rarity = rarete.value if rarete else ""
@@ -386,10 +395,10 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
 
         async def confirm(button: discord.Interaction) -> None:
             await button.response.defer()  # la collection est relue sur le site : plus de 3 s possibles
-            await button.edit_original_response(content=await sell(carte, prix, rarity), embed=None, view=None)
+            await button.edit_original_response(embed=await sell(carte, prix, rarity), view=None)
 
         async def cancel(button: discord.Interaction) -> None:
-            await button.response.edit_message(content="Annulé.", embed=None, view=None)
+            await button.response.edit_message(embed=discord.Embed(title="Vente annulée", color=GREY), view=None)
 
         await interaction.followup.send(embed=embed, view=Buttons(owner, [
             ("Vendre", discord.ButtonStyle.success, confirm), ("Annuler", discord.ButtonStyle.secondary, cancel)],
@@ -509,13 +518,14 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
 
         async def free_pressed(button: discord.Interaction) -> None:
             removed = [k for k in card_keeps if await keeps.remove(ctx.db, k.label)]
-            await button.response.send_message(f"🔓 **{carte}** n'est plus gardée." if removed
-                                               else "Elle n'était plus gardée.")
+            await button.response.send_message(embed=discord.Embed(
+                title=f"🔓 Libérée : {carte}" if removed else "Rien à libérer", color=GREY,
+                description="Elle peut de nouveau être vendue ou défaussée." if removed else "Elle n'était plus gardée."))
 
         async def sell_pressed(button: discord.Interaction) -> None:
             async def priced(submit: discord.Interaction, price: int) -> None:
                 await submit.response.defer(thinking=True)
-                await submit.followup.send(await sell(carte, price))
+                await submit.followup.send(embed=await sell(carte, price))
             await button.response.send_modal(PriceModal(f"Vendre {carte}", priced))
 
         async def snipe_pressed(button: discord.Interaction) -> None:
@@ -523,7 +533,10 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                 added = await snipes.add(ctx.db, carte, price)
                 if sniper is not None:
                     await sniper.reload_snipes()
-                await submit.response.send_message(f"🎯 Carte demandée : **{added.label}**.")
+                log.info("Discord : carte demandée %s", added.label)
+                await submit.response.send_message(embed=discord.Embed(
+                    title=f"🎯 Carte demandée : {added.label}", color=GREEN,
+                    description="Le sniper la mise au minimum ; gagnée, elle est gardée, pas revendue."))
             await button.response.send_modal(PriceModal(f"Mise max. pour {carte}", priced))
 
         buttons: list[tuple[str, discord.ButtonStyle, Any]] = []
@@ -586,7 +599,8 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     @tree.command(name="opportunites", description="Ventes suivies par le sniper et son plafond pour chacune")
     async def opportunites(interaction: discord.Interaction) -> None:
         if sniper is None:
-            await interaction.response.send_message("Sniper désactivé.")
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Sniper désactivé", description="ENABLE_SNIPER=false : aucune vente suivie.", color=GREY))
             return
         now = utcnow()
         # Mise minimale déjà au-dessus du plafond : le sniper ne misera pas (sauf si sa cote remonte), à part.
@@ -741,7 +755,8 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
 
         async def priced(submit: discord.Interaction, price: int) -> None:
             await submit.response.defer()  # la collection est relue sur le site : plus de 3 s possibles
-            await close_buttons(submit, await sell(row["title"], price, row["rarity"] or ""))
+            done = await sell(row["title"], price, row["rarity"] or "")
+            await close_buttons(submit, f"{done.title}" + (f"\n{done.description}" if done.description else ""))
         await interaction.response.send_modal(PriceModal(f"Revendre {row['title']}", priced, row["base_amount"]))
 
     handlers = {"price": change_price, "cheap": cheap, "keep": keep_from_listing, "resell": resell,

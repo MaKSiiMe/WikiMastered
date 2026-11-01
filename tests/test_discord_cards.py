@@ -290,7 +290,7 @@ async def test_top_ranks_cards_by_average_recent_price(tmp_path):
     await ctx.db.db.commit()
 
     [embed] = await top_embeds(ctx, 10, False)
-    assert embed.title == "Top 10 des cartes normales les plus chères"
+    assert embed.title == "🏆 Top 10 des cartes normales les plus chères"
     lines = embed.description.splitlines()
     assert len(lines) == 2 and "Ada" in lines[1]
     # Revente ~2100 (médiane) : à 1909, la relance minimale (2100) l'atteint ; bénéfice 191.

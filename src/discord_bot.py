@@ -201,6 +201,12 @@ def fields(lines: list[str], limit: int = 1024) -> list[str]:
     return out
 
 
+def verify_embed(text: str) -> discord.Embed:
+    """Réponse à « vérification faite » : verte si une vérification attendait, grise sinon."""
+    return discord.Embed(title="✅ Vérification signalée" if text.startswith("👍") else "Rien à vérifier",
+                         description=text.removeprefix("👍 "), color=GREEN if text.startswith("👍") else GREY)
+
+
 def short_time(value: str | datetime | None) -> str:
     """« 03:53 » aujourd'hui, « 02/11 03:53 » un autre jour."""
     text = paris(value)
@@ -241,33 +247,52 @@ def positions_embed(rows) -> discord.Embed:
     capital = sum(r["amount"] for r in rows if not r["dry_run"])
     embed = discord.Embed(title=f"💼 Positions ({len(rows)})", color=COLOR,
                           description=f"**{wb(capital)} WB** immobilisés · gain visé {wb(target, True)} WB")
-    used = len(embed.description or "")
-    for name, lines in groups.items():
-        for i, value in enumerate(fields(lines)):
-            if used + len(value) > 5500:  # limite de Discord (6000 par message)
-                embed.add_field(name="\u200b", value="… la suite avec /ventes", inline=False)
-                return embed
-            embed.add_field(name=f"{name} ({len(lines)})" if i == 0 else "\u200b", value=value, inline=False)
-            used += len(value) + len(name)
+    add_groups(embed, groups)
     return embed
 
 
-def listings_text(rows) -> str:
+LISTING_GROUPS = [("🏷️ En cours", ("posted",)), ("🕒 Programmées", ("scheduled",)), ("⏳ En attente d'une place", ("waiting",)),
+                  ("❓ À vérifier", ("uncertain",)), ("🧪 Simulées", ("simulated",))]
+
+
+def listings_embed(rows) -> discord.Embed:
+    """/ventes : par état (en cours, programmées…), une ligne par vente : prix, fin ou publication prévue."""
     if not rows:
-        return "Aucune vente programmée ni en cours."
-    lines = []
+        return discord.Embed(title="🏷️ Ventes (0)", description="Aucune vente programmée ni en cours.", color=GREY)
+    mixed = len({r["rarity"] for r in rows}) > 1
+    groups: dict[str, list[str]] = {name: [] for name, _ in LISTING_GROUPS}
     for r in rows:
-        when = f"fin {paris(r['target_end'])}" if r["status"] != "scheduled" else f"publiée {paris(r['post_at'])}"
-        kind = {"scheduled": "🕒 programmée", "simulated": "🧪 simulée", "uncertain": "❓ à vérifier",
-                "waiting": "⏳ en attente"}.get(r["status"], "🏷️ en cours")
-        lines.append(f"**{r['rarity'] or '?'}** {r['title'][:60]}\n{wb(r['base_amount'])} WB · {kind} · {when}")
-    return "\n".join(lines)
+        name = next((n for n, statuses in LISTING_GROUPS if r["status"] in statuses), LISTING_GROUPS[0][0])
+        label = (f"{r['rarity'] or '?'} · " if mixed else "") + f"**{r['title'][:50]}** · {wb(r['base_amount'])} WB"
+        if r["status"] in ("posted", "uncertain", "simulated") and r["target_end"]:
+            label += f" · fin {short_time(r['target_end'])}"
+        elif r["post_at"]:  # heure passée : elle attend qu'une place de vente se libère
+            past = datetime.fromisoformat(r["post_at"]) <= utcnow()
+            label += f" · {'attend une place depuis' if past else 'prévue'} {short_time(r['post_at'])}"
+        groups[name].append(label)
+    embed = discord.Embed(title=f"🏷️ Ventes ({len(rows)})", color=COLOR,
+                          description=f"**{wb(sum(r['base_amount'] for r in rows))} WB** au prix de départ")
+    add_groups(embed, groups)
+    return embed
+
+
+def add_groups(embed: discord.Embed, groups: dict[str, list[str]]) -> None:
+    """Un bloc par groupe non vide (« 🕒 Programmées (22) »), coupé en champs de 1024 caractères ; au-delà de la
+    limite d'un message (6000), la suite est remplacée par un renvoi."""
+    used = len(embed.description or "") + len(embed.title or "")
+    for name, lines in groups.items():
+        for i, value in enumerate(fields(lines)):
+            if used + len(value) > 5500:
+                embed.add_field(name="\u200b", value="… et d'autres, trop pour un message", inline=False)
+                return
+            embed.add_field(name=f"{name} ({len(lines)})" if i == 0 else "\u200b", value=value, inline=False)
+            used += len(value) + len(name)
 
 
 def snipes_text(found: dict[str, snipes.Snipe]) -> str:
     if not found:
-        return "Aucune carte demandée. /snipe pour en ajouter une."
-    return "\n".join(f"🎯 **{s.label}** (depuis le {paris(s.added_at)})" for s in found.values())
+        return "Aucune carte demandée."
+    return "\n".join(f"• **{s.label}** · depuis le {paris(s.added_at)}" for s in found.values())
 
 
 class Confirm(discord.ui.View):
@@ -350,7 +375,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         return "Aucune vérification en attente : les mises passent."
 
     async def verify_pressed(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(verify("bouton « C'est fait »"))
+        await interaction.response.send_message(embed=verify_embed(verify("bouton « C'est fait »")))
 
     def pause_label(name: str) -> str:
         worker = next((w for w in workers if w.name == name), None)
@@ -491,22 +516,27 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @tree.command(name="sauvegarde", description="Sauvegarder la base maintenant (avant un gros changement)")
     async def sauvegarde(interaction: discord.Interaction) -> None:
         if not s.enable_backup:
-            await interaction.response.send_message("Sauvegardes désactivées (ENABLE_BACKUP).")
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Sauvegardes désactivées", description="ENABLE_BACKUP=false : aucune sauvegarde n'est faite.",
+                color=GREY))
             return
         await interaction.response.defer(thinking=True)
         try:
             result = await backup.run_backup(ctx)
         except Exception as exc:  # noqa: BLE001 - l'erreur est dite à l'utilisateur
             log.exception("Sauvegarde demandée impossible")
-            await interaction.followup.send(f"❌ Sauvegarde impossible : {type(exc).__name__} : {exc}"[:1900])
+            await interaction.followup.send(embed=discord.Embed(
+                title="❌ Sauvegarde impossible", description=f"{type(exc).__name__} : {exc}"[:4000], color=RED))
             return
-        await interaction.followup.send(f"💾 **{result.path.name}** : {result.size >> 20} Mo (base "
-                                        f"{result.db_size >> 20} Mo) en {result.seconds:.0f} s. "
-                                        f"{s.backup_keep} sauvegardes gardées au plus.")
+        embed = discord.Embed(title="💾 Sauvegarde faite", color=GREEN,
+                              description=f"`{result.path.name}`\n{result.size >> 20} Mo (base {result.db_size >> 20} "
+                                          f"Mo) en {result.seconds:.0f} s")
+        embed.set_footer(text=f"{s.backup_keep} sauvegardes gardées au plus")
+        await interaction.followup.send(embed=embed)
 
     @tree.command(name="verif-faite", description="Vérification anti-bot faite : les mises reprennent sans attendre")
     async def verif_faite(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(verify("/verif-faite"))
+        await interaction.response.send_message(embed=verify_embed(verify("/verif-faite")))
 
     @tree.command(name="pause", description="Mettre le sniper, les ventes ou tout le bot en pause")
     @app_commands.describe(quoi="sniper par défaut", duree="1 h par défaut")
@@ -595,9 +625,12 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         await interaction.response.defer(thinking=True)
         balance = await ctx.api.balance()
         held = await ctx.db.positions_summary()
-        text = f"Solde : **{balance} WB**\nPositions : {held['real_count']} détenue(s), {held['real_cost']} WB " \
-               f"immobilisés\nTotal : **{balance + held['real_cost']} WB**"
-        await reply(interaction, "Solde", text, code=False)
+        embed = discord.Embed(title=f"💰 Solde : {wb(balance)} WB", color=COLOR)
+        embed.add_field(name="Positions", inline=True,
+                        value=f"{wb(held['real_cost'])} WB ({plural(held['real_count'], 'carte')})")
+        embed.add_field(name="Solde + positions", value=f"**{wb(balance + held['real_cost'])} WB**", inline=True)
+        embed.set_footer(text="/valeur : la valeur complète du compte (cartes, ventes en cours)")
+        await interaction.followup.send(embed=embed)
 
     @tree.command(name="positions", description="Cartes achetées pour la revente, pas encore revendues")
     async def positions(interaction: discord.Interaction) -> None:
@@ -605,8 +638,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
 
     @tree.command(name="ventes", description="Ventes programmées et en cours")
     async def ventes(interaction: discord.Interaction) -> None:
-        rows = await ctx.db.open_listings()
-        await reply(interaction, f"Ventes ({len(rows)})", listings_text(rows), code=False)
+        await interaction.response.send_message(embed=listings_embed(await ctx.db.open_listings()))
 
     @tree.command(name="prix", description="Ventes observées d'une carte, estimation du bot, ventes en cours")
     @app_commands.describe(titre="titre exact de la carte", shiny="exemplaires shiny seulement (non par défaut)")
@@ -658,8 +690,14 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @tree.command(name="sniper", description="Récap des enchères misées par le sniper")
     @app_commands.describe(heures="période, en heures (24 par défaut)")
     async def sniper_report(interaction: discord.Interaction, heures: app_commands.Range[float, 1, 168] = 24) -> None:
-        text = await cli.sniper_report_status(ctx, heures, True)  # en gras (**…**) : pas de bloc de code
-        await reply(interaction, f"Sniper, {heures:g} dernières heures", text, code=False)
+        until = utcnow()
+        since = until - timedelta(hours=heures)
+        _, summary, _ = await cli.sniper_report(ctx.db, since, until, s.sale_fee_pct)
+        embed = discord.Embed(title=f"🎯 Sniper · {plural(heures, 'dernière heure', 'dernières heures')}",
+                              description=summary[:4000], color=COLOR)
+        embed.set_footer(text=f"Du {paris(since)} au {paris(until)} · le détail de chaque enchère dans le récap de "
+                              f"{s.sniper_report_time:%H:%M}")
+        await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------ actions
     @tree.command(name="snipe", description="Demander une carte au sniper : il la mise jusqu'à ta mise maximale")
@@ -679,26 +717,35 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         elif not s.is_live("collection_bid"):
             notes.append("ℹ️ Mises de collection simulées (DRY_RUN / SIMULATE) : la mise sera simulée.")
         label = snipes.Snipe(titre, prix_max, rarity, shiny=shiny).label
-        embed = discord.Embed(title="Demander cette carte ?", color=COLOR,
-                              description=f"**{label}**\nMise au minimum, jusqu'à {prix_max} WB ; gardée, pas "
-                                          "revendue." + ("\n\n" + "\n".join(notes) if notes else ""))
+        embed = discord.Embed(title=f"🎯 Demander {label} ?", color=ORANGE if notes else COLOR,
+                              description="\n".join([f"Le sniper la mise au minimum, jusqu'à **{wb(prix_max)} WB**. "
+                                                     "Gagnée, elle est gardée, pas revendue.", *notes]))
+        await interaction.response.defer()
+        from src.discord_cards import card_image  # même module chargé par build_client
+        if image := await card_image(ctx, titre):
+            embed.set_thumbnail(url=image)
         view = Confirm(s.discord_owner_id)
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)  # le message modifié ensuite
         await view.wait()
         if not view.value:
-            embed.title, embed.color = ("Annulé" if view.value is False else "Annulé (pas de réponse)"), GREY
+            embed.title = "Demande annulée" if view.value is False else "Demande annulée (pas de réponse)"
+            embed.color = GREY
             await interaction.edit_original_response(embed=embed, view=None)
             return
         added = await snipes.add(ctx.db, titre, prix_max, rarity, shiny)
         if sniper is not None:
             await sniper.reload_snipes()
         log.info("Discord : carte demandée %s", added.label)
-        embed.title, embed.color = "Carte demandée", GREEN
+        embed.title, embed.color = f"🎯 Carte demandée : {added.label}", GREEN
         await interaction.edit_original_response(embed=embed, view=None)
 
     @tree.command(name="snipes", description="Cartes demandées au sniper")
     async def snipes_list(interaction: discord.Interaction) -> None:
-        await reply(interaction, "Cartes demandées", snipes_text(await snipes.load(ctx.db)), code=False)
+        found = await snipes.load(ctx.db)
+        embed = discord.Embed(title=f"🎯 Cartes demandées ({len(found)})", description=snipes_text(found)[:4000],
+                              color=COLOR if found else GREY)
+        embed.set_footer(text="/snipe pour en ajouter une · /annuler pour en retirer une")
+        await interaction.response.send_message(embed=embed)
 
     async def snipe_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         return [app_commands.Choice(name=sn.label[:100], value=sn.title[:100])
