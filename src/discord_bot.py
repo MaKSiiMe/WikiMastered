@@ -371,22 +371,51 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                 channels[url] = None
         return channels[url]
 
-    async def with_buttons(actions: dict, embed: dict, url: str, mention: str = "") -> bool:
-        antibot = actions.get("kind") == "antibot"
-        view = VerifyButton(s.discord_owner_id, verify_pressed) if antibot else message_view(actions)
-        if view is None or not url or not client.is_ready():
-            return False
+    def view_for(actions: dict | None) -> discord.ui.View | None:
+        if actions and actions.get("kind") == "antibot":
+            return VerifyButton(s.discord_owner_id, verify_pressed)
+        return message_view(actions) if actions else None
+
+    async def with_buttons(actions: dict | None, embed: dict, url: str, mention: str = "") -> str | None:
+        """Message envoyé par le bot dans le salon du webhook, avec ses boutons (sans `actions` : sans boutons, mais
+        modifiable ensuite) ; None : le webhook l'enverra."""
+        view = view_for(actions)
+        if (actions and view is None) or not url or not client.is_ready():
+            return None
         target = await channel_for(url)
         if target is None:
-            return False
+            return None
         try:
             message = await target.send(content=mention or None, embed=discord.Embed.from_dict(embed), view=view)
         except discord.Forbidden:  # le bot ne peut pas écrire dans ce salon : le webhook, sans boutons
             log.warning("Discord : pas le droit d'écrire dans le salon du webhook, messages sans boutons")
             channels[url] = None
-            return False
-        if antibot:
+            return None
+        if actions and actions.get("kind") == "antibot":
             antibot_alerts.append(message)
+        return str(message.id)
+
+    async def bot_edit(url: str, message_id: str, embed: dict, actions: dict | None) -> bool:
+        """Message du bot modifié (celui d'une position) ; False : introuvable ou bot pas prêt, il sera republié."""
+        target = await channel_for(url) if client.is_ready() else None
+        if target is None:
+            return False
+        try:
+            await target.get_partial_message(int(message_id)).edit(  # type: ignore[attr-defined]
+                embed=discord.Embed.from_dict(embed), view=view_for(actions))
+        except discord.HTTPException as exc:
+            log.info("Discord : message %s non modifié (%s), republié", message_id, exc)
+            return False
+        return True
+
+    async def bot_delete(url: str, message_id: str) -> bool:
+        target = await channel_for(url) if client.is_ready() else None
+        if target is None:
+            return False
+        try:
+            await target.get_partial_message(int(message_id)).delete()  # type: ignore[attr-defined]
+        except discord.HTTPException:
+            return False
         return True
 
     from src.discord_cards import message_view, persistent_view, register  # importe ce module : déjà chargé
@@ -406,6 +435,8 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         if sniper is not None:
             client.watch_task = asyncio.create_task(watch_antibot())  # type: ignore[attr-defined]
         ctx.notifier.with_buttons = with_buttons
+        ctx.notifier.bot_edit = bot_edit
+        ctx.notifier.bot_delete = bot_delete
     client.setup_hook = setup_hook  # type: ignore[method-assign]
 
     @tree.command(name="etat", description="Santé du bot : session, vérification anti-bot, workers, pauses")
@@ -623,5 +654,6 @@ async def run_discord(ctx: Context, workers: list[Worker], cli: ModuleType, star
             await client.start(ctx.settings.discord_bot_token)
         finally:
             ctx.notifier.with_buttons = None  # messages de nouveau par les webhooks seuls
+            ctx.notifier.bot_edit = ctx.notifier.bot_delete = None
             if task := getattr(client, "watch_task", None):
                 task.cancel()

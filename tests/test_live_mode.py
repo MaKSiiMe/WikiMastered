@@ -66,8 +66,7 @@ async def test_sniper_simulated_while_collection_bids_are_real(tmp_path):
     assert posted == ["/api/marketplace/col/bid"]  # seule la mise de collection est partie
     assert sniper.recap()[1:] == ["2 enchère(s) examinée(s) : misée 1 · misée (collection) 1"]
     assert sniper.recap()[1:] == ["Aucune enchère dans la fenêtre de mise."]  # remis à zéro
-    sniper._flush_digest(now + timedelta(days=1))
-    assert ("INFO", "Sniper : 2 enchères (1 placée(s), 1 simulée(s))") in notifier.sent
+    assert not any("Enchère" in title for _, title in notifier.sent)  # plus de résumé horaire des mises
     assert client.user_id == ME
     await db.close()
 

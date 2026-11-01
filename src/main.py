@@ -121,12 +121,18 @@ async def build_context(settings: Settings):
     set_timezone(settings.timezone)
     notifier = DiscordNotifier(settings.discord_webhook_url, settings.discord_alert_webhook_url,
                                settings.discord_mention, settings.dry_run, footer=f"Mode {settings.mode_label}",
-                               activity_webhook_url=settings.discord_activity_webhook_url)
+                               activity_webhook_url=settings.discord_activity_webhook_url,
+                               channel_webhooks={"sniper": settings.discord_webhook_sniper,
+                                                 "ventes": settings.discord_webhook_ventes,
+                                                 "collection": settings.discord_webhook_collection,
+                                                 "bilan": settings.discord_webhook_bilan,
+                                                 "systeme": settings.discord_webhook_systeme})
     notifier.start()
     endpoints = Endpoints.load(settings.endpoints_file, settings.wm_base_url)
     client = WikiMastersClient(settings, endpoints, notifier)
     db = Database(settings.data_dir / "wikimastered.db")
     await db.connect()
+    notifier.store = db  # messages uniques des positions
     api = WikiMastersAPI(client)
     ctx = Context(settings, client, api, db, notifier, PriceService(api, db, settings.price_cache_ttl_minutes, settings.price_recent_sales))
     try:

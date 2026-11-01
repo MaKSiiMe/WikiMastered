@@ -123,6 +123,14 @@ class Settings(BaseSettings):
     # Salon d'activité (paquets, digests, récap périodique, tendances, simulé) : vide = salon principal ;
     # « off » = logs seulement. Le salon principal garde alertes, achats, ventes, cartes gagnées, bilans.
     discord_activity_webhook_url: str = ""
+    # Un salon par catégorie (un webhook chacun) : il reçoit tous ses messages, sauf les alertes critiques (salon
+    # d'alertes). Une catégorie sans salon garde le salon principal ou d'activité. Le message unique de chaque position
+    # (achetée, en vente, vendue…) va dans #ventes.
+    discord_webhook_sniper: str = ""      # récap des enchères de 08:00, budget, mises à vérifier
+    discord_webhook_ventes: str = ""      # positions, ventes, défausse, échanges
+    discord_webhook_collection: str = ""  # cartes de collection, étiquettes, succès
+    discord_webhook_bilan: str = ""       # bilan de 23:00, récap des workers toutes les 4 h
+    discord_webhook_systeme: str = ""     # démarrage, session, réseau, sauvegardes
     discord_mention: str = ""
     # Commandes slash (/roi, /bilan, /snipe…) : bot Discord (portail développeur > Bot > token). Vide = pas de
     # commandes, les webhooks seuls. Seul DISCORD_OWNER_ID (ton identifiant utilisateur) peut s'en servir ;
@@ -135,8 +143,7 @@ class Settings(BaseSettings):
     # Récap du sniper : chaque enchère misée sur les N dernières heures (gagnées, perdues, gain latent et manqué).
     sniper_report_time: time = time(8, 0)
     sniper_report_hours: int = 24  # 0 = pas de récap du sniper
-    notify_each_bid: bool = False
-    notify_digest_minutes: float = 60.0
+    notify_each_bid: bool = False  # un message par mise du sniper (sinon : les logs, et le récap des enchères de 08:00)
 
     # --- Workers ----------------------------------------------------------------
     enable_sniper: bool = True

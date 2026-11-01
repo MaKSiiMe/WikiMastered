@@ -166,9 +166,6 @@ async def test_sniper_step_simulates_deal_bid(tmp_path):
     assert "revente" in bid["reason"]
     await sniper.step()  # pas de seconde simulation sur la même enchère
     assert not any("simulée" in title for _, title in notifier.sent)  # pas de message par enchère
-    sniper._next_digest = datetime.now(UTC)
-    sniper._flush_digest(datetime.now(UTC))
-    assert ("INFO", "Sniper : enchères simulées (1)") in notifier.sent
     await db.close()
 
 
