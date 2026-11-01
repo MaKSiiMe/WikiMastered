@@ -219,6 +219,8 @@ flowchart LR
 
 Avec `DISCORD_WEBHOOK_SNIPER`, `_VENTES`, `_COLLECTION`, `_BILAN` et `_SYSTEME`, chaque catégorie a son salon (sauf les alertes critiques, toujours dans le salon d'alertes) ; une catégorie sans salon suit le schéma ci-dessus.
 
+**Code couleur**, le même pour tous les messages (salons, commandes, graphiques ; `src/core/colors.py`) : 🔵 information, 🟢 tout va bien, gain ou réglage activé, 🟠 à surveiller, 🔴 problème ou perte, ⚪ réglage coupé, annulé ou rien à faire.
+
 Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, prix, revente visée), modifié à chaque étape (en vente, sans acheteur et remise en vente, à 1 WB…), et republié en bas du salon quand elle est vendue ou qu'un problème demande ton attention (Discord ne signale pas une modification). Les boutons (changer le prix, brader, garder) sont ceux de la dernière étape. Les mises du sniper ne sont plus résumées toutes les heures : le récap des enchères de 08:00 et `/sniper` en donnent le détail (`NOTIFY_EACH_BID=true` : un message par mise).
 
 | Message | Quand | Contenu |
