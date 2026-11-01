@@ -10,6 +10,7 @@ Aucune route connue ne propose ni ne contre un échange : le bot dit quoi envoye
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections import Counter
@@ -18,12 +19,15 @@ from datetime import timedelta
 from itertools import combinations
 
 from src.config import RARITIES
-from src.core.models import Trade
+from src.core.client import ApiError, RateLimited
+from src.core.models import Trade, TradeItem
 from src.core.pricing import robust_median
 from src.core.timeutils import utcnow
 from src.core.notifier import Level
 from src.roi import plural, wb
 from src.workers.base import Context
+
+log = logging.getLogger(__name__)
 
 # Couleur d'un échange (src/core/colors.py), sur /echange comme dans le salon des ventes.
 LEVELS = {"equitable": Level.INFO, "avantage": Level.SUCCESS, "defavorable": Level.WARNING,
@@ -52,7 +56,7 @@ class Priced:
     def line(self) -> str:
         """Une carte dans une colonne de l'échange : son nom, puis sa valeur et ses ventes."""
         if self.value is None:
-            return f"**{self.label}**\n⚠️ jamais vue vendue"
+            return f"**{self.label}**\n⚠️ valeur inconnue"
         return f"**{self.label}**\n~{wb(self.value)} WB · {plural(self.sales, 'vente')} en {TRADE_DAYS} j"
 
 
@@ -129,8 +133,8 @@ class Evaluation:
             parts.append(f"Tu reçois {self.received_total * 100 / self.given_total:.0f} % de ce que tu donnes.")
         if self.unknown:
             parts.append("⚠️ Verdict incomplet : " + ", ".join(c.label for c in self.unknown)
-                         + (" jamais vue vendue, comptée 0." if len(self.unknown) == 1
-                            else " jamais vues vendues, comptées 0."))
+                         + (" sans valeur connue, comptée 0." if len(self.unknown) == 1
+                            else " sans valeur connue, comptées 0."))
         if self.offers:
             parts.append("**Contre-offre à envoyer**\n" + "\n".join(f"• {o}" for o in self.offers))
         return "\n\n".join(parts)
@@ -141,8 +145,9 @@ class Evaluation:
 
 
 async def card_value(ctx: Context, card_id: str | None, title: str, rarity: str | None, shiny: bool) -> Priced:
-    """Médiane des ventes observées des TRADE_DAYS derniers jours ; trop peu de ventes : l'estimation du bot."""
-    if not card_id:
+    """Médiane des ventes observées des TRADE_DAYS derniers jours ; trop peu de ventes : l'estimation du bot.
+    Sans rareté : valeur inconnue, plutôt qu'une médiane de toutes ses raretés."""
+    if not card_id or not rarity:
         return Priced(title, rarity, shiny)
     prices = await ctx.db.observed_prices_since(card_id, utcnow() - timedelta(days=TRADE_DAYS), 1000, rarity, shiny)
     if len(prices) >= TRADE_MIN_SALES:
@@ -211,12 +216,30 @@ async def evaluate(ctx: Context, given: list[Priced], received: list[Priced], wb
     return e
 
 
+async def item_details(ctx: Context, item: TradeItem, me: str) -> tuple[str, str | None, bool]:
+    """(titre, rareté, shiny) d'une carte d'échange. Le 01/11, le site n'en donnait que les identifiants (« ? · ? » pour
+    les 7 cartes demandées par Lpancho) : titre lu sur la route des ventes de la carte, rareté de ton exemplaire lue
+    dans ta collection. Rareté d'une carte de l'autre joueur : inconnue."""
+    title, rarity, shiny = item.title or "?", item.rarity, item.shiny
+    if item.card or not item.card_id:
+        return title, rarity, shiny
+    try:
+        title = (await ctx.api.sales_summary(item.card_id, background=True)).wikipedia_title or "?"
+        if title != "?" and (item.offered_by or "").lower() == me:
+            async for copy in ctx.api.iter_collection(q=title, background=True):
+                if copy.id == item.user_card_id:
+                    return title, copy.rarity, copy.is_shiny
+    except (ApiError, RateLimited) as exc:
+        log.debug("carte d'échange %s illisible (%s)", item.card_id, exc)
+    return title, rarity, shiny
+
+
 async def evaluate_trade(ctx: Context, trade: Trade, me: str) -> Evaluation:
     """Échange du site, vu de ton côté : tes cartes (offered_by = toi) et tes WB contre les siens."""
     given, received = [], []
     for item in trade.items:
-        priced = await card_value(ctx, item.card_id or (item.card.id if item.card else None), item.title or "?",
-                                  item.rarity, item.shiny)
+        title, rarity, shiny = await item_details(ctx, item, me)
+        priced = await card_value(ctx, item.card_id or (item.card.id if item.card else None), title, rarity, shiny)
         (given if (item.offered_by or "").lower() == me else received).append(priced)
     mine_first = (trade.initiator_id or "").lower() == me
     wb_initiator, wb_recipient = trade.initiator_wikibidous or 0, trade.recipient_wikibidous or 0

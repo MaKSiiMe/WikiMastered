@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from src import trades
+from src.core.models import Trade
 from src.core.notifier import Level
 from src.workers.trade_watch import KV_KEY, TradeWatch
 from tests.test_integration import ME, make_client, make_context
@@ -101,7 +102,7 @@ async def test_two_for_one_is_fair_and_counter_offer_suggests_a_liquid_card(tmp_
     unknown = await trades.value_of_title(ctx, "Carte inconnue ✨")
     assert unknown.shiny and unknown.value is None
     partial = await trades.evaluate(ctx, [unknown], [emma])
-    assert "jamais vue vendue, comptée 0" in partial.text and partial.verdict == "incomplet"
+    assert "sans valeur connue, comptée 0" in partial.text and partial.verdict == "incomplet"
     # Cartes illisibles contre rien (jarry0, 30/10) : pas « Équitable ».
     blind = await trades.evaluate(ctx, [trades.Priced("?", None), trades.Priced("?", None)], [])
     assert blind.verdict == "incomplet" and blind.headline.startswith("❓") and blind.offers == []
@@ -113,3 +114,38 @@ def test_card_text_is_parsed():
     assert trades.parse_card("Zendaya (L) ✨") == ("Zendaya", "L", True)
     assert trades.parse_card("Jeffrey Epstein shiny") == ("Jeffrey Epstein", None, True)
     assert trades.parse_card("Affaire (UR) X") == ("Affaire (UR) X", None, False)
+
+
+@pytest.mark.asyncio
+async def test_trade_items_with_ids_only_are_named_and_priced(tmp_path):
+    """Lpancho, 01/11 : le site ne donne que les identifiants. Ma carte : titre et rareté retrouvés, cotée ; la sienne :
+    titre retrouvé, rareté inconnue, donc pas de valeur inventée."""
+    def handler(request):
+        path = request.url.path
+        if path.endswith("/emma/sales"):
+            return httpx.Response(200, json={"summary": {}, "wikipedia_title": "Emma Watson"})
+        if path.endswith("/zendaya/sales"):
+            return httpx.Response(200, json={"summary": {}, "wikipedia_title": "Zendaya"})
+        if path == "/api/my-collection":
+            assert request.url.params["q"] == "Emma Watson"
+            return httpx.Response(200, json={"collection": [
+                {"id": "u-emma", "card_id": "emma", "snapshot_rarity": "L",
+                 "card": {"id": "emma", "wikipedia_title": "Emma Watson", "rarity": "L"}}]})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    now = datetime.now(UTC)
+    await ctx.db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at) VALUES (?, ?, ?, 'L', ?, ?)",
+        [(f"e{i}", "emma", "Emma Watson", p, (now - timedelta(hours=i + 1)).isoformat())
+         for i, p in enumerate(SALES["emma"][1])])
+    await ctx.db.db.commit()
+    raw = trade("t", OLE, ME, [{"card_id": "emma", "user_card_id": "u-emma", "offered_by": ME},
+                               {"card_id": "zendaya", "user_card_id": "u-z", "offered_by": OLE}])
+    e = await trades.evaluate_trade(ctx, Trade.model_validate(raw), ME)
+    assert (e.given[0].label, e.given[0].value) == ("L · Emma Watson", 5500)
+    assert (e.received[0].label, e.received[0].value) == ("? · Zendaya", None)
+    assert e.verdict == "incomplet"
+    await ctx.db.close()
+
