@@ -22,9 +22,9 @@ def test_profit_bars_draw_green_above_and_red_below_zero():
     image = Image.open(io.BytesIO(png))
     assert image.format == "PNG" and image.size == (charts.WIDTH, charts.HEIGHT)
     found = colors(png)
-    assert (0x3B, 0xA5, 0x5C) in found and (0xED, 0x42, 0x45) in found  # vert et rouge
+    assert (0x22, 0xC5, 0x5E) in found and (0xEF, 0x44, 0x44) in found  # vert et rouge
     only_gains = colors(charts.profit_bars(DAYS, [100, 200, 300, 400, 500, 600, 700], "t"))
-    assert (0xED, 0x42, 0x45) not in only_gains
+    assert (0xEF, 0x44, 0x44) not in only_gains
 
 
 def test_charts_handle_edge_cases():
@@ -33,7 +33,7 @@ def test_charts_handle_edge_cases():
     charts.profit_bars(sixty, [i * 10 - 100 for i in range(60)], "60 jours")
     charts.value_line(DAYS[:2], [5000, 5000], "plat")  # valeur constante
     png = charts.value_line(DAYS, [101200, 104900, 108300, 112000, 116400, 119307, 123138], "Valeur du compte")
-    assert (0x58, 0x65, 0xF2) in colors(png)  # la courbe
+    assert (0x3B, 0x82, 0xF6) in colors(png)  # la courbe
 
 
 def test_font_with_accents_is_shipped():

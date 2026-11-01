@@ -32,7 +32,7 @@ from src.config import RARITY_RANK
 from src.core.models import OwnedCard
 from src.core.pricing import advised_bid
 from src.core.timeutils import utcnow
-from src.discord_bot import COLOR, CONFIRM_SECONDS, GREEN, GREY, RARITIES, Buttons, ago, paris
+from src.discord_bot import COLOR, CONFIRM_SECONDS, GREEN, GREY, ORANGE, RARITIES, Buttons, ago, paris
 from src.roi import plural, wb
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.base import Context, Worker
@@ -265,7 +265,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     rarity_choices = [app_commands.Choice(name=r, value=r) for r in RARITIES]
 
     # ------------------------------------------------------------ garder
-    async def keep_card(title: str, rarity: str = "") -> str:
+    async def keep_card(title: str, rarity: str = "") -> discord.Embed:
         keep = await keeps.add(ctx.db, title, rarity)
         stopped = cancelled = 0
         for bid in await ctx.db.held_for_title(title):
@@ -276,13 +276,19 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                   if r["title"].casefold() == title.casefold() and r["status"] not in OPEN_STATUSES
                   and (not rarity or r["rarity"] == rarity)]
         log.info("Discord : carte gardée %s (%d revente(s) arrêtée(s))", keep.label, stopped)
-        text = f"🔒 **{keep.label}** gardée : jamais vendue ni défaussée."
+        lines = ["Jamais vendue ni défaussée."]
         if stopped:
-            text += f"\nRevente arrêtée ({stopped} position(s), {cancelled} vente(s) programmée(s) annulée(s))."
+            lines.append(f"Revente arrêtée : {plural(stopped, 'position')}, "
+                         f"{plural(cancelled, 'vente programmée annulée', 'ventes programmées annulées')}.")
         if posted:
-            text += (f"\n⚠️ {len(posted)} vente(s) déjà publiée(s) sur le site, que le bot ne peut pas annuler : "
-                     "retire-la toi-même si besoin.")
-        return text
+            lines.append(f"⚠️ {plural(len(posted), 'vente déjà publiée', 'ventes déjà publiées')} sur le site, que le "
+                         "bot ne peut pas annuler : retire-la toi-même si besoin.")
+        embed = discord.Embed(title=f"🔒 Gardée : {keep.label}", description="\n".join(lines),
+                              color=ORANGE if posted else GREEN)
+        embed.set_footer(text="/liberer pour qu'elle puisse de nouveau être vendue")
+        if image := await card_image(ctx, keep.title):
+            embed.set_thumbnail(url=image)
+        return embed
 
     @tree.command(name="garder", description="Ne jamais vendre ni défausser une carte (arrête aussi sa revente)")
     @app_commands.describe(carte="titre exact", rarete="une seule rareté (toutes par défaut)")
@@ -290,7 +296,8 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     @app_commands.choices(rarete=rarity_choices)
     async def garder(interaction: discord.Interaction, carte: str,
                      rarete: app_commands.Choice[str] | None = None) -> None:
-        await interaction.response.send_message(await keep_card(carte, rarete.value if rarete else ""))
+        await interaction.response.defer()
+        await interaction.followup.send(embed=await keep_card(carte, rarete.value if rarete else ""))
 
     @tree.command(name="gardees", description="Cartes gardées (jamais vendues ni défaussées)")
     async def gardees(interaction: discord.Interaction) -> None:
@@ -311,8 +318,17 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     @app_commands.autocomplete(carte=kept_choices)
     async def liberer(interaction: discord.Interaction, carte: str) -> None:
         removed = await keeps.remove(ctx.db, carte)
-        await interaction.response.send_message(f"🔓 **{removed.label}** n'est plus gardée." if removed
-                                                else f"« {carte} » n'était pas gardée.")
+        if not removed:
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Rien à libérer", description=f"« {carte} » n'était pas gardée.", color=GREY))
+            return
+        await interaction.response.defer()
+        log.info("Discord : carte libérée %s", removed.label)
+        embed = discord.Embed(title=f"🔓 Libérée : {removed.label}", color=GREY,
+                              description="Elle peut de nouveau être vendue ou défaussée.")
+        if image := await card_image(ctx, removed.title):
+            embed.set_thumbnail(url=image)
+        await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------ vendre
     async def sell(title: str, price: int, rarity: str = "") -> str:
@@ -386,13 +402,17 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     async def plafond_collection(interaction: discord.Interaction,
                                  wb_max: app_commands.Range[int, 1, 100_000] | None = None) -> None:
         if wb_max is None:
-            await interaction.response.send_message(f"Plafond actuel : **{s.collection_max_price} WB** par carte "
-                                                    "de collection manquante.")
+            embed = discord.Embed(title=f"📅 Plafond de collection : {wb(s.collection_max_price)} WB", color=COLOR,
+                                  description="Mise maximale pour une carte de collection manquante.")
+            embed.set_footer(text="/plafond-collection wb:… pour le changer")
+            await interaction.response.send_message(embed=embed)
             return
         old = await overrides.set_value(ctx, "collection_max_price", wb_max)
         log.info("Discord : plafond de collection %s -> %d WB", old, wb_max)
-        await interaction.response.send_message(f"📅 Plafond de collection : {old} → **{wb_max} WB**, tout de suite "
-                                                "et après les redémarrages (remplace COLLECTION_MAX_PRICE).")
+        embed = discord.Embed(title=f"📅 Plafond de collection : {wb(wb_max)} WB", color=GREEN,
+                              description=f"Avant : {wb(old)} WB. Appliqué tout de suite.")
+        embed.set_footer(text="Gardé après les redémarrages · remplace COLLECTION_MAX_PRICE")
+        await interaction.response.send_message(embed=embed)
 
     switch = [app_commands.Choice(name="activer", value=1), app_commands.Choice(name="désactiver", value=0)]
 
@@ -484,7 +504,8 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                         inline=False)
 
         async def keep_pressed(button: discord.Interaction) -> None:
-            await button.response.send_message(await keep_card(carte))
+            await button.response.defer()
+            await button.followup.send(embed=await keep_card(carte))
 
         async def free_pressed(button: discord.Interaction) -> None:
             removed = [k for k in card_keeps if await keeps.remove(ctx.db, k.label)]

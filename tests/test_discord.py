@@ -29,10 +29,10 @@ def test_roi_groups_resales_by_paris_day():
     day25, day26 = text.splitlines()[-2:]
     assert day25.startswith("25/10") and "+50" in day25 and "+50 %" in day25
     assert day26.startswith("26/10") and "-20" in day26 and "1 (300 WB)" in day26
-    head, days = roi_discord(report)
-    assert head.startswith("## +30 WB") and "ROI **+10,0 %**" in head
-    assert days == ["`26/10 ███·····` 🔴 **-20 WB** · -10 % · 1 vente(s) · 1 gardée(s)",
-                    "`25/10 ████████` 🟢 **+50 WB** · +50 % · 1 vente(s)"]
+    head, columns, days = roi_discord(report)
+    assert head.startswith("## +30 WB") and ("ROI", "+10,0 %") in columns
+    assert days == ["`26/10 ███·····` 🔴 **-20 WB** · -10 % · 1 vente · 1 gardée",
+                    "`25/10 ████████` 🟢 **+50 WB** · +50 % · 1 vente"]
 
 
 @pytest.mark.asyncio

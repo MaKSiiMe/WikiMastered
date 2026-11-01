@@ -102,16 +102,18 @@ def bar(value: float, top: float) -> str:
     return "█" * full + "·" * (BAR_WIDTH - full)
 
 
-def roi_discord(r: Roi) -> tuple[str, list[str]]:
-    """Version Discord : un résumé court en tête, puis une ligne par jour, lisibles sur un téléphone."""
+def roi_discord(r: Roi) -> tuple[str, list[tuple[str, str]], list[str]]:
+    """Version Discord : le bénéfice en gros et ses réserves, trois chiffres côte à côte, puis une ligne par jour,
+    lisibles sur un téléphone."""
     t = r.totals
-    head = [f"## {wb(t.profit, True)} WB", f"**{wb(r.per_day, True)} WB/jour** · ROI **{pct(t.roi, 1)}**",
-            f"{t.sold} revente(s) · {wb(t.cost)} WB misés"]
+    head = [f"## {wb(t.profit, True)} WB"]
     if t.kept:
-        head.append(f"⚠️ {t.kept} gardée(s) invendue(s), {wb(t.kept_cost)} WB · en les comptant perdues : "
-                    f"{wb(t.profit - t.kept_cost, True)} WB")
+        head.append(f"⚠️ {plural(t.kept, 'gardée invendue', 'gardées invendues')} ({wb(t.kept_cost)} WB) · en les "
+                    f"comptant perdues : {wb(t.profit - t.kept_cost, True)} WB")
     if r.held[0]:
-        head.append(f"📦 En cours : {r.held[0]} position(s), {wb(r.held[1])} WB immobilisés")
+        head.append(f"💼 En cours : {plural(r.held[0], 'position', 'positions')}, {wb(r.held[1])} WB immobilisés")
+    columns = [("Par jour", f"{wb(r.per_day, True)} WB"), ("ROI", pct(t.roi, 1)),
+               ("Reventes", f"{wb(t.sold)} · {wb(t.cost)} WB misés")]
     days = []
     top = max((abs(d.profit) for d in r.days), default=0)
     for d in reversed(r.days):  # le plus récent en haut
@@ -120,8 +122,8 @@ def roi_discord(r: Roi) -> tuple[str, list[str]]:
             continue
         mark = "🟢" if d.profit > 0 else "🔴" if d.profit < 0 else "⚪"
         line = f"`{d.day:%d/%m} {bar(d.profit, top)}` {mark} **{wb(d.profit, True)} WB** · {pct(d.roi)} · " \
-               f"{d.sold} vente(s)"
+               f"{plural(d.sold, 'vente')}"
         if d.kept:
-            line += f" · {d.kept} gardée(s)"
+            line += f" · {plural(d.kept, 'gardée')}"
         days.append(line)
-    return "\n".join(head), days
+    return "\n".join(head), columns, days

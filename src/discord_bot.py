@@ -201,21 +201,55 @@ def fields(lines: list[str], limit: int = 1024) -> list[str]:
     return out
 
 
-def positions_text(rows) -> str:
-    """Une ligne par position (sans bloc de code : lisible sur un téléphone)."""
+def short_time(value: str | datetime | None) -> str:
+    """« 03:53 » aujourd'hui, « 02/11 03:53 » un autre jour."""
+    text = paris(value)
+    return text[-5:] if text[:5] == f"{timeutils.now_local():%d/%m}" else text
+
+
+def resumed_embed(resumed: list[str]) -> discord.Embed:
+    if not resumed:
+        return discord.Embed(title="Rien n'était en pause", color=GREY)
+    return discord.Embed(title=f"▶️ Repris : {', '.join(resumed)}", color=GREEN)
+
+
+POSITION_GROUPS = [("🏷️ En vente", ("posted", "uncertain", "simulated")), ("🕒 Programmées", ("scheduled", "waiting")),
+                   ("⏳ Sans vente prévue", (None,))]
+
+
+def positions_embed(rows) -> discord.Embed:
+    """/positions : le capital immobilisé et le gain visé en tête, puis les positions par état de leur vente, une ligne
+    chacune : achat → prix de vente (gain)."""
     if not rows:
-        return "Aucune position détenue."
-    lines = []
+        return discord.Embed(title="💼 Positions (0)", description="Aucune position détenue.", color=GREY)
+    mixed = len({r["rarity"] for r in rows}) > 1
+    groups: dict[str, list[str]] = {name: [] for name, _ in POSITION_GROUPS}
+    target = 0
     for r in rows:
-        sim = " *(simulée)*" if r["dry_run"] else ""
-        if r["listing_status"] in ("posted", "uncertain", "simulated"):
-            sale = f"🏷️ en vente {wb(r['listing_price'])} WB, fin {paris(r['listing_end'])}"
-        elif r["listing_status"]:
-            sale = f"🕒 vente programmée à {wb(r['listing_price'])} WB"
+        name = next((n for n, statuses in POSITION_GROUPS if r["listing_status"] in statuses), POSITION_GROUPS[-1][0])
+        label = f"{r['rarity'] or '?'} · " if mixed else ""
+        label += f"**{r['title'][:50]}**" + (" ✨" if r["is_shiny"] else "") + (" *(simulée)*" if r["dry_run"] else "")
+        if r["listing_price"]:
+            target += r["listing_price"] - r["amount"]
+            line = f"{label} · {wb(r['amount'])} → {wb(r['listing_price'])} WB " \
+                   f"({wb(r['listing_price'] - r['amount'], True)})"
+            if r["listing_status"] in POSITION_GROUPS[0][1] and r["listing_end"]:
+                line += f" · fin {short_time(r['listing_end'])}"
         else:
-            sale = "⏳ attend une place de vente"
-        lines.append(f"**{r['rarity'] or '?'}** {r['title'][:60]}{sim}\nachetée {wb(r['amount'])} WB · {sale}")
-    return "\n".join(lines)
+            line = f"{label} · achetée {wb(r['amount'])} WB"
+        groups[name].append(line)
+    capital = sum(r["amount"] for r in rows if not r["dry_run"])
+    embed = discord.Embed(title=f"💼 Positions ({len(rows)})", color=COLOR,
+                          description=f"**{wb(capital)} WB** immobilisés · gain visé {wb(target, True)} WB")
+    used = len(embed.description or "")
+    for name, lines in groups.items():
+        for i, value in enumerate(fields(lines)):
+            if used + len(value) > 5500:  # limite de Discord (6000 par message)
+                embed.add_field(name="\u200b", value="… la suite avec /ventes", inline=False)
+                return embed
+            embed.add_field(name=f"{name} ({len(lines)})" if i == 0 else "\u200b", value=value, inline=False)
+            used += len(value) + len(name)
+    return embed
 
 
 def listings_text(rows) -> str:
@@ -486,20 +520,21 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         until = utcnow() + timedelta(minutes=minutes) if minutes else None
         paused = await pauses.pause(ctx, [n for n in names if any(w.name == n for w in workers)], until)
         if not paused:
-            await interaction.response.send_message(f"Rien à mettre en pause : « {what} » n'est pas actif.")
+            await interaction.response.send_message(embed=discord.Embed(
+                title="Rien à mettre en pause", description=f"« {what} » n'est pas actif.", color=GREY))
             return
         log.info("Discord : pause de %s jusqu'à %s", ", ".join(paused), until or "/reprise")
-        end = f"jusqu'à {until.astimezone(timeutils.PARIS):%H:%M}" if until else "jusqu'à /reprise"
-        text = (f"⏸️ **{', '.join(paused)}** en pause {end}.\nLes mises déjà placées et les ventes en cours ne "
-                "sont pas annulées ; leurs résultats sont relus à la reprise.")
+        end = f"Jusqu'à {until.astimezone(timeutils.PARIS):%H:%M}" if until else "Jusqu'à /reprise"
+        embed = discord.Embed(title=f"⏸️ En pause : {', '.join(paused)}", color=GREY,
+                              description=f"{end}.\nLes mises déjà placées et les ventes en cours continuent ; leurs "
+                                          "résultats sont relus à la reprise.")
 
         async def resume_now(button_interaction: discord.Interaction) -> None:
             resumed = await pauses.resume(ctx, paused)
             log.info("Discord : reprise de %s (bouton)", ", ".join(resumed) or "rien")
-            await button_interaction.response.edit_message(
-                content=f"▶️ Repris : {', '.join(resumed) or 'déjà repris'}.", view=None)
+            await button_interaction.response.edit_message(embed=resumed_embed(resumed), view=None)
 
-        await interaction.response.send_message(text, view=Buttons(s.discord_owner_id, [
+        await interaction.response.send_message(embed=embed, view=Buttons(s.discord_owner_id, [
             ("▶️ Reprendre", discord.ButtonStyle.primary, resume_now)]))
 
     @tree.command(name="reprise", description="Reprendre ce qui est en pause")
@@ -509,8 +544,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         names = PAUSE_TARGETS[quoi.value] if quoi else None
         resumed = await pauses.resume(ctx, names)
         log.info("Discord : reprise de %s", ", ".join(resumed) or "rien")
-        await interaction.response.send_message(f"▶️ Repris : {', '.join(resumed)}." if resumed
-                                                else "Rien n'était en pause.")
+        await interaction.response.send_message(embed=resumed_embed(resumed))
 
     @client.event
     async def on_ready() -> None:
@@ -538,8 +572,12 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     @app_commands.describe(jours="nombre de jours, aujourd'hui compris (7 par défaut)")
     async def roi(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 60] = 7) -> None:
         report = await cli.roi_report(ctx, jours)
-        head, days = roi_discord(report)
-        embed = discord.Embed(title=f"ROI des reventes · {jours} jour(s)", description=head, color=COLOR)
+        head, columns, days = roi_discord(report)
+        profit = report.totals.profit
+        embed = discord.Embed(title=f"📈 ROI des reventes · {plural(jours, 'jour')}", description=head,
+                              color=GREEN if profit > 0 else RED if profit < 0 else GREY)
+        for name, value in columns:
+            embed.add_field(name=name, value=value, inline=True)
         for i, value in enumerate(fields(days)):
             embed.add_field(name="Par jour" if i == 0 else "\u200b", value=value, inline=False)
         files = []
@@ -563,8 +601,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
 
     @tree.command(name="positions", description="Cartes achetées pour la revente, pas encore revendues")
     async def positions(interaction: discord.Interaction) -> None:
-        rows = await ctx.db.held_positions()
-        await reply(interaction, f"Positions ({len(rows)})", positions_text(rows), code=False)
+        await interaction.response.send_message(embed=positions_embed(await ctx.db.held_positions()))
 
     @tree.command(name="ventes", description="Ventes programmées et en cours")
     async def ventes(interaction: discord.Interaction) -> None:
@@ -584,8 +621,13 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                         "dans la liste qui s'affiche pendant la frappe.", code=False)
             return
         name = f"{exact or titre} ✨" if shiny else exact or titre
-        await reply(interaction, name[:250], await cli.prices_status(ctx, exact or titre, md=True, shiny=shiny),
-                    code=False)
+        embed, file = text_embed(name[:250], await cli.prices_status(ctx, exact or titre, md=True, shiny=shiny),
+                                 code=False)
+        embed.set_footer(text=cli.PRICES_FOOTER)
+        from src.discord_cards import card_image  # même module chargé par build_client
+        if image := await card_image(ctx, exact or titre):
+            embed.set_thumbnail(url=image)
+        await interaction.followup.send(embed=embed, **({"file": file} if file else {}))
 
     @tree.command(name="collection", description="Avancement des collections et cartes manquantes")
     async def collection(interaction: discord.Interaction) -> None:

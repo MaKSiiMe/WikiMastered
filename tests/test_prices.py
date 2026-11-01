@@ -58,7 +58,9 @@ async def test_prices_shows_observed_sales_estimate_and_competition(tmp_path):
     assert "  Pour revendre : miser 1088 WB au plus (revente ~1197 WB" in text and "+109 WB)" in text
     assert "  ✨ shiny (2 vente(s)) : miser 7727 WB au plus (revente ~8500 WB" in text
     discord = await prices_status(ctx, TITLE, md=True)
-    assert "🎯 Pour revendre : miser **1088 WB** au plus" in discord and "\n✨ shiny (2 vente(s)) : miser **7727 WB**" in discord
+    assert "🎯 Pour revendre : miser **1 088 WB** au plus · revente ~1 197 WB (+109)" in discord
+    assert "\n✨ Shiny (2 ventes) : miser **7 727 WB**" in discord
+    assert discord.startswith("**L** · 5 ventes · estimation **~1 197 WB**")
     assert "réel : 882 WB, estimée ~1197" in text
     assert "En vente maintenant (3)" in text and "XXe" not in text  # l'autre carte n'est pas mêlée
     assert text.index("départ 600, aucune") < text.index("départ 900, aucune") < text.index("départ 1040, aucune")
@@ -196,7 +198,7 @@ async def test_prices_shiny_option_shows_only_shiny_copies(tmp_path):
     await ctx.db.db.commit()
     text = await prices_status(ctx, TITLE, md=True, shiny=True)
     assert text.startswith("✨ **Shiny seulement.**")
-    assert "**L** ✨ · 2 vente(s) · estimation du bot **~8500 WB**" in text
-    assert "🎯 Pour revendre : miser **7727 WB** au plus" in text and "1200 WB" not in text
-    assert "En vente maintenant (1)" in text and "**5000 WB**" in text and "600" not in text
+    assert "**L** ✨ · 2 ventes · estimation **~8 500 WB**" in text
+    assert "🎯 Pour revendre : miser **7 727 WB** au plus" in text and "1 200 WB" not in text
+    assert "En vente maintenant (1)" in text and "**5 000 WB**" in text and "600" not in text
     await ctx.db.close()

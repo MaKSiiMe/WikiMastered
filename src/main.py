@@ -370,13 +370,12 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
                 md: bool = False, resale: dict[tuple[str, bool], Quote] | None = None, fee: float = 0.0,
                 shiny: bool = False) -> str:
     """Ventes observées d'une carte, estimation du bot, achats du bot et ventes en cours (commande prices).
-    `md` : version Discord (/prix), lignes courtes en markdown, sans bloc de code. `resale` : revente estimée par
+    `md` : version Discord (/prix, voir prices_md). `resale` : revente estimée par
     (rareté, shiny) sur les ventes observées seules, d'où la mise conseillée pour l'acheter. `shiny` : les exemplaires
     shiny seuls (ventes, estimation, achats, ventes en cours), sans la cote du site qui ne les distingue pas."""
     def paris(value) -> str:
         moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
-        text = f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
-        return f"`{text}`" if md else text
+        return f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
 
     def bid_line(rarity: str, version: bool) -> str | None:
         """Mise conseillée : la plus petite dont la relance minimale (+10 %) atteint la revente (voir advised_bid)."""
@@ -388,20 +387,17 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
         kind = f"✨ shiny ({quote.count} vente(s))" if version and not shiny else "Pour revendre"
         if profit <= 0:
             return f"{kind} : revente ~{quote.average:.0f} WB, pas rentable"
-        amount = f"**{bid} WB**" if md else f"{bid} WB"
-        return (f"{kind} : miser {amount} au plus (revente ~{quote.average:.0f} WB, médiane des dernières ventes "
+        return (f"{kind} : miser {bid} WB au plus (revente ~{quote.average:.0f} WB, médiane des dernières ventes "
                 f"sans la cote du site ; +{profit:.0f} WB)")
 
     observed = [r for r in observed if bool(r["is_shiny"]) == shiny]
     bought = [b for b in bought if bool(b["is_shiny"]) == shiny]
     selling = [a for a in selling if a.shiny == shiny]
     if md:
-        lines = (["✨ **Shiny seulement.**"] if shiny else []) + \
-            ["Ventes finies avec au moins une mise, vues par le bot (une mise de dernière seconde peut manquer)."]
-    else:
-        lines = [f"{title}{' ✨ shiny' if shiny else ''}",
-                 "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de 2 min avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais "
-                 "comptée."]
+        return prices_md(observed, bought, selling, quotes, site, me, now, resale or {}, fee, shiny)
+    lines = [f"{title}{' ✨ shiny' if shiny else ''}",
+             "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de 2 min avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais "
+             "comptée."]
     rarities = sorted({r["rarity"] for r in observed} | set(quotes), key=lambda r: -RARITY_RANK.get(r, -1))
     if not rarities:
         lines.append("  aucune")
@@ -412,30 +408,21 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
         average = site.get(rarity, (None, None))[0]
         site_text = f"{average:.0f} WB" if average is not None else "inconnue"
         if shiny:
-            lines.append(f"\n**{rarity}** ✨ · {len(sales)} vente(s) · estimation du bot **{estimate}** (médiane des 5 "
-                         f"dernières ventes shiny, sans la cote du site)" if md else
-                         f"\n{rarity} ✨ : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
+            lines.append(f"\n{rarity} ✨ : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
                          f"5 dernières ventes shiny, sans la moyenne du site)")
-        elif md:
-            lines.append(f"\n**{rarity}** · {len(sales)} vente(s) · estimation du bot **{estimate}** (médiane des 5 "
-                         f"dernières, plafonnée par la cote du site : {site_text})")
         else:
             lines.append(f"\n{rarity} : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
                          f"5 dernières, plafonnée par la moyenne du site : {site_text})")
         for version in ((True,) if shiny else (False, True)):
             if line := bid_line(rarity, version):
-                lines.append((("" if version and not shiny else "🎯 ") if md else "  ") + line)
+                lines.append("  " + line)
         for r in sales[:PRICES_SHOWN]:
             notes = []
             if r["base_amount"] and r["price"] <= r["base_amount"]:
-                notes.append("sans surenchère" if md else "au prix de départ, sans surenchère")
+                notes.append("au prix de départ, sans surenchère")
             if r["suspect"]:
                 notes.append("suspecte, ignorée")
             start = f"départ {r['base_amount']}" if r["base_amount"] else "départ ?"
-            if md:
-                lines.append(f"{paris(r['ended_at'])} **{r['price']} WB** ({start})"
-                             + (f" · {', '.join(notes)}" if notes else ""))
-                continue
             notes_text = "  " + ", ".join(notes) if notes else ""
             lines.append(f"  {paris(r['ended_at'])}  {r['price']:>6} WB  ({start}){notes_text}")
         if len(sales) > PRICES_SHOWN:
@@ -448,20 +435,79 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
             ref = f"{b['reference_price']:.0f}" if b["reference_price"] else "?"
             lines.append(f"  {paris(b['placed_at'])}  {b['rarity']}  {kind} : {b['amount']} WB, estimée ~{ref}{sold}")
     heading = f"En vente maintenant ({len(selling)})" if selling else "En vente maintenant : aucune"
-    lines.append(f"\n**{heading}**" if md else f"\n{heading}" + (" :" if selling else ""))
+    lines.append(f"\n{heading}" + (" :" if selling else ""))
     for a in sorted(selling, key=lambda a: a.min_bid):
         price = f"mise actuelle {a.current_bid}" if a.current_bid else f"départ {a.base_amount}, aucune mise"
         mine = "  (toi)" if me and (a.seller_id or "").lower() == me.lower() else ""
         left = int(a.seconds_left(now) // 60)
-        if md:
-            amount = f"**{a.current_bid} WB** (mise)" if a.current_bid else \
-                f"**{a.base_amount} WB** (départ, aucune mise)"
-            lines.append(f"`fin dans {left // 60} h {left % 60:02d}` **{a.rarity or '?'}**{' ✨' if a.shiny else ''} "
-                         f"{amount}{' · toi' if mine else ''}")
-            continue
         lines.append(f"  {a.rarity or '?':<3}{' ✨' if a.shiny else ''} {price}, fin dans {left // 60} h "
                      f"{left % 60:02d}{mine}")
     return "\n".join(lines)
+
+
+PRICES_MD_SHOWN = 10  # ventes listées par rareté sur Discord (/prix)
+PRICES_FOOTER = ("Ventes finies avec au moins une mise, vues par le bot (une mise de dernière seconde peut manquer). "
+                 "Revente : médiane des dernières ventes, sans la cote du site.")
+
+
+def prices_md(observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime,
+              resale: dict[tuple[str, bool], Quote], fee: float, shiny: bool) -> str:
+    """/prix : par rareté, l'estimation et la mise conseillée en tête, puis les dernières ventes ; ensuite les achats
+    du bot et les ventes en cours. Ce qui explique les chiffres est dans le pied du message (PRICES_FOOTER)."""
+    def when(value) -> str:
+        moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+        return f"`{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}`"
+
+    def bid_line(rarity: str, version: bool) -> str | None:
+        quote = resale.get((rarity, version))
+        if quote is None or quote.average is None:
+            return None
+        bid, profit = advised_bid(quote.average, fee)
+        kind = f"✨ Shiny ({plural(quote.count or 0, 'vente')})" if version and not shiny else "🎯 Pour revendre"
+        if profit <= 0:
+            return f"{kind} : revente ~{wb(quote.average)} WB, pas rentable"
+        return f"{kind} : miser **{wb(bid)} WB** au plus · revente ~{wb(quote.average)} WB ({wb(profit, True)})"
+
+    lines = ["✨ **Shiny seulement.**"] if shiny else []
+    rarities = sorted({r["rarity"] for r in observed} | set(quotes), key=lambda r: -RARITY_RANK.get(r, -1))
+    if not rarities:
+        lines.append("Aucune vente observée.")
+    for rarity in rarities:
+        sales = [r for r in observed if r["rarity"] == rarity]
+        quote = quotes.get(rarity)
+        estimate = f"**~{wb(quote.average)} WB**" if quote and quote.average is not None else "aucune"
+        average = site.get(rarity, (None, None))[0]
+        how = "médiane des 5 dernières ventes shiny" if shiny else \
+            "médiane des 5 dernières, plafonnée par la cote du site" + \
+            (f" ({wb(average)} WB)" if average is not None else " (inconnue)")
+        lines += ["" if lines else None, f"**{rarity}**{' ✨' if shiny else ''} · {plural(len(sales), 'vente')} · "
+                  f"estimation {estimate}", f"*{how}*"]
+        lines += [line for version in ((True,) if shiny else (False, True)) if (line := bid_line(rarity, version))]
+        for r in sales[:PRICES_MD_SHOWN]:
+            notes = [f"départ {wb(r['base_amount'])}" if r["base_amount"] else "départ ?"]
+            if r["base_amount"] and r["price"] <= r["base_amount"]:
+                notes.append("sans surenchère")
+            if r["suspect"]:
+                notes.append("⚠️ suspecte, ignorée")
+            lines.append(f"{when(r['ended_at'])} **{wb(r['price'])} WB** · {' · '.join(notes)}")
+        if len(sales) > PRICES_MD_SHOWN:
+            lines.append(f"… et {plural(len(sales) - PRICES_MD_SHOWN, 'plus ancienne', 'plus anciennes')}")
+    if bought:
+        lines += ["", "**Achats du bot**"]
+        for b in bought:
+            sold = f" · revendue {wb(b['sale_price'])} WB" if b["sale_price"] else ""
+            ref = f" (estimée ~{wb(b['reference_price'])})" if b["reference_price"] else ""
+            sim = " *(simulé)*" if b["dry_run"] else ""
+            lines.append(f"{when(b['placed_at'])} {b['rarity']} · {wb(b['amount'])} WB{ref}{sold}{sim}")
+    lines += ["", f"**En vente maintenant ({len(selling)})**" if selling else "**En vente maintenant** : aucune"]
+    for a in sorted(selling, key=lambda a: a.min_bid):
+        left = int(a.seconds_left(now) // 60)
+        amount = f"**{wb(a.current_bid)} WB** (mise)" if a.current_bid else \
+            f"**{wb(a.base_amount)} WB** (départ, aucune mise)"
+        mine = " · toi" if me and (a.seller_id or "").lower() == me.lower() else ""
+        lines.append(f"`fin dans {left // 60} h {left % 60:02d}` {a.rarity or '?'}{' ✨' if a.shiny else ''} · "
+                     f"{amount}{mine}")
+    return "\n".join(line for line in lines if line is not None)
 
 
 async def prices_status(ctx: Context, title: str, md: bool = False, shiny: bool = False) -> str:
