@@ -55,6 +55,20 @@ COLLECTION_SETS=jours
 PROTECTED_TAGS=date
 ```
 
+### Un salon par catégorie (facultatif)
+
+Crée un salon et son webhook pour chaque catégorie voulue, puis ajoute son URL. Une catégorie sans salon garde le salon principal (ou d'activité). Les alertes critiques restent dans le salon de `DISCORD_ALERT_WEBHOOK_URL`, avec la mention.
+
+```
+DISCORD_WEBHOOK_SNIPER=...      # récap des enchères de 08:00, budget, mises à vérifier
+DISCORD_WEBHOOK_VENTES=...      # un message par position (achetée → en vente → vendue), ventes, échanges
+DISCORD_WEBHOOK_COLLECTION=...  # cartes de collection, étiquettes, succès
+DISCORD_WEBHOOK_BILAN=...       # bilan de 23:00, récap des workers toutes les 4 h
+DISCORD_WEBHOOK_SYSTEME=...     # démarrage, session, réseau, sauvegardes
+```
+
+Les commandes (`/etat`, `/bilan`…) répondent dans le salon où tu les tapes : un salon `#commandes` n'a pas besoin de webhook.
+
 ### Commandes Discord (facultatif)
 
 Pour demander des infos au bot ou lui faire chercher une carte (`/roi`, `/bilan`, `/snipe`… voir le [README](../README.md#commandes-slash)) :

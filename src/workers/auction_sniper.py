@@ -39,7 +39,7 @@ from src.core import journal
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
 from src.core.models import Auction, BidResult, Card, OwnedCard
-from src.core.notifier import Topic
+from src.core.notifier import Topic, position_thread
 from src.core.pricing import Quote, combine, trusted
 from src.core.timeutils import in_window, local_dt, now_local, utcnow
 from src.snipes import REASON as SNIPE_REASON
@@ -432,10 +432,8 @@ class AuctionSniper(Worker):
         self._engaged: dict[str, datetime] = {}
         # Enchères engagées par le bot lui-même (pour le décompte des positions).
         self._bot_engaged: set[str] = set(self._leading)
-        self._digest: list[tuple[bool, str]] = []  # (simulée, résumé)
         # Sort de chaque enchère entrée dans la fenêtre de mise depuis le dernier récap : id -> issue.
         self._outcomes: dict[str, str] = {}
-        self._next_digest = utcnow() + timedelta(minutes=self.settings.notify_digest_minutes)
         # Tes mises manuelles (collections) : enchères et cartes que le bot ne touche jamais.
         self._manual_auctions: set[str] = set()
         self._manual_cards: set[str] = set()
@@ -581,7 +579,6 @@ class AuctionSniper(Worker):
             self._phase("règlements")
             await self._settle()
             await self._reconcile()
-        self._flush_digest(now)
         return self._delay(params, utcnow())
 
     # ------------------------------------------------------------ repérage
@@ -1166,25 +1163,6 @@ class AuctionSniper(Worker):
         manual_sales = 0 if selling is None else max(0, selling - await self.db.posted_listings_count())
         return position_cap(self.settings, maximum, manual_sales)
 
-    def _flush_digest(self, now: datetime) -> None:
-        if now < self._next_digest:
-            return
-        self._next_digest = now + timedelta(minutes=self.settings.notify_digest_minutes)
-        if not self._digest:
-            return
-        entries, self._digest = self._digest, []
-        simulated = sum(sim for sim, _ in entries)
-        real = len(entries) - simulated
-        mixed = simulated and real
-        lines = [f"{'[simulée] ' if mixed and sim else ''}{summary}" for sim, summary in entries]
-        shown = "\n".join(lines[-15:])
-        more = f"\n… et {len(lines) - 15} autre(s)" if len(lines) > 15 else ""
-        if mixed:  # ex. mises de collection réelles, positions simulées (SIMULATE=sniper)
-            title = f"Sniper : {len(lines)} enchères ({real} placée(s), {simulated} simulée(s))"
-        else:
-            title = f"Sniper : enchères {'simulées' if simulated else 'placées'} ({len(lines)})"
-        self.notifier.info(title, shown + more)
-
     async def _remember(self, auctions: list[Auction], now: datetime) -> None:
         await self.db.upsert_auctions([{
             "auction_id": a.id, "card_id": a.catalog_id, "title": a.title,
@@ -1398,7 +1376,7 @@ class AuctionSniper(Worker):
             await self.db.record_bid(**common, status="simulated")
             self._engaged[auction.id] = auction.end_at
             self._bot_engaged.add(auction.id)
-            self._report_bid("Enchère simulée", summary, simulated=True)
+            self._report_bid("Enchère simulée", summary)
             return True
 
         payload = result.payload if isinstance(result.payload, dict) else {}
@@ -1466,12 +1444,12 @@ class AuctionSniper(Worker):
             return await self._bid(auction, retry, params, retried=True)
         return False
 
-    def _report_bid(self, title: str, summary: str, *, simulated: bool = False) -> None:
+    def _report_bid(self, title: str, summary: str) -> None:
+        """Mise placée ou simulée : dans les logs ; sur Discord seulement avec NOTIFY_EACH_BID (le récap des enchères
+        de 08:00 et /sniper en donnent le détail, les positions gagnées ont leur message)."""
         self.log.info("%s : %s", title, summary)
         if self.settings.notify_each_bid:
             self.notifier.info(title, summary)
-        else:
-            self._digest.append((simulated, summary))
 
     async def _settle(self) -> None:
         """Résultat des enchères échues. En DRY_RUN : gagnée si personne n'a payé plus que notre mise."""
@@ -1601,16 +1579,22 @@ class AuctionSniper(Worker):
             return
         ref = row["reference_price"]
         fields = {"rareté": row["rarity"] or "?", "mise": f"{amount} WB"}
+        bought = f"achetée {amount} WB"
         if amount != row["amount"]:
             fields["mise"] += f" (remisée à la main, bot : {row['amount']} WB)"
+            bought += f" (remisée à la main, bot : {row['amount']})"
+        head = f"Achetée **{amount} WB**"
         if ref:
             fields["revente visée"] = f"~{ref:.0f} WB"
             fields["bénéfice attendu"] = f"~{ref - amount:.0f} WB"
+            head += f" · revente visée ~{ref:.0f} WB ({ref - amount:+.0f})"
         fields["nuit"] = "oui" if row["night"] else "non"
+        thread = position_thread(row, f"🎯 {bought}" + (" (nuit)" if row["night"] else ""), head=head, ring=True)
         if simulated:
-            self.notifier.info("Achat simulé remporté", name, **look, **fields)
+            self.notifier.info("Achat simulé remporté", name, topic=Topic.SALES, thread=thread, **look, **fields)
         else:
-            self.notifier.success("Position achetée !", name, important=True, **look, **fields)
+            self.notifier.success("Position achetée !", name, important=True, topic=Topic.SALES, thread=thread,
+                                  **look, **fields)
 
     async def _reconcile(self) -> None:
         """Mises au résultat incertain (réponse perdue ou inattendue) : relues sur le serveur, jamais rejouées."""

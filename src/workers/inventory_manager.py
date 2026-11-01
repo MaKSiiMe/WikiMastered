@@ -40,7 +40,7 @@ from src.core.api import COLLECTION_PAGE_SIZE
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
 from src.core.models import Auction, DiscardResult, MyBids, OwnedCard, parse_items
-from src.core.notifier import Topic
+from src.core.notifier import Thread, Topic, position_thread
 from src.core.pricing import ANY, Quote
 from src.core.text import tag_key
 from src.core.timeutils import local_dt, now_local, random_in_window, utcnow
@@ -415,6 +415,25 @@ def is_fire_sale(row) -> bool:
 
 
 # ---------------------------------------------------------------------- worker
+def listing_bid(row) -> dict:
+    """La position d'une vente (ligne listings), pour son message : identifiant, titre, rareté."""
+    return {"id": row["bid_id"], "title": row["title"], "rarity": row["rarity"], "is_shiny": 0}
+
+
+def local_hm(at: datetime | str) -> str:
+    moment = datetime.fromisoformat(at) if isinstance(at, str) else at
+    local = moment.astimezone(now_local().tzinfo)
+    return f"{local:%H:%M}" if local.date() == now_local().date() else f"{local:%d/%m %H:%M}"
+
+
+def sold_thread(bid, price: int, *, simulated: bool = False) -> Thread:
+    """Dernière étape d'une position vendue : republiée en bas du salon, avec le bénéfice en tête."""
+    gain = price - bid["amount"]
+    what = "vendue (simulée)" if simulated else "vendue"
+    return position_thread(bid, f"{'✅' if gain >= 0 else '🔻'} {what} {price} WB ({gain:+d})", ring=True,
+                           head=f"Achetée {bid['amount']} WB · {what} **{price} WB** ({gain:+d})")
+
+
 class InventoryManager(Worker):
     name = "inventory"
     topic = Topic.SALES
@@ -647,7 +666,9 @@ class InventoryManager(Worker):
             if failures >= POSITION_MAX_LIST_FAILURES:
                 await self.db.close_position(row["id"], None)
                 self.notifier.warning("Revente abandonnée", f"{row['title']} ({row['rarity']}) : mise en vente "
-                                      f"refusée {failures} fois, carte gardée. Voir les erreurs dans les logs.")
+                                      f"refusée {failures} fois, carte gardée. Voir les erreurs dans les logs.",
+                                      thread=position_thread(row, f"⚠️ revente abandonnée : mise en vente refusée "
+                                                                  f"{failures} fois, carte gardée", ring=True))
                 continue
             owned_id = f"sim-{row['id']}" if row["dry_run"] else await self._find_copy(row)
             if not owned_id:
@@ -657,7 +678,9 @@ class InventoryManager(Worker):
                     await self.db.close_position(row["id"], None)
                     self._copy_retry.pop(row["id"], None)
                     self.notifier.warning("Revente abandonnée", f"{row['title']} ({row['rarity']}) : introuvable dans "
-                                          "ta collection depuis ~2 h (vendue ou échangée à la main ?). Position close.")
+                                          "ta collection depuis ~2 h (vendue ou échangée à la main ?). Position close.",
+                                          thread=position_thread(row, "⚠️ revente abandonnée : introuvable dans ta "
+                                                                      "collection depuis ~2 h", ring=True))
                 continue
             self._copy_retry.pop(row["id"], None)
             # Carte d'un paquet (prix d'achat 0) : départ à sa cote, comme un doublon.
@@ -723,7 +746,7 @@ class InventoryManager(Worker):
                         "ventes suivies ni assez de ventes pour la coter. Je ne la vends pas pour l'instant ; je "
                         "réessaie à chaque passage.")
                 continue
-            await self.db.record_manual_position(
+            bid_id = await self.db.record_manual_position(
                 auction_id=buy["auction_id"] if price is not None else f"paquet-{c.id}", card_id=c.catalog_id,
                 title=c.title, rarity=c.rarity, is_shiny=c.is_shiny, amount=price or 0, reference_price=quote,
                 bought_at=datetime.fromisoformat(buy["ended_at"]) if price is not None else arrived)
@@ -736,7 +759,10 @@ class InventoryManager(Worker):
             self.notifier.success("Carte à revendre prise en charge",
                                   f"{label} : {origin}{target}. Le bot la revend comme ses positions (départ {start}, "
                                   f"remises à -10 %, puis à 1 WB après {fire_sale_delay(s)} sans acheteur).",
-                                  important=True)
+                                  important=True, thread=position_thread(
+                                      {"id": bid_id, "title": c.title, "rarity": c.rarity, "is_shiny": c.is_shiny},
+                                      f"🏷️ prise en charge : {origin}", ring=True,
+                                      head=f"Achat manuel : {origin}{target}"))
         await self.db.kv_set(MANUAL_KV, {"adopted": sorted(adopted_ids), "missing": sorted(missing_ids)})
         return adopted
 
@@ -772,7 +798,9 @@ class InventoryManager(Worker):
                 self._starred_warned.add(row["id"])
                 self.notifier.warning("Revente en attente : carte en favori",
                                       f"{row['title']} ({row['rarity']}) est en favori, le site refuse de la vendre. "
-                                      "Retire l'étoile pour que le bot la revende (il réessaie toutes les 10 min).")
+                                      "Retire l'étoile pour que le bot la revende (il réessaie toutes les 10 min).",
+                                      thread=position_thread(row, "⭐ en favori : le site refuse de la vendre, retire "
+                                                                  "l'étoile (nouvel essai toutes les 10 min)", ring=True))
             self.log.debug("position %s : seul exemplaire en favori (réessai)", row["title"])
             return None
         return newest_sellable(copies, self._protected_tags(),
@@ -824,7 +852,9 @@ class InventoryManager(Worker):
             label = f"{r['title']} ({r['rarity']}{' ✨' if r['is_shiny'] else ''})"
             self.notifier.warning("Position qui traîne", f"{label} : achetée {r['amount']} WB il y a "
                                   f"{int(age.total_seconds() // 3600)} h, {state}.", important=True,
-                                  actions={"kind": "stale", "bid": r["id"]})
+                                  actions={"kind": "stale", "bid": r["id"]},
+                                  thread=position_thread(r, f"⏳ détenue depuis {int(age.total_seconds() // 3600)} h, "
+                                                            f"{state}", ring=True))
             alerted.add(r["id"])
             new += 1
         await self.db.kv_set(STALE_KV, sorted(alerted & {r["id"] for r in held}))
@@ -907,13 +937,16 @@ class InventoryManager(Worker):
                 await self.db.update_listing(row["id"], status="simulated", posted_at=utcnow(), dry_run=1,
                                              duration_minutes=minutes, target_end=target_end)
                 if row["bid_id"]:  # positions : message ; doublons : bilan
-                    self.notifier.info("Mise en vente simulée", label, durée=f"{minutes} min")
+                    self.notifier.info("Mise en vente simulée", label, durée=f"{minutes} min", thread=position_thread(
+                        listing_bid(row), f"💰 en vente (simulée) à {price} WB, fin {local_hm(target_end)}"))
             elif result.ok:
                 auction_id = await self._listing_auction_id(result.payload, row["card_id"])
                 await self.db.update_listing(row["id"], status="posted", posted_at=utcnow(), duration_minutes=minutes,
                                              target_end=target_end, auction_id=auction_id)
                 if row["bid_id"]:
-                    self.notifier.info("Carte mise en vente", label, durée=f"{minutes} min", important=True)
+                    self.notifier.info("Carte mise en vente", label, durée=f"{minutes} min", important=True,
+                                       thread=position_thread(listing_bid(row), f"💰 en vente à {price} WB, fin "
+                                                                                f"{local_hm(target_end)}"))
                 else:
                     self.log.info("doublon mis en vente : %s (%d min)", label, minutes)
             else:
@@ -946,7 +979,8 @@ class InventoryManager(Worker):
                 # Carte en favori : pas un échec (ne mène pas à l'abandon) ; l'exemplaire est recherché de nouveau.
                 status = "favorite" if FAVORITE_HINT in str(error).lower() else "failed"
                 await self.db.update_listing(row["id"], status=status, error=str(error)[:300])
-                self.notifier.warning("Mise en vente refusée", f"{label} : {error}")
+                self.notifier.warning("Mise en vente refusée", f"{label} : {error}", thread=position_thread(
+                    listing_bid(row), f"⚠️ mise en vente refusée : {error}", ring=True) if row["bid_id"] else None)
 
     async def _undercut(self, row) -> int:
         """Prix de départ d'une revente face aux autres ventes de la même carte : juste sous la moins chère, jamais
@@ -1057,13 +1091,16 @@ class InventoryManager(Worker):
                     await self.db.close_position(bid["id"], price)
                     self.log.info("revente simulée : %s, achetée %d, vendue %d WB", label, bid["amount"], price)
                     self.notifier.info("Revente simulée", f"{label} : achetée {bid['amount']}, départ "
-                                       f"{row['base_amount']}, vendue {price} WB ({price - bid['amount']:+d})")
+                                       f"{row['base_amount']}, vendue {price} WB ({price - bid['amount']:+d})",
+                                       thread=sold_thread(bid, price, simulated=True))
                 continue
             if not row["auction_id"]:
                 await self.db.update_listing(row["id"], status="ended", settled_at=utcnow())
                 if bid:
                     await self.db.close_position(bid["id"], None)
-                    self.notifier.warning("Revente à vérifier", f"{label} : enchère introuvable, vérifie sur le site.")
+                    self.notifier.warning("Revente à vérifier", f"{label} : enchère introuvable, vérifie sur le site.",
+                                          thread=position_thread(bid, "⚠️ vente introuvable sur le site, à vérifier",
+                                                                 ring=True))
                 continue
             auction = await self.api.auction(row["auction_id"])
             if auction.status == "active":
@@ -1075,7 +1112,7 @@ class InventoryManager(Worker):
                 if bid:
                     await self.db.close_position(bid["id"], price)
                     self.notifier.success("Revente réussie", f"{label} : achetée {bid['amount']}, vendue {price} WB "
-                                          f"({price - bid['amount']:+d})", important=True)
+                                          f"({price - bid['amount']:+d})", important=True, thread=sold_thread(bid, price))
                 elif str(row["reason"]).startswith(MANUAL_SALE_REASON):
                     self.notifier.success("Vente réussie", f"{label} : vendue {price} WB (départ "
                                           f"{row['base_amount']}).", important=True)
@@ -1116,7 +1153,8 @@ class InventoryManager(Worker):
             await self.db.close_position(bid["id"], None)
             self.log.info("%s invendue : gardée comme demandé sur Discord", label)
             self.notifier.info("Carte gardée", f"{label} : invendue, elle reste dans ta collection (demandé sur "
-                               "Discord).", important=True)
+                               "Discord).", important=True,
+                               thread=position_thread(bid, "🔒 invendue, gardée comme demandé sur Discord"))
             return
         max_relists, fire_after = relist_limits(bid["amount"], self.settings)
         durations = await self.db.unsold_durations(bid["id"])  # cette vente comprise
@@ -1142,7 +1180,10 @@ class InventoryManager(Worker):
             await self.db.close_position(bid["id"], None)
             self.notifier.warning("Position invendue", f"{label} : invendue après {row['relist_count'] + 1} "
                                   "essai(s), carte gardée : toutes les places de vente sont prises.",
-                                  actions=None if bid["dry_run"] else {"kind": "kept", "listing": row["id"]})
+                                  actions=None if bid["dry_run"] else {"kind": "kept", "listing": row["id"]},
+                                  thread=position_thread(bid, f"🔒 invendue après {row['relist_count'] + 1} essai(s), "
+                                                              "gardée : toutes les places de vente sont prises",
+                                                         ring=True))
             return
         self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
         listing_id = await self._schedule(owned_id=await self._returned_copy(row, bid), card_id=row["card_id"],
@@ -1154,7 +1195,9 @@ class InventoryManager(Worker):
             # tourner plusieurs fois. Boutons (bot Discord) : changer le prix, brader, garder.
             self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
                                f"(achetée {bid['amount']}).", important=price < row["base_amount"],
-                               actions={"kind": "relist", "listing": listing_id} if listing_id else None)
+                               actions={"kind": "relist", "listing": listing_id} if listing_id else None,
+                               thread=position_thread(bid, f"↩️ sans acheteur à {row['base_amount']} WB, remise "
+                                                           f"à {price} WB"))
 
     async def _fire_sale(self, owned_id: str, bid, unsold: int) -> None:
         """Invendue `unsold` fois : revente à 1 WB, fin à 00-03 h ou 06-09 h (POSITION_FIRE_SALE_*). Publiée avant
@@ -1173,7 +1216,10 @@ class InventoryManager(Worker):
             self.notifier.info("Revente à 1 WB", f"{label} : invendue {unsold} fois, remise en vente à 1 WB le "
                                f"{post_at:%d/%m à %H:%M} pour {minutes // 60} h, fin le {end:%d/%m à %H:%M} "
                                f"(achetée {bid['amount']}).", important=True,
-                               actions={"kind": "fire_sale", "listing": listing_id} if listing_id else None)
+                               actions={"kind": "fire_sale", "listing": listing_id} if listing_id else None,
+                               thread=position_thread(bid, f"⚡ invendue {unsold} fois : à 1 WB le "
+                                                           f"{post_at:%d/%m à %H:%M}, fin le {end:%d/%m à %H:%M}",
+                                                      ring=True))
 
     async def _returned_copy(self, row, bid) -> str:
         """Exemplaire d'une revente invendue : le site le rend sous un nouvel identifiant (les 25-26/10, chaque remise

@@ -131,3 +131,19 @@ def test_two_channels_main_keeps_money_and_alerts():
     # Sans salon d'activité : tout dans le principal, comme avant ; « off » : logs seulement.
     assert notifier()._webhook_for(_Message(Level.INFO, "Défausse terminée", "", topic=Topic.SALES)) == MAIN
     assert notifier(activity_webhook_url="off")._webhook_for(_Message(Level.INFO, "Boosters", "")) == ""
+
+
+def test_each_category_can_have_its_own_channel():
+    n = DiscordNotifier(MAIN, ALERT, dry_run=False, activity_webhook_url="https://discord/activite",
+                        channel_webhooks={"ventes": "https://discord/ventes", "bilan": "https://discord/bilan",
+                                          "sniper": " "})
+    route = n._webhook_for
+    assert route(_Message(Level.INFO, "Revente réussie", "", topic=Topic.SALES)) == "https://discord/ventes"
+    assert route(_Message(Level.INFO, "Échange proposé", "", topic=Topic.TRADES)) == "https://discord/ventes"
+    assert route(_Message(Level.WARNING, "Récap", "", topic=Topic.RECAP)) == "https://discord/bilan"
+    # Les alertes critiques restent dans le salon d'alertes ; une catégorie sans salon garde l'ancien tri.
+    assert route(_Message(Level.CRITICAL, "Vente refusée", "", topic=Topic.SALES)) == ALERT
+    assert route(_Message(Level.INFO, "Enchères", "", topic=Topic.SNIPER)) == "https://discord/activite"
+    assert route(_Message(Level.WARNING, "Budget", "", topic=Topic.SNIPER)) == MAIN
+    # Sans salon principal, le premier salon de catégorie le remplace.
+    assert DiscordNotifier("", channel_webhooks={"ventes": "https://discord/ventes"})._webhook == "https://discord/ventes"
