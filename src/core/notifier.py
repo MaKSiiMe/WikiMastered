@@ -105,6 +105,7 @@ class _Message:
     actions: dict[str, Any] | None = None
     thread: Thread | None = None
     columns: list[tuple[str, str]] = field(default_factory=list)  # chiffres clés côte à côte, avant les blocs
+    alert: bool | None = None  # copie courte dans le salon d'alertes : True, False, None (selon `wants_attention`)
 
     @property
     def main_channel(self) -> bool:
@@ -117,6 +118,15 @@ class _Message:
         if self.topic is Topic.REPORT:
             return True
         return self.level in (Level.WARNING, Level.CRITICAL) and self.topic is not Topic.RECAP
+
+    @property
+    def wants_attention(self) -> bool:
+        """Copié en court dans le salon d'alertes, sans mention (le seul salon qui sonne quand les autres sont en
+        sourdine) : un avertissement qui demande une action, ou un message marqué `alert`. Pas un avertissement qui se
+        règle seul (`important=False`), ni le récap des workers ; une alerte critique y est déjà en entier."""
+        if self.alert is not None:
+            return self.alert
+        return self.level is Level.WARNING and self.important is not False and self.topic is not Topic.RECAP
 
 
 # DISCORD_ACTIVITY_WEBHOOK_URL=off : les messages d'activité ne vont que dans les logs.
@@ -149,6 +159,7 @@ class DiscordNotifier:
         self.bot_delete: Callable[[str, str], Awaitable[bool]] | None = None
         # Base (kv) où sont gardés les messages des positions, branchée par build_context (src/main.py).
         self.store: Any = None
+        self._channel_ids: dict[str, str | None] = {}  # webhook -> salon (renvois depuis le salon d'alertes)
 
     def start(self) -> None:
         if self._task is None:
@@ -167,7 +178,7 @@ class DiscordNotifier:
              topic: Topic = Topic.SYSTEM, sections: list[tuple[str, str]] | None = None,
              thumbnail: str | None = None, url: str | None = None, important: bool | None = None,
              actions: dict[str, Any] | None = None, thread: Thread | None = None,
-             columns: list[tuple[str, str]] | None = None, **fields: Any) -> None:
+             columns: list[tuple[str, str]] | None = None, alert: bool | None = None, **fields: Any) -> None:
         log_fn = log.warning if level in (Level.WARNING, Level.CRITICAL) else log.info
         # Les logs reprennent tout le message (champs et blocs), sans sa mise en forme : la console le coupe s'il
         # est long, le journal le garde entier.
@@ -179,7 +190,7 @@ class DiscordNotifier:
         log_fn("%s%s · %s%s", "CRITIQUE · " if level is Level.CRITICAL else "", topic.value.split(" ", 1)[-1],
                plain(title), f" — {text}" if text else "", extra={"data": {"salon": topic.name.lower()}})
         msg = _Message(level, title, description, fields, live, topic, sections or [], thumbnail, url, important,
-                       actions, thread, columns or [])
+                       actions, thread, columns or [], alert)
         if not self._webhook_for(msg):
             return
         try:
@@ -266,9 +277,30 @@ class DiscordNotifier:
         url = self._webhook_for(msg)
         if msg.thread is not None and self.store is not None:
             await self._deliver_thread(msg, url)
-            return
-        mention = self._mention if msg.level is Level.CRITICAL else ""
-        await self._post(url, self.embed(msg), msg.actions, mention, title=msg.title)
+        else:
+            mention = self._mention if msg.level is Level.CRITICAL else ""
+            await self._post(url, self.embed(msg), msg.actions, mention, title=msg.title)
+        if msg.wants_attention and msg.level is not Level.CRITICAL and url != self._alert_webhook:
+            await self._post(self._alert_webhook, await self.alert_embed(msg, url), None, title=msg.title)
+
+    async def alert_embed(self, msg: _Message, url: str) -> dict[str, Any]:
+        """Copie courte pour le salon d'alertes : le titre, une ligne, et le salon où se trouve le message complet."""
+        text = msg.thread.line if msg.thread else msg.description.split("\n", 1)[0]
+        title = f"{msg.title} : {msg.thread.card}" if msg.thread else msg.title
+        if channel := await self._channel_id(url):
+            text += f"\n→ <#{channel}>"
+        return {"author": {"name": msg.topic.value}, "title": title[:256], "description": text[:1000],
+                "color": msg.level.value, "timestamp": utcnow().isoformat()}
+
+    async def _channel_id(self, url: str) -> str | None:
+        """Salon d'un webhook (lu une fois sur Discord), pour y renvoyer depuis le salon d'alertes."""
+        if url not in self._channel_ids:
+            try:
+                resp = await self._http.get(url)
+                self._channel_ids[url] = str(resp.json()["channel_id"]) if resp.status_code == 200 else None
+            except (httpx.HTTPError, ValueError, KeyError):
+                return None  # réessayé au prochain message
+        return self._channel_ids[url]
 
     async def _post(self, url: str, embed: dict[str, Any], actions: dict[str, Any] | None, mention: str = "", *,
                     title: str = "", keep: bool = False) -> dict[str, str] | None:

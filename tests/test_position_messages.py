@@ -114,3 +114,38 @@ async def test_position_message_goes_through_the_bot_with_its_buttons():
     assert posted == [None, None]  # sans boutons, mais par le bot : modifiable ensuite
     assert edited == [("91", {"kind": "relist", "listing": 3})]
     assert deleted == ["91"]
+
+
+@pytest.mark.asyncio
+async def test_warnings_needing_action_are_copied_to_the_alert_channel():
+    """Tous les salons en sourdine sauf #alertes : un avertissement à traiter y arrive aussi, court et sans mention,
+    avec un renvoi vers son salon ; ni ce qui se règle seul, ni l'info, ni les alertes critiques (déjà là en entier)."""
+    alert = "https://discord.test/api/webhooks/2/b"
+    posted = []
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"channel_id": "555"})
+        body = json.loads(request.content)
+        posted.append((str(request.url).split("?")[0], body["embeds"][0], body.get("content")))
+        return httpx.Response(200, json={"id": "1"})
+
+    n = DiscordNotifier("", alert, mention="<@1>", dry_run=False, channel_webhooks={"ventes": HOOK, "systeme": HOOK})
+    n._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    n.store = Kv()
+    n.start()
+    n.warning("Position qui traîne", "Ada (L) : achetée 900 WB il y a 30 h.\nDétail", topic=Topic.SALES)
+    n.warning("Serveurs instables", "500", important=False)  # se règle seul
+    n.info("Revente sans acheteur", "x", topic=Topic.SALES, thread=position_thread(BID, "↩️ sans acheteur"))
+    n.warning("Revente abandonnée", "x", topic=Topic.SALES, thread=position_thread(BID, "⚠️ abandonnée", ring=True))
+    n.info("Échange proposé par Olé", "✅ À ton avantage", topic=Topic.TRADES, alert=True)
+    n.critical("Session perdue", "cookie")
+    await n.close()
+
+    copies = [(embed["title"], embed["description"], content) for url, embed, content in posted if url == alert]
+    assert copies == [
+        ("Position qui traîne", "Ada (L) : achetée 900 WB il y a 30 h.\n→ <#555>", None),
+        ("Revente abandonnée : Albert Camus (L ✨)", "⚠️ abandonnée\n→ <#555>", None),
+        ("Échange proposé par Olé", "✅ À ton avantage\n→ <#555>", None),
+        ("Session perdue", "cookie", "<@1>"),  # la critique elle-même, avec la mention
+    ]
