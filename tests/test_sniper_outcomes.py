@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import json
 from datetime import UTC, datetime, timedelta
@@ -352,7 +353,8 @@ async def test_collection_card_read_after_its_end_is_logged(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="worker.sniper"):
         await sniper._refresh_target(target)
     late = [r.getMessage() for r in caplog.records if "pas de mise" in r.getMessage()]
-    assert len(late) == 1 and "14 octobre (R) à 11 WB relue 4 s après sa fin" in late[0]
+    # Secondes non vérifiées : la vente est créée avant le démarrage du sniper, 4 ou 5 s selon la vitesse de la machine.
+    assert len(late) == 1 and re.search(r"14 octobre \(R\) à 11 WB relue \d+ s après sa fin", late[0])
     assert "pendant sa fenêtre de mise" in late[0]
     assert "col" not in sniper._targets and sniper._outcomes["col"] == "collection : relue après la fin"
     await db.close()
