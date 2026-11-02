@@ -25,6 +25,7 @@ Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur 
 
 - `jours` (les 366 jours de l'année) est intégrée.
 - Les autres se décrivent dans [config/collections.yaml](config/collections.yaml) : un nom, une étiquette, les titres.
+- `gifs` : les articles dont l'image principale est un GIF animé. `python -m src.tools.gif_list` régénère la liste depuis Wikipédia.
 - `COLLECTION_SETS=jours,elements` choisit celles qui sont actives.
 
 ## Installer

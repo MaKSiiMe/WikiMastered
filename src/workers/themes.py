@@ -7,7 +7,9 @@
   Les corrections du fichier passent avant Wikidata.
 - Posées sur l'exemplaire gardé ; les autres exemplaires reçoivent THEME_DUPLICATE_TAG. Le bot n'enlève jamais un
   thème ; il retire seulement « Doublon » de l'exemplaire gardé (son doublon est parti, ou la carte gardée a changé).
-- THEME_GIF_TAG sur chaque exemplaire d'une carte animée (image GIF), doublons compris.
+- THEME_GIF_TAG sur l'exemplaire gardé d'une carte vraiment animée (fichier GIF de plus d'une image, nombre lu sur
+  Wikipédia et gardé en base, kv « gif_frames »), retirée de tout autre exemplaire : avec PROTECTED_TAGS, la carte de
+  la collection est protégée et ses doublons restent à vendre. Fichier encore inconnu : on ne touche à rien.
 - Écritures : table Supabase `user_card_tags`, comme l'éditeur d'étiquettes du site (voir collection.tag_owned),
   THEME_TAGS_MAX_PER_RUN par passage ; groupe « themes » de LIVE_WRITES / SIMULATE. Tant qu'il en reste, le passage
   suivant a lieu BACKLOG_MINUTES plus tard.
@@ -32,7 +34,7 @@ import yaml
 
 from src.account import store_collection
 from src.core.client import ApiError
-from src.core.models import OwnedCard
+from src.core.models import Card, OwnedCard
 from src.core.notifier import Topic
 from src.core.text import tag_key
 from src.core.timeutils import utcnow
@@ -43,6 +45,7 @@ from src.workers.inventory_manager import group_by_card
 log = logging.getLogger(__name__)
 
 KV_KEY = "etiquettes"
+FRAMES_KEY = "gif_frames"
 RULES_FILE = Path(__file__).resolve().parents[2] / "config" / "etiquettes.yaml"
 PERSON = "Q5"  # être humain : les règles « description » et « metiers » ne valent que pour les personnes
 MISSING_RETRY = timedelta(days=7)  # article sans élément Wikidata : relu après N jours
@@ -156,14 +159,29 @@ class Plan:
     remove: list[tuple[OwnedCard, str]] = field(default_factory=list)
 
 
-def plan(groups: dict[str, list[OwnedCard]], themes: dict[str, list[str]], duplicate: str, gif: str = "") -> Plan:
-    """Étiquettes à poser (thèmes sur l'exemplaire gardé, doublon sur les autres, GIF sur chaque exemplaire animé) et
-    doublon à retirer du gardé."""
+def animated(card: Card, frames: dict[str, int]) -> bool | None:
+    """L'image de la carte est-elle animée ? None : on ne sait pas (image absente, nombre d'images pas encore lu)."""
+    if not card.image_url:
+        return None
+    if not card.is_gif:
+        return False
+    count = frames.get(card.gif_file or "")
+    return None if count is None else count > 1
+
+
+def plan(groups: dict[str, list[OwnedCard]], themes: dict[str, list[str]], duplicate: str, gif: str = "",
+         frames: dict[str, int] | None = None) -> Plan:
+    """Étiquettes à poser (thèmes sur l'exemplaire gardé, doublon sur les autres, GIF sur l'exemplaire gardé d'une carte
+    animée) et à retirer (doublon du gardé, GIF de tout autre exemplaire)."""
     out = Plan()
-    dup, animated = tag_key(duplicate), tag_key(gif)
+    dup, gif_key, frames = tag_key(duplicate), tag_key(gif), frames or {}
     for copies in groups.values():
-        if animated:
-            out.add += [(c, gif) for c in copies if c.card.is_gif and animated not in c.tag_names]
+        if gif_key:
+            kept = next((c for c in copies if animated(c.card, frames)), None)
+            if kept and gif_key not in kept.tag_names:
+                out.add.append((kept, gif))
+            out.remove += [(c, gif) for c in copies if c is not kept and gif_key in c.tag_names
+                           and animated(c.card, frames) is not None]
         main = copies[0]
         out.add += [(main, t) for t in themes.get(main.title, []) if tag_key(t) not in main.tag_names]
         if dup:
@@ -171,6 +189,22 @@ def plan(groups: dict[str, list[OwnedCard]], themes: dict[str, list[str]], dupli
             if dup in main.tag_names:
                 out.remove.append((main, duplicate))
     return out
+
+
+async def known_frames(ctx: Context, wikidata: Wikidata, rows: list[OwnedCard]) -> dict[str, int]:
+    """Nombre d'images des fichiers GIF de la collection, gardé en base ; une erreur de Wikipédia : on garde ce qui est
+    connu, le reste sera relu au prochain passage."""
+    known: dict[str, int] = await ctx.db.kv_get(FRAMES_KEY, {})
+    todo = sorted({file for r in rows if (file := r.card.gif_file)} - set(known))
+    if todo:
+        try:
+            found = await wikidata.gif_frames(todo)
+        except ApiError as exc:
+            log.warning("Wikipédia, images des GIF : %s (nouvel essai au prochain passage)", exc)
+        else:
+            known |= {f: n for f, n in found.items() if n is not None}
+            await ctx.db.kv_set(FRAMES_KEY, known)
+    return known
 
 
 async def run_pass(ctx: Context, wikidata: Wikidata, *, write: bool = True) -> dict:
@@ -182,7 +216,8 @@ async def run_pass(ctx: Context, wikidata: Wikidata, *, write: bool = True) -> d
     groups = group_by_card(rows)
     titles = {copies[0].title for copies in groups.values() if copies[0].title}
     themes, pending = await classify(ctx, wikidata, titles, rules, s.theme_lookups_per_run)
-    todo = plan(groups, themes, s.theme_duplicate_tag.strip(), s.theme_gif_tag.strip())
+    gif = s.theme_gif_tag.strip()
+    todo = plan(groups, themes, s.theme_duplicate_tag.strip(), gif, await known_frames(ctx, wikidata, rows) if gif else {})
     counts = Counter(t for title in titles for t in themes.get(title, []))
     state: dict = {
         "at": utcnow().isoformat(), "cards": len(titles), "copies": len(rows), "classified": len(themes),

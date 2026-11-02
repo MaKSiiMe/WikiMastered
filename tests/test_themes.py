@@ -195,14 +195,64 @@ async def test_simulated_writes_nothing_and_wikidata_errors_wait(tmp_path):
     await ctx.db.close()
 
 
-def test_gif_tag_goes_on_every_animated_copy():
-    def own(oid, card, image, tags=()):
-        return OwnedCard.model_validate({"id": oid, "card_id": card, "tags": [{"id": 9, "name": t} for t in tags],
-                                         "card": {"id": card, "wikipedia_title": card, "rarity": "C",
-                                                  "image_url": f"https://upload.wikimedia.org/{image}?utm_source=x"}})
+def gif_copy(oid, card, image, tags=()):
+    url = f"https://upload.wikimedia.org/{image}?utm_source=x" if image else None
+    return OwnedCard.model_validate({"id": oid, "card_id": card, "tags": [{"id": 9, "name": t} for t in tags],
+                                     "card": {"id": card, "wikipedia_title": card, "rarity": "C", "image_url": url}})
 
-    groups = {"anim": [own("a1", "anim", "330px-Franks_expansion.gif"), own("a2", "anim", "x.GIF", tags=["🎞️ GIF"])],
-              "still": [own("s1", "still", "x.jpg")]}
-    todo = plan(groups, {}, "", "GIF")
-    assert [(c.id, t) for c, t in todo.add] == [("a1", "GIF")]  # a2 déjà étiquetée (émoji ignoré)
-    assert plan(groups, {}, "", "").add == []
+
+def test_gif_tag_only_on_kept_copy_of_animated_cards():
+    frames = {"Anim.gif": 17, "Fixe.gif": 1}
+    groups = {
+        "new": [gif_copy("n1", "new", "thumb/2/23/Anim.gif/330px-Anim.gif")],
+        # L'exemplaire gardé est étiqueté (émoji ignoré) ; le doublon perd l'étiquette et reste donc à vendre.
+        "dup": [gif_copy("d1", "dup", "Anim.gif", ["🎞️ GIF"]), gif_copy("d2", "dup", "Anim.gif", ["GIF"])],
+        "fixed": [gif_copy("f1", "fixed", "Fixe.gif", ["GIF"])],
+        "jpg": [gif_copy("j1", "jpg", "x.jpg", ["GIF"])],
+        "unread": [gif_copy("u1", "unread", "Inconnu.gif", ["GIF"])],  # nombre d'images pas encore lu : on ne touche à rien
+        "no-image": [gif_copy("i1", "no-image", None, ["GIF"])],
+    }
+    todo = plan(groups, {}, "", "GIF", frames)
+    assert [(c.id, t) for c, t in todo.add] == [("n1", "GIF")]
+    assert sorted(c.id for c, _ in todo.remove) == ["d2", "f1", "j1"]
+    assert not plan(groups, {}, "", "", frames).add and not plan(groups, {}, "", "", frames).remove
+
+
+def test_gif_file_from_thumbnail_or_original():
+    def file(path):
+        return gif_copy("o", "c", path).card.gif_file
+
+    assert file("wikipedia/commons/thumb/2/23/Franks_expansion.gif/330px-Franks_expansion.gif") == "Franks_expansion.gif"
+    assert file("wikipedia/commons/2/23/Caf%C3%A9.GIF") == "Café.GIF"
+    assert file("x.jpg") is None
+
+
+@pytest.mark.asyncio
+async def test_gif_frames_read_once_with_title_changes_and_continuation(tmp_path):
+    from src.workers.themes import known_frames
+
+    calls = []
+
+    def wiki(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if "iicontinue" not in request.url.params:
+            return httpx.Response(200, json={
+                "continue": {"iicontinue": "x", "continue": "||"},
+                "query": {"normalized": [{"from": "File:anim_x.gif", "to": "Fichier:Anim x.gif"}],
+                          "pages": [{"title": "Fichier:Anim x.gif", "imageinfo": [
+                              {"metadata": [{"name": "frameCount", "value": 17}]}]},
+                                    {"title": "File:Gone.gif", "missing": True}]}})
+        return httpx.Response(200, json={"query": {"pages": [
+            {"title": "File:Fixe.gif", "imageinfo": [{"metadata": [{"name": "frameCount", "value": 1}]}]}]}})
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
+    ctx = await make_context(tmp_path, client, notifier)
+    wikidata = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(wiki)), spacing=0)
+    rows = [gif_copy("a", "a", "anim_x.gif"), gif_copy("b", "b", "Fixe.gif"), gif_copy("c", "c", "Gone.gif"),
+            gif_copy("d", "d", "x.jpg")]
+    assert await known_frames(ctx, wikidata, rows) == {"anim_x.gif": 17, "Fixe.gif": 1}
+    assert len(calls) == 2
+    # Déjà lus : plus de requête que pour le fichier introuvable ; Wikipédia en panne : on garde ce qui est connu.
+    down = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500))), spacing=0)
+    assert await known_frames(ctx, down, rows) == {"anim_x.gif": 17, "Fixe.gif": 1}
+    await ctx.db.close()
