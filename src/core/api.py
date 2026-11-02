@@ -66,6 +66,20 @@ class WikiMastersAPI:
     async def load_collection(self, q: str = "", background: bool = False) -> list[OwnedCard]:
         return [row async for row in self.iter_collection(q, background)]
 
+    async def load_player_collection(self, username: str, tag_id: str = "") -> tuple[list[OwnedCard], dict[str, Any]]:
+        """Collection publique d'un joueur, en requêtes de fond : (exemplaires, autres clés de la première réponse)."""
+        rows: dict[str, OwnedCard] = {}
+        extra: dict[str, Any] = {}
+        for page in range(MAX_COLLECTION_PAGES):
+            result = CollectionPage.model_validate(await self.client.get(
+                "player_collection", username=username, page=page, tag_id=tag_id, background=True))
+            if page == 0:
+                extra = dict(result.model_extra or {})
+            rows.update({row.id: row for row in result.rows()})
+            if len(result.collection) < COLLECTION_PAGE_SIZE:
+                break
+        return list(rows.values()), extra
+
     async def market_page(self, *, page: int = 1, sort: str = "ending_soon", q: str = "",
                           limit: int = 50, rarity: str = "", background: bool = False) -> tuple[list[Auction], bool]:
         result = MarketPage.model_validate(
