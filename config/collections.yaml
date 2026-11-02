@@ -8,6 +8,7 @@
 #              l'ajouter à PROTECTED_TAGS pour qu'il ne soit jamais vendu). Sans etiquette : aucune.
 #   titres     titres exacts des articles Wikipédia, comme sur les cartes du site
 #              (« Mercure (chimie) », pas « Mercure »).
+#   fichier    pour une longue liste : fichier à côté de celui-ci, un titre par ligne.
 #
 # Exemple :
 # elements:
@@ -17,3 +18,9 @@
 #     - Hydrogène
 #     - Hélium
 #     - Lithium
+
+# Articles dont l'image principale est un GIF animé (liste régénérée par `python -m src.tools.gif_list`).
+# Pas d'etiquette ici : « GIF » (THEME_GIF_TAG) est posée par le worker etiquettes, d'après l'image de chaque carte.
+gifs:
+  nom: GIF animés
+  fichier: gifs_animes.txt

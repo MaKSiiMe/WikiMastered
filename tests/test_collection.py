@@ -377,3 +377,48 @@ async def test_sniper_bids_on_a_higher_rarity_of_an_owned_card(tmp_path, upgrade
     assert sniper._collection_best["3 mars"] == 3
     assert (await db.kv_get("collection"))["best"]["3 mars"] == "SR"
     await db.close()
+
+
+def test_long_collection_titles_come_from_a_file(tmp_path, monkeypatch):
+    from src.config import Settings
+    from src.workers import collection
+
+    path = tmp_path / "collections.yaml"
+    path.write_text("gifs:\n  nom: GIF animés\n  titres: [Premier]\n  fichier: liste.txt\n", encoding="utf-8")
+    (tmp_path / "liste.txt").write_text("Royaumes francs\n\n  Big Crunch \n", encoding="utf-8")
+    monkeypatch.setattr(collection, "COLLECTIONS_FILE", path)
+    assert collection.defined(Settings())["gifs"].titles == ("Premier", "Royaumes francs", "Big Crunch")
+
+
+def test_gif_collection_is_shipped_without_its_own_tag():
+    """« GIF » est posée par le worker etiquettes d'après l'image de chaque carte : deux poseurs se contrediraient."""
+    from src.config import Settings
+    from src.workers import collection
+
+    gifs = collection.defined(Settings())["gifs"]
+    assert gifs.tag == "" and "Royaumes francs" in gifs.titles and len(gifs.titles) == len(set(gifs.titles))
+
+
+def test_gif_list_reads_the_dump_and_keeps_only_animated_articles():
+    import asyncio
+
+    from src.core.wikidata import Wikidata
+    from src.tools.gif_list import animated_articles, lead_gifs
+
+    pages = lead_gifs(["INSERT INTO `page_props` VALUES (1,'page_image_free','Anim.gif',NULL),"
+                       "(2,'page_image','L\\'Anim.GIF',NULL),(3,'page_image_free','Photo.jpg',NULL),"
+                       "(4,'wikibase_item','Q1.gif',NULL),(5,'page_image_free','Fixe.gif',NULL),"
+                       "(6,'page_image_free','Anim.gif',NULL);"])
+    assert pages == {1: "Anim.gif", 2: "L'Anim.GIF", 5: "Fixe.gif", 6: "Anim.gif"}
+
+    def wiki(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("prop") == "imageinfo":
+            return httpx.Response(200, json={"query": {"pages": [
+                {"title": f"File:{f}", "imageinfo": [{"metadata": [{"name": "frameCount", "value": n}]}]}
+                for f, n in (("Anim.gif", 17), ("L'Anim.GIF", 2), ("Fixe.gif", 1))]}})
+        return httpx.Response(200, json={"query": {"pages": [
+            {"pageid": 1, "ns": 0, "title": "Zèbre"}, {"pageid": 2, "ns": 0, "title": "Anim"},
+            {"pageid": 6, "ns": 2, "title": "Utilisateur:X"}]}})
+
+    wikidata = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(wiki)), spacing=0)
+    assert asyncio.run(animated_articles(pages, wikidata)) == ["Anim", "Zèbre"]

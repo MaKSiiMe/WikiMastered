@@ -1,8 +1,8 @@
 """Module G : compléter des collections de cartes (les 366 jours de l'année, les éléments chimiques…).
 
 - Une collection = un nom, une étiquette et une liste de titres Wikipédia exacts. « jours » est
-  intégrée ; les autres sont décrites dans config/collections.yaml. COLLECTION_SETS choisit
-  celles qui sont actives, COLLECTION_TITLES ajoute des titres isolés.
+  intégrée ; les autres sont décrites dans config/collections.yaml (titres écrits là ou dans un fichier à
+  part, un par ligne). COLLECTION_SETS choisit celles qui sont actives, COLLECTION_TITLES ajoute des titres isolés.
 - Toutes les COLLECTION_REFRESH_MINUTES, lit les cartes possédées des collections et enregistre
   les possédées / manquantes (kv « collection »). Les jours seuls : une recherche par mois
   (12 requêtes au lieu de 175 pages) ; avec une collection du fichier, une lecture complète en
@@ -73,7 +73,7 @@ def collection_key(title: str) -> str:
     return re.sub(r"^1er\b", "1", normalize_title(title))
 
 
-SET_ALIASES = {"jour": "jours", "dates": "jours", "date": "jours", "days": "jours", "calendrier": "jours"}
+SET_ALIASES = {"jour": "jours", "dates": "jours", "date": "jours", "days": "jours", "calendrier": "jours", "gif": "gifs"}
 
 
 @dataclass(frozen=True)
@@ -83,13 +83,22 @@ class Collection:
     tag: str = ""            # étiquette posée sur un exemplaire de chaque carte possédée ("" = aucune)
 
 
+def spec_titles(spec: dict) -> tuple[str, ...]:
+    """Titres d'une collection du fichier : « titres » et, pour une longue liste, « fichier » (un titre par ligne, à côté
+    de config/collections.yaml)."""
+    titles = [str(t) for t in spec.get("titres") or ()]
+    if name := spec.get("fichier"):
+        lines = (COLLECTIONS_FILE.parent / str(name)).read_text(encoding="utf-8").splitlines()
+        titles += [line.strip() for line in lines if line.strip()]
+    return tuple(titles)
+
+
 def defined(settings: Settings) -> dict[str, Collection]:
     """Collections connues : « jours » (intégrée), puis celles de config/collections.yaml."""
     out = {"jours": Collection("Jours de l'année", tuple(year_days()), settings.collection_tag.strip())}
     raw = yaml.safe_load(COLLECTIONS_FILE.read_text(encoding="utf-8")) if COLLECTIONS_FILE.exists() else None
     for key, spec in (raw or {}).items():
-        out[normalize_title(str(key))] = Collection(str(spec.get("nom") or key),
-                                                    tuple(str(t) for t in spec.get("titres") or ()),
+        out[normalize_title(str(key))] = Collection(str(spec.get("nom") or key), spec_titles(spec),
                                                     str(spec.get("etiquette") or "").strip())
     return out
 
