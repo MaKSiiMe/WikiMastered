@@ -28,8 +28,10 @@ from discord import app_commands
 from src import backup, pauses, snipes
 from src.charts import number, profit_bars
 from src.core import colors, timeutils
+from src.core.client import ApiError
 from src.core.stats import network_brief
 from src.core.timeutils import utcnow
+from src.player_collection import scan as scan_player, summary as summary_player
 from src.recap import STALE_AFTER
 from src.roi import plural, roi_discord, wb
 from src.workers.auction_sniper import AuctionSniper
@@ -692,6 +694,19 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                               color=COLOR if missing else GREEN)
         embed.set_footer(text=f"Plafond par carte manquante : {s.collection_max_price} WB · /plafond-collection")
         await interaction.response.send_message(embed=embed)
+
+    @tree.command(name="collection-joueur", description="Collection publique d'un joueur, comparée à notre liste de GIF")
+    @app_commands.describe(pseudo="pseudo du joueur", etiquette="tag_id d'une de ses étiquettes (toute la collection sinon)")
+    async def player_collection(interaction: discord.Interaction, pseudo: str, etiquette: str = "") -> None:
+        await interaction.response.defer(thinking=True)
+        try:
+            state = await scan_player(ctx, pseudo.strip(), etiquette.strip())
+        except ApiError as exc:
+            await interaction.followup.send(embed=discord.Embed(
+                title=f"🔎 Collection de {pseudo}", description=f"Lecture refusée : {exc}", color=colors.WARN))
+            return
+        await interaction.followup.send(embed=discord.Embed(title=f"🔎 Collection de {pseudo}",
+                                                            description=summary_player(state)[:4000], color=COLOR))
 
     @tree.command(name="sniper", description="Récap des enchères misées par le sniper")
     @app_commands.describe(heures="période, en heures (24 par défaut)")
