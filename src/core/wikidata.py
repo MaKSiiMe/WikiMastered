@@ -144,3 +144,41 @@ class Wikidata:
         qids = await self.qids(titles)
         facts = await self.facts((q for q in qids.values() if q), natures, jobs, taxa)
         return {t: facts[q] if q else Facts() for t, q in qids.items()}
+
+    async def gif_frames(self, files: list[str]) -> dict[str, int | None]:
+        """Nombre d'images de chaque fichier GIF (1 : image fixe) ; None : fichier ou nombre introuvable."""
+        out: dict[str, int | None] = {}
+        for i in range(0, len(files), BATCH):
+            chunk = files[i:i + BATCH]
+            moves: dict[str, str] = {}
+            frames: dict[str, int] = {}
+            more: dict[str, Any] = {}
+            while True:  # métadonnées trop longues pour une réponse : le site donne la suite dans « continue »
+                data = await self._request("GET", WIKIPEDIA_API, params={
+                    "action": "query", "titles": "|".join(f"File:{f}" for f in chunk), "prop": "imageinfo",
+                    "iiprop": "metadata", "format": "json", "formatversion": 2, **more})
+                query = data.get("query") or {}
+                moves.update({m["from"]: m["to"] for m in query.get("normalized") or ()})
+                for page in query.get("pages") or ():
+                    for info in (page.get("imageinfo") or ())[:1]:
+                        meta = {m["name"]: m["value"] for m in info.get("metadata") or ()}
+                        if "frameCount" in meta:
+                            frames[page["title"]] = int(meta["frameCount"])
+                more = data.get("continue") or {}
+                if not more:
+                    break
+            for file in chunk:
+                title = f"File:{file}"
+                out[file] = frames.get(moves.get(title, title))
+        return out
+
+    async def article_titles(self, page_ids: list[int]) -> dict[int, str]:
+        """Titre de chaque page qui est un article ; les autres pages et celles supprimées sont absentes."""
+        out: dict[int, str] = {}
+        for i in range(0, len(page_ids), BATCH):
+            data = await self._request("GET", WIKIPEDIA_API, params={
+                "action": "query", "pageids": "|".join(map(str, page_ids[i:i + BATCH])), "format": "json",
+                "formatversion": 2})
+            out.update({p["pageid"]: p["title"] for p in (data.get("query") or {}).get("pages") or ()
+                        if p.get("ns") == 0 and not p.get("missing")})
+        return out

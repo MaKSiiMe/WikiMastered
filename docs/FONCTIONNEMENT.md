@@ -179,13 +179,13 @@ flowchart TD
     L["Lecture de toute la collection<br/>toutes les 6 h (requêtes de fond)"] --> G["Exemplaire gardé de chaque carte<br/>favori, shiny, rareté, le plus ancien"]
     G --> W["Wikidata : nature de l'article<br/>(gardée en base, 500 cartes par passage)"]
     W --> R["Règles de config/etiquettes.yaml<br/>+ corrections à la main"]
-    R --> T["Thèmes sur l'exemplaire gardé<br/>« Doublon » sur les autres<br/>« GIF » sur chaque carte animée"]
+    R --> T["Thèmes et « GIF » (carte animée) sur l'exemplaire gardé<br/>« Doublon » sur les autres"]
 ```
 
 - Désactivé par défaut : `ENABLE_THEME_TAGS=true`. Écritures du groupe `themes` : `SIMULATE=themes` pour voir dans les logs ce qui serait posé (`[SIMULÉ]`), sans rien écrire.
 - Une carte peut avoir plusieurs thèmes (Personne + Musique). Pour les personnes, la description Wikidata fait foi (« actrice et chanteuse »), pas la liste complète des métiers.
-- Le bot ne fait qu'ajouter. Il ne retire que « Doublon », de l'exemplaire gardé quand son doublon est parti.
-- « GIF » (`THEME_GIF_TAG`) va sur chaque exemplaire d'une carte animée, doublons compris : elles sont rares sur le marché.
+- Le bot ne retire que « Doublon », de l'exemplaire gardé quand son doublon est parti, et « GIF » (ligne suivante).
+- « GIF » (`THEME_GIF_TAG`) va sur l'exemplaire gardé d'une carte vraiment animée (plus d'une image, nombre lu sur Wikipédia) et est retirée de tous les autres. Avec `PROTECTED_TAGS`, la carte de la collection `gifs` est protégée et ses doublons restent à vendre.
 - La vente et la défausse prennent toujours l'exemplaire le plus récent, et l'exemplaire gardé est le plus ancien : un exemplaire « Doublon » part avant l'exemplaire gardé.
 - Chaque étiquette est à créer une fois sur le site. Les noms sont comparés sans émojis ni casse, partout dans le bot (`PROTECTED_TAGS`, `MANUAL_RESALE_TAG`, `COLLECTION_TAG`) : « 📅 Jour » correspond à `Jour`.
 - Aucune mise, aucun paquet : rien ne compte pour la vérification anti-bot. Wikidata est un autre site.

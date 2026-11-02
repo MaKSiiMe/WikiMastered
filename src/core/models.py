@@ -12,7 +12,7 @@ import logging
 import math
 from datetime import UTC, datetime
 from typing import Any, TypeVar
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -73,6 +73,15 @@ class Card(_Model):
         """Image animée : le fichier Wikimedia est un GIF (« …/330px-Franks_expansion.gif?utm_source=… », relevé du
         16/10). Rares sur le marché (aucune sur 283 ventes), elles se vendraient mieux : à mesurer."""
         return urlsplit(self.image_url or "").path.lower().endswith(".gif")
+
+    @property
+    def gif_file(self) -> str | None:
+        """Nom du fichier GIF sur Wikimedia (« Franks_expansion.gif »), même quand l'adresse est celle d'une vignette
+        (« …/thumb/2/23/Franks_expansion.gif/330px-Franks_expansion.gif ») ; None : pas un GIF."""
+        if not self.is_gif:
+            return None
+        parts = urlsplit(self.image_url or "").path.split("/")
+        return unquote(parts[-2] if "thumb" in parts else parts[-1])
 
     @property
     def page_url(self) -> str | None:
