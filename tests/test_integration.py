@@ -12,7 +12,7 @@ import pytest
 
 from src.config import RARITIES, Settings
 from src.core.api import WikiMastersAPI
-from src.core.client import ApiError, WikiMastersClient
+from src.core.client import ApiError, UncertainMutation, WikiMastersClient
 from src.core.database import Database
 from src.core.endpoints import Endpoints
 from src.core.notifier import DiscordNotifier
@@ -234,6 +234,30 @@ async def test_route_rate_limit_does_not_freeze_other_routes(tmp_path):
     assert await asyncio.wait_for(api.balance(), timeout=1) == 3  # les autres routes continuent
     assert client.session_ok
     assert not [title for _, title in notifier.sent if "Route limitée" in title]  # refus isolé : logs seulement
+
+
+@pytest.mark.asyncio
+async def test_a_successful_write_resets_the_route_backoff(tmp_path):
+    """01/11 : place_bid en pause 31, 67, 132 puis 277 s pour 4 ReadTimeout en 2 h, malgré des mises acceptées entre."""
+    answers = [httpx.ReadTimeout("lent"), httpx.Response(200, json={"ok": True}), httpx.ReadTimeout("lent")]
+
+    def handler(request):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    client, _ = make_client(tmp_path, handler)
+    with pytest.raises(UncertainMutation):
+        await client.mutate("place_bid", live=True, auction_id="abc", amount=5)
+    first = client.route_paused_for("place_bid")
+    assert first > 0
+    client._route_pause["place_bid"] = (0.0, client._route_pause["place_bid"][1])  # pause finie, compte d'échecs gardé
+    assert (await client.mutate("place_bid", live=True, auction_id="abc", amount=5)).status == 200
+    assert "place_bid" not in client._route_pause
+    with pytest.raises(UncertainMutation):
+        await client.mutate("place_bid", live=True, auction_id="abc", amount=5)
+    assert client.route_paused_for("place_bid") <= first + 5  # de nouveau un premier échec
 
 
 @pytest.mark.asyncio

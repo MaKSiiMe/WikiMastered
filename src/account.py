@@ -10,7 +10,10 @@ sinon sa cote figée ; sans aucune des deux, il compte 0 et est compté à part.
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta
+
+from aiosqlite import Row
 
 from src.config import RARITY_RANK
 from src.core.models import OwnedCard
@@ -22,6 +25,7 @@ from src.workers.base import Context
 KV_KEY = "collection_value"
 HISTORY_KEY = "account_value_history"  # total du compte par jour (Paris), pour l'évolution
 COLLECTION_VALUE_MAX_AGE = timedelta(hours=12)
+WAITING_LISTINGS = ("scheduled", "waiting")  # l'exemplaire est encore dans la collection
 TOP_SHOWN = 5
 HISTORY_DAYS = 60
 
@@ -46,10 +50,33 @@ async def copy_values(ctx: Context, rows: list[OwnedCard]) -> list[tuple[OwnedCa
     return out
 
 
+async def real_listings(ctx: Context) -> list[Row]:
+    """Ventes réelles comptées à part de la collection : en cours ou qui attendent une place."""
+    return [r for r in await ctx.db.open_listings() if r["status"] != "simulated"]
+
+
+def not_on_sale(rows: list[OwnedCard], listings: list[Row]) -> list[OwnedCard]:
+    """Exemplaires hors ventes. Une invendue revient souvent sous un autre identifiant, relevé seulement à sa publication
+    (02/11 : George V comptée deux fois) : une vente en attente dont l'identifiant a disparu retire un exemplaire de la
+    même carte et de la même rareté."""
+    on_sale = {r["owned_card_id"] for r in listings}
+    present = {r.id for r in rows}
+    returned = Counter((r["card_id"], r["rarity"]) for r in listings
+                       if r["status"] in WAITING_LISTINGS and r["owned_card_id"] not in present)
+    out = []
+    for row in rows:
+        if row.id in on_sale:
+            continue
+        if returned[(row.catalog_id, row.rarity)] > 0:
+            returned[(row.catalog_id, row.rarity)] -= 1
+            continue
+        out.append(row)
+    return out
+
+
 async def store_collection(ctx: Context, rows: list[OwnedCard]) -> dict:
     """Valeur de la collection lue (hors exemplaires en vente, comptés à part), gardée en base."""
-    selling = await ctx.db.scheduled_owned_ids()
-    values = [(r, v) for r, v in await copy_values(ctx, rows) if r.id not in selling]
+    values = await copy_values(ctx, not_on_sale(rows, await real_listings(ctx)))
     by_rarity: dict[str, list[float]] = {}
     for r, v in values:
         entry = by_rarity.setdefault(r.rarity or "?", [0, 0.0])
@@ -77,11 +104,12 @@ async def collection_snapshot(ctx: Context, *, refresh: bool = False) -> dict:
 
 
 async def account_value(ctx: Context, snapshot: dict, balance: int | None = None) -> dict:
-    """Solde, collection, cartes en vente (au prix de départ) et mises en tête (WB bloqués), puis le total, gardé
-    par jour pour l'évolution. `balance` : déjà lu par l'appelant (bilan du soir), sinon lu sur le site."""
+    """Solde, collection, cartes en vente ou qui attendent une place (au prix de départ) et mises en tête (WB bloqués),
+    puis le total, gardé par jour pour l'évolution. `balance` : déjà lu par l'appelant (bilan du soir), sinon lu sur le
+    site."""
     if balance is None:
         balance = await ctx.api.balance()
-    listings = [r for r in await ctx.db.open_listings() if r["status"] in ("posted", "uncertain")]
+    listings = await real_listings(ctx)
     me = (ctx.client.user_id or "").lower()
     leading = [a for a in await ctx.api.my_bids()
                if a.status == "active" and me and (a.current_bidder_id or "").lower() == me]
@@ -93,7 +121,8 @@ async def account_value(ctx: Context, snapshot: dict, balance: int | None = None
     previous = [(d, v) for d, v in sorted(history.items()) if d < day]
     history[day] = total
     await ctx.db.kv_set(HISTORY_KEY, dict(sorted(history.items())[-HISTORY_DAYS:]))
-    return {**parts, "total": total, "listings": len(listings), "leading": len(leading),
+    return {**parts, "total": total, "listings": len(listings),
+            "waiting": sum(r["status"] in WAITING_LISTINGS for r in listings), "leading": len(leading),
             "previous": previous[-1] if previous else None}
 
 

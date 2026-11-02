@@ -182,9 +182,10 @@ def value_embed(value: dict, snapshot: dict) -> discord.Embed:
         day, before = value["previous"]
         lines.append(f"{wb(value['total'] - before, True)} WB depuis le {day[8:10]}/{day[5:7]}")
     unknown = f" · {wb(snapshot['unknown'])} sans estimation" if snapshot["unknown"] else ""
+    waiting = f", {value['waiting']} en attente d'une place" if value["waiting"] else ""
     lines += ["", f"💰 Solde : **{wb(value['balance'])} WB**",
               f"🃏 Cartes : **{wb(value['cards'])} WB** ({plural(snapshot['copies'], 'exemplaire')}{unknown})",
-              f"🏷️ En vente : **{wb(value['selling'])} WB** ({plural(value['listings'], 'vente')}, au prix de départ)"]
+              f"🏷️ En vente : **{wb(value['selling'])} WB** ({plural(value['listings'], 'vente')}{waiting}, au prix de départ)"]
     if value["bids"]:
         lines.append(f"⏳ Mises en tête : **{wb(value['bids'])} WB** ({plural(value['leading'], 'enchère')})")
     embed = discord.Embed(title="💎 Valeur du compte", description="\n".join(lines), color=COLOR)

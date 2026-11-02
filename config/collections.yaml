@@ -23,4 +23,10 @@
 # Pas d'etiquette ici : « GIF » (THEME_GIF_TAG) est posée par le worker etiquettes, d'après l'image de chaque carte.
 gifs:
   nom: GIF animés
+  # Cartes animées absentes du fichier, vues chez vib le 02/11 : image ou titre différents de Wikipédia (apostrophe
+  # courbe, article renommé en « Shitpost »). Ici, elles restent quand le fichier est régénéré.
+  titres:
+    - Cuisine du Yémen
+    - Déclin de l’Empire byzantin
+    - Shitposting
   fichier: gifs_animes.txt

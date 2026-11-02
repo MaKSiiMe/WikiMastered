@@ -18,6 +18,42 @@ def owned(oid: str, card: str, rarity: str, shiny: bool = False) -> OwnedCard:
 
 
 @pytest.mark.asyncio
+async def test_a_sale_waiting_for_a_slot_counts_once_at_its_price(tmp_path):
+    """02/11 : les positions en file n'étaient comptées nulle part (bilan +32 947 WB pour 13 191 WB de ventes), et une
+    invendue revenue sous un autre identifiant comptait deux fois (George V)."""
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 1000})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": []})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    await seed_observed(db, "ada", [500, 520, 480], rarity="L")
+    now = datetime.now(UTC)
+    for owned_id, price, status in (("o-file", 700, "scheduled"), ("o-ancien", 600, "scheduled"),
+                                    ("o-site", 800, "posted"), ("o-simu", 9000, "simulated")):
+        listing = await db.schedule_listing(owned_card_id=owned_id, card_id="ada", title="Ada", rarity="L",
+                                            base_amount=price, duration_minutes=60, post_at=now,
+                                            target_end=now + timedelta(hours=1), reason="revente")
+        await db.update_listing(listing, status=status)
+    # o-file : en attente, encore lue. o-ancien : revenue sous l'identifiant o-revenu. o-site : plus dans la lecture.
+    rows = [owned("o-file", "ada", "L"), owned("o-revenu", "ada", "L"), owned("o-garde", "ada", "L"),
+            owned("o-c", "ada", "C")]
+    snapshot = await account.store_collection(ctx, rows)
+    assert (snapshot["copies"], snapshot["value"]) == (2, 500)  # o-garde et o-c, sans vente observée en C
+    value = await account.account_value(ctx, snapshot)
+    assert value["selling"] == 2100 and value["listings"] == 3 and value["waiting"] == 2
+    assert value["total"] == 3600
+
+    from src.discord_cards import value_embed
+    assert "3 ventes, 2 en attente d'une place" in value_embed(value, snapshot).description
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_account_value_adds_balance_cards_sales_and_leading_bids(tmp_path):
     end = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
