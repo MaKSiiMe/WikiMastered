@@ -966,6 +966,7 @@ class WikiMastersClient:
             return MutationResult(resp.status_code, payload)
         if kind == "ok":
             self._on_success()
+            self._on_route_success(name)  # comme une lecture : le recul de la route repart de zéro
             return MutationResult(resp.status_code, payload)
         # Refusée faute de session : rien n'a été écrit. Après renouvellement, le worker
         # refera sa décision au passage suivant ; l'écriture n'est pas rejouée ici.
