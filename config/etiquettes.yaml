@@ -2,7 +2,8 @@
 #
 # Chaque carte possédée reçoit, sur son exemplaire gardé, les thèmes dont une règle correspond à son article
 # Wikipédia, lu sur Wikidata. Les autres exemplaires de la carte reçoivent THEME_DUPLICATE_TAG (« Doublon »).
-# Le bot ne fait qu'ajouter : il ne retire que « Doublon », de l'exemplaire gardé quand il n'a plus de doublon.
+# Le bot ne fait qu'ajouter : il ne retire que « Doublon », de l'exemplaire gardé quand il n'a plus de doublon, et les
+# thèmes marqués `retirer`.
 # Les noms sont comparés sans émojis ni casse : « 🎵 Musique » sur le site correspond à « Musique » ici.
 # Chaque étiquette est à créer une fois sur le site ; une étiquette absente du site est ignorée (signalée).
 #
@@ -16,6 +17,7 @@
 #   sauf         pas ce thème si la carte a déjà l'un de ceux-là (un pays est aussi une « entité territoriale ») ;
 #                ne retire pas un thème trouvé par la description ou le métier (une personne les cumule)
 #   seul         seulement si la carte n'a aucun autre thème
+#   retirer      retiré d'une carte qui n'a plus ce thème, une fois un autre de ses thèmes posé
 # Modifier natures, taxons ou metiers fait relire Wikidata pour toutes les cartes au passage suivant.
 
 themes:
@@ -331,6 +333,7 @@ themes:
       - Q14745    # meuble
       - Q11422    # jouet
     seul: true  # une tour, un avion ou un téléphone sont aussi des objets : seulement faute de mieux
+    retirer: true  # les cartes classées Objet avant l'arrivée de Transport, Militaire, Art...
 
   Histoire:
     natures:

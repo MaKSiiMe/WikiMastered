@@ -25,6 +25,7 @@ import json
 import logging
 import re
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -62,6 +63,7 @@ class Theme:
     words: tuple[str, ...] = ()
     unless: tuple[str, ...] = ()
     alone: bool = False
+    removable: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,10 @@ class Rules:
     def names(self) -> list[str]:
         return [t.name for t in self.themes]
 
+    @property
+    def removable(self) -> list[str]:
+        return [t.name for t in self.themes if t.removable]
+
 
 def _words(value: Any) -> tuple[str, ...]:
     return tuple(str(w).casefold().strip() for w in value or () if str(w).strip())
@@ -93,7 +99,8 @@ def load_rules(path: Path | None = None) -> Rules:
     raw = yaml.safe_load((path or RULES_FILE).read_text(encoding="utf-8")) or {}
     themes = tuple(Theme(str(name), frozenset(map(str, spec.get("natures") or ())),
                          frozenset(map(str, spec.get("taxons") or ())), frozenset(map(str, spec.get("metiers") or ())),
-                         _words(spec.get("description")), tuple(map(str, spec.get("sauf") or ())), bool(spec.get("seul")))
+                         _words(spec.get("description")), tuple(map(str, spec.get("sauf") or ())), bool(spec.get("seul")),
+                         bool(spec.get("retirer")))
                    for name, spec in (raw.get("themes") or {}).items())
     return Rules(themes, {str(t): tuple(map(str, v or ())) for t, v in (raw.get("corrections") or {}).items()})
 
@@ -173,9 +180,10 @@ def animated(card: Card, frames: dict[str, int]) -> bool | None:
 
 
 def plan(groups: dict[str, list[OwnedCard]], themes: dict[str, list[str]], duplicate: str, gif: str = "",
-         frames: dict[str, int] | None = None) -> Plan:
+         frames: dict[str, int] | None = None, removable: Iterable[str] = ()) -> Plan:
     """Étiquettes à poser (thèmes sur l'exemplaire gardé, doublon sur les autres, GIF sur l'exemplaire gardé d'une carte
-    animée) et à retirer (doublon du gardé, GIF de tout autre exemplaire)."""
+    animée) et à retirer (doublon du gardé, GIF de tout autre exemplaire, thème `removable` que la carte n'a plus, une
+    fois un autre de ses thèmes posé : elle ne reste jamais sans thème)."""
     out = Plan()
     dup, gif_key, frames = tag_key(duplicate), tag_key(gif), frames or {}
     for copies in groups.values():
@@ -186,7 +194,10 @@ def plan(groups: dict[str, list[OwnedCard]], themes: dict[str, list[str]], dupli
             out.remove += [(c, gif) for c in copies if c is not kept and gif_key in c.tag_names
                            and animated(c.card, frames) is not None]
         main = copies[0]
-        out.add += [(main, t) for t in themes.get(main.title, []) if tag_key(t) not in main.tag_names]
+        wanted = themes.get(main.title, [])
+        out.add += [(main, t) for t in wanted if tag_key(t) not in main.tag_names]
+        if any(tag_key(t) in main.tag_names for t in wanted):
+            out.remove += [(c, t) for t in removable if t not in wanted for c in copies if tag_key(t) in c.tag_names]
         if dup:
             out.add += [(c, duplicate) for c in copies[1:] if dup not in c.tag_names]
             if dup in main.tag_names:
@@ -220,7 +231,8 @@ async def run_pass(ctx: Context, wikidata: Wikidata, *, write: bool = True) -> d
     titles = {copies[0].title for copies in groups.values() if copies[0].title}
     themes, pending = await classify(ctx, wikidata, titles, rules, s.theme_lookups_per_run)
     gif = s.theme_gif_tag.strip()
-    todo = plan(groups, themes, s.theme_duplicate_tag.strip(), gif, await known_frames(ctx, wikidata, rows) if gif else {})
+    todo = plan(groups, themes, s.theme_duplicate_tag.strip(), gif, await known_frames(ctx, wikidata, rows) if gif else {},
+                rules.removable)
     counts = Counter(t for title in titles for t in themes.get(title, []))
     state: dict = {
         "at": utcnow().isoformat(), "cards": len(titles), "copies": len(rows), "classified": len(themes),

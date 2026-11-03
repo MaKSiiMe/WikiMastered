@@ -209,6 +209,27 @@ def gif_copy(oid, card, image, tags=()):
                                      "card": {"id": card, "wikipedia_title": card, "rarity": "C", "image_url": url}})
 
 
+def test_removable_theme_leaves_only_once_another_theme_is_on_the_card():
+    themes = {"gare": ["Lieu", "Transport"], "attente": ["Transport"], "vrai": ["Objet"], "seule": [],
+              "doublon": ["Transport"]}
+    groups = {
+        "posee": [gif_copy("p", "gare", None, ["📦 Objet", "Transport"])],
+        "attente": [gif_copy("a", "attente", None, ["Objet"])],  # Transport pas encore posé (ou absent du site)
+        "vrai": [gif_copy("v", "vrai", None, ["Objet"])],
+        "seule": [gif_copy("s", "seule", None, ["Objet"])],  # aucun thème trouvé : on ne touche à rien
+        "inconnue": [gif_copy("i", "pas encore lue", None, ["Objet", "Lieu"])],  # pas encore classée
+        "doublon": [gif_copy("d1", "doublon", None, ["Transport"]), gif_copy("d2", "doublon", None, ["Objet"])],
+    }
+    todo = plan(groups, themes, "", removable=["Objet"])
+    assert [(c.id, t) for c, t in todo.remove] == [("p", "Objet"), ("d2", "Objet")]
+    assert ("a", "Transport") in [(c.id, t) for c, t in todo.add]
+    assert not plan(groups, themes, "").remove  # sans `retirer` : rien
+
+
+def test_only_objet_is_removable_in_the_rules():
+    assert RULES.removable == ["Objet"]
+
+
 def test_gif_tag_only_on_kept_copy_of_animated_cards():
     frames = {"Anim.gif": 17, "Fixe.gif": 1}
     groups = {
