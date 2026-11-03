@@ -864,6 +864,15 @@ class Database:
             f"AND NOT {SUSPECT_SALE} GROUP BY card_id, rarity HAVING COUNT(*) >= ? ORDER BY average DESC LIMIT ?",
             (int(shiny), iso(since), min_sales, limit))
 
+    async def shiny_on_sale(self, now: datetime, sort: str = "end", max_price: int | None = None) -> list[aiosqlite.Row]:
+        """Shiny en vente vus par le sniper (commande /shiny), `min_price` : mise minimale à la dernière lecture. `sort` :
+        « end » (fin la plus proche), « low » ou « high » (mise minimale)."""
+        order = {"end": "end_at", "low": "min_price, end_at", "high": "min_price DESC, end_at"}[sort]
+        rows = await self._all(
+            "SELECT auction_id, card_id, title, rarity, current_bid, end_at, seen_at, COALESCE(min_bid, base_amount) "
+            f"AS min_price FROM auctions_seen WHERE is_shiny = 1 AND end_at > ? ORDER BY {order}", (iso(now),))
+        return [r for r in rows if max_price is None or (r["min_price"] or 0) <= max_price]
+
     async def cards_priced_between(self, since: datetime, low: float, high: float, limit: int,
                                    min_sales: int) -> list[aiosqlite.Row]:
         """Cartes normales vendues en moyenne entre `low` et `high` depuis `since` (contre-offre d'un échange), les

@@ -8,6 +8,7 @@
 - /opportunites : les ventes suivies par le sniper et son plafond pour chacune.
 - /top : les cartes les plus chères en moyenne sur les ventes observées (normales ou shiny), et la mise conseillée
   pour les revendre.
+- /shiny : les shiny en vente vus par le sniper, sans requête au site.
 - /echange : un échange envisagé est-il équitable ? Valeur de chaque côté et contre-offre (src/trades.py).
 - Boutons des messages « Revente sans acheteur », « Revente à 1 WB », « Position invendue » : identifiant fixe
   (wm:<action>:<vente>), encore actifs après un redémarrage du bot.
@@ -46,6 +47,8 @@ TOP_DAYS = 7  # /top : moyenne des ventes observées de ces derniers jours
 TOP_MIN_SALES = 3  # … d'une carte vendue au moins ce nombre de fois
 TOP_SIZES = (10, 25, 50)
 TOP_PER_EMBED = 25
+SHINY_SIZES = (25, 50, 100)
+SHINY_SORTS = {"end": "fin la plus proche", "low": "mise la plus basse", "high": "mise la plus haute"}
 OPEN_STATUSES = ("scheduled", "waiting")  # vente pas encore publiée : prix modifiable, annulable
 # Boutons des messages de vente, par sorte de message : (action, libellé, style).
 MESSAGE_BUTTONS = {
@@ -247,6 +250,28 @@ async def top_embeds(ctx: Context, size: int, shiny: bool) -> list[discord.Embed
     embeds[-1].set_footer(text=f"Moyenne des ventes sur {TOP_DAYS} jours ({TOP_MIN_SALES} ventes au moins), prix le "
                                "plus bas et le plus haut. Miser : la plus petite mise dont la relance (+10 %) atteint "
                                "la revente ; entre parenthèses, le bénéfice à ce prix.")
+    return embeds
+
+
+async def shiny_embeds(ctx: Context, size: int, sort: str = "end", max_price: int | None = None) -> list[discord.Embed]:
+    """/shiny : les shiny en vente d'après la dernière lecture du sniper, avec leur cote ; TOP_PER_EMBED par embed."""
+    now = utcnow()
+    rows = await ctx.db.shiny_on_sale(now, sort, max_price)
+    lines = []
+    for r in rows[:size]:
+        quote = (await ctx.prices.observed_quote(r["card_id"], True)).get(r["rarity"])
+        lines.append(f"**{r['title'][:45]}** ({r['rarity']}) · mise min **{wb(r['min_price'] or 0)}**"
+                     f"{' · déjà misée' if r['current_bid'] else ''} · cote {wb(quote.average) if quote else '?'} · "
+                     f"fin dans {ago(datetime.fromisoformat(r['end_at']) - now)}")
+    title = f"✨ Shiny en vente ({len(rows)})"
+    if not lines:
+        return [discord.Embed(title=title, color=COLOR, description="Aucun shiny en vente vu par le sniper.")]
+    pages = [lines[i:i + TOP_PER_EMBED] for i in range(0, len(lines), TOP_PER_EMBED)]
+    embeds = [discord.Embed(title=title if not n else f"{title} (suite)", color=COLOR, description="\n".join(page))
+              for n, page in enumerate(pages)]
+    embeds[-1].set_footer(text=f"{len(lines)} sur {len(rows)}, {SHINY_SORTS[sort]}. Lus par le sniper (raretés "
+                               f"{', '.join(ctx.settings.sniper_resale_rarities)}) : la mise peut avoir bougé depuis. "
+                               "Cote : ventes de shiny observées.")
     return embeds
 
 
@@ -630,6 +655,19 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         await interaction.response.defer(thinking=True)  # ~1 s sur toute la base : au-delà de 3 s, Discord abandonne
         # Un message par embed : deux embeds de 25 lignes dépassent les 6000 caractères d'un message.
         for embed in await top_embeds(ctx, nombre.value if nombre else 10, shiny):
+            await interaction.followup.send(embed=embed)
+
+    # ------------------------------------------------------------ shiny en vente
+    @tree.command(name="shiny", description="Shiny en vente sur le marché, avec leur mise et leur cote")
+    @app_commands.describe(tri="fin la plus proche par défaut", prix_max="seulement jusqu'à cette mise minimale",
+                           nombre="25 par défaut")
+    @app_commands.choices(tri=[app_commands.Choice(name=n, value=v) for v, n in SHINY_SORTS.items()],
+                          nombre=[app_commands.Choice(name=str(n), value=n) for n in SHINY_SIZES])
+    async def shiny_list(interaction: discord.Interaction, tri: app_commands.Choice[str] | None = None,
+                         prix_max: int | None = None, nombre: app_commands.Choice[int] | None = None) -> None:
+        await interaction.response.defer(thinking=True)
+        for embed in await shiny_embeds(ctx, nombre.value if nombre else SHINY_SIZES[0], tri.value if tri else "end",
+                                        prix_max):
             await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------ échanges
