@@ -13,7 +13,8 @@
 #                (« footballeu » : footballeur, footballeuse) ; 4 lettres ou moins : le mot exact (« dj ») ;
 #                avec une espace ou un tiret : l'expression entière
 #   metiers      pour les personnes sans description : métiers Wikidata (P106)
-#   sauf         pas ce thème si la carte a déjà l'un de ceux-là (un pays est aussi une « entité territoriale »)
+#   sauf         pas ce thème si la carte a déjà l'un de ceux-là (un pays est aussi une « entité territoriale ») ;
+#                ne retire pas un thème trouvé par la description ou le métier (une personne les cumule)
 #   seul         seulement si la carte n'a aucun autre thème
 # Modifier natures, taxons ou metiers fait relire Wikidata pour toutes les cartes au passage suivant.
 
@@ -36,7 +37,9 @@ themes:
       - Q33506    # musée
       - Q5107     # continent
       - Q23442    # île
-    sauf: [Pays, Histoire]
+      - Q39614    # cimetière (sorti d'Objet)
+      - Q79007    # voie de communication urbaine (rue, avenue : conserve les 51 rues)
+    sauf: [Pays, Histoire]  # une gare ou une église reste aussi un lieu, comme les cartes déjà étiquetées
 
   Nature:
     natures:
@@ -49,9 +52,8 @@ themes:
       - Q271669   # modelé (relief)
       - Q15324    # étendue d'eau
       - Q7946     # minéral
-      - Q11344    # élément chimique
     taxons: [Q756, Q764]  # plantes, champignons
-    sauf: [Pays, Lieu, Histoire, Animal]
+    sauf: [Pays, Lieu, Histoire, Animal, Spatial, Nourriture / Boisson]
 
   Animal:
     taxons: [Q729]  # animaux
@@ -61,7 +63,9 @@ themes:
     sauf: [Personne]  # pour Wikidata, l'être humain est un animal
 
   Astéroïde:
-    natures: [Q3863]
+    natures:
+      - Q3863     # astéroïde
+      - Q1022867  # planète mineure (couvre les objets numérotés type (505476) 2013 UL15)
 
   Spatial:
     natures:
@@ -76,6 +80,9 @@ themes:
       - Q26529    # sonde spatiale
       - Q26540    # satellite artificiel
       - Q2133344  # mission spatiale
+      - Q55818    # cratère d'impact (majoritairement lunaire/martien/planétaire sur Wikipédia)
+    description: [astronaute, cosmonaute, spationaute, taïkonaute]
+    metiers: [Q11631]  # astronaute
     sauf: [Astéroïde]
 
   Cinéma / Série:
@@ -83,17 +90,22 @@ themes:
       - Q11424    # film
       - Q24856    # série de films
       - Q5398426  # série télévisée
+      - Q3464665  # saison de série télévisée (18 cartes sans thème récupérées)
       - Q15416    # programme télévisé
       - Q581714   # série d'animation
       - Q1107     # anime
       - Q95074    # personnage de fiction
       - Q196600   # franchise médiatique
-    description: [acteur, actrice, comédien, réalisateur, réalisatrice, cinéaste, doubleu]
-    metiers: [Q33999, Q2526255]  # acteur ou actrice, réalisateur
+    description: [acteur, actrice, comédien, réalisateur, réalisatrice, cinéaste, doubleu, scénariste,
+                  producteur de cinéma, productrice de cinéma, producteur de télévision, animateur de télévision,
+                  animatrice de télévision]
+    metiers: [Q33999, Q2526255, Q28389]  # acteur ou actrice, réalisateur, scénariste
+    sauf: [Jeu vidéo, Littérature / BD, Religion]  # évite de capter les persos de JV, de BD ou bibliques via Q95074
 
   Musique:
     natures:
       - Q7366       # chanson
+      - Q134556     # single (35 cartes sans thème récupérées)
       - Q482994     # album
       - Q105543609  # œuvre musicale
       - Q215380     # groupe de musique
@@ -103,7 +115,9 @@ themes:
       - Q868557     # festival de musique
       - Q1344       # opéra
     description: [chanteu, rappeu, musicien, compositeu, interprète, pianiste, guitariste, batteu, violoniste,
-                  bassiste, dj, disc-jockey, beatmaker, producteur de musique, chef d'orchestre]
+                  bassiste, violoncelliste, saxophoniste, trompettiste, organiste, flûtiste, harpiste,
+                  dj, disc-jockey, beatmaker, producteur de musique, chef d'orchestre, parolier, parolière,
+                  auteur-compositeur, autrice-compositrice]
     metiers: [Q639669, Q177220, Q2252262, Q36834, Q130857]  # musicien, chanteur, rappeur, compositeur, DJ
 
   Sport:
@@ -121,8 +135,11 @@ themes:
                   basketteu, volleyeu, judoka, karatéka, skieu, patineu, gymnaste, escrimeu, lutteu, golfeu, surfeu,
                   arts martiaux, entraîneu, entraineu, sélectionneu, arbitre, pilote automobile, pilote de formule,
                   pilote de course, pilote de rallye, pilote moto, motocycliste, triathlète, marathonien, sprinteu,
-                  alpiniste, haltérophile, décathlonien, heptathlonienne, catcheu, skateu]
-    metiers: [Q2066131, Q378622, Q41583]  # sportif, pilote, entraîneur
+                  alpiniste, haltérophile, décathlonien, heptathlonienne, catcheu, skateu, pongiste, biathlète,
+                  skipper, skippeuse, navigat, rameu, céiste, kayakiste, fondeu, bobeur, bobeuse, lugeu, curleu,
+                  archer, archère, tireur sportif, tireuse sportive, cavalier, cavalière, grimpeu,
+                  plongeu, water-polo, hockeye, badiste, snooker, fléchettes, culturiste, taekwondo]
+    metiers: [Q2066131, Q378622, Q41583, Q16029547]  # sportif, pilote, entraîneur, biathlète
 
   Jeu vidéo:
     natures:
@@ -131,7 +148,133 @@ themes:
       - Q8076     # console de jeux vidéo
       - Q1569167  # personnage de jeu vidéo
       - Q210167   # développeur de jeux vidéo
-    description: [joueur professionnel de jeux vidéo, joueuse professionnelle de jeux vidéo]
+    description: [joueur professionnel de jeux vidéo, joueuse professionnelle de jeux vidéo, créateur de jeux vidéo,
+                  concepteur de jeux vidéo]
+
+  Littérature / BD:
+    natures:
+      - Q7725634   # œuvre littéraire
+      - Q571       # livre
+      - Q8261      # roman
+      - Q1004      # bande dessinée
+      - Q21198342  # série de manga (15 cartes)
+      - Q8274      # manga
+      - Q1114461   # personnage de bande dessinée
+      - Q87576284  # personnage de manga
+      - Q1092563   # périodique (presse, journaux, magazines)
+      - Q11032     # journal
+      - Q41298     # magazine
+      - Q2085381   # maison d'édition
+    description: [écrivain, romancier, romancière, poète, poétesse, dramaturge, essayiste, nouvelliste,
+                  auteur de bande dessinée, autrice de bande dessinée, dessinateur de bande dessinée,
+                  mangaka, bédéiste, journaliste, éditeur, éditrice, philosophe, traducteu, biographe,
+                  chroniqueu, pamphlétaire, fabuliste, critique littéraire]
+    metiers: [Q36180, Q6625963, Q49757, Q1930187, Q4964182, Q715301]  # écrivain, romancier, poète, journaliste, philosophe, auteur de BD
+    sauf: [Jeu vidéo, Musique, Science]
+
+  Art:
+    natures:
+      - Q3305213  # peinture (77 cartes sans thème récupérées)
+      - Q860861   # sculpture (sort le Buste de Beethoven d'Objet)
+      - Q179700   # statue
+      - Q968159   # mouvement artistique
+    description: [peintre, sculpteu, photographe, architecte, graveu, illustrateu, dessinateur, dessinatrice,
+                  artiste, plasticien, calligraphe, affichiste, caricaturiste, céramiste, styliste,
+                  couturier, couturière, designer, chorégraphe, danseur, danseuse]
+    metiers: [Q1028181, Q1281618, Q33231, Q42973, Q644687]  # peintre, sculpteur, photographe, architecte, illustrateur
+    sauf: [Lieu, Littérature / BD, Cinéma / Série, Musique]
+
+  Science:
+    natures:
+      - Q11862829  # discipline académique
+      - Q11173     # composé chimique (~40 cartes sans thème récupérées)
+      - Q11344     # élément chimique (déplacé depuis Nature)
+      - Q8054      # protéine
+      - Q7187      # gène
+      - Q12136     # maladie
+      - Q169872    # symptôme
+      - Q4936952   # structure anatomique
+      - Q3918      # université (sorti d'Entreprise)
+      - Q38723     # établissement d'enseignement supérieur (sorti d'Entreprise)
+      - Q3914      # école (sorti d'Entreprise)
+      - Q31855     # institut de recherche
+      - Q65943     # théorème
+      - Q11563     # nombre
+    description: [scientifique, chercheu, mathématicien, physicien, chimiste, biologiste, médecin,
+                  chirurgien, astronome, astrophysicien, botaniste, zoologiste, géologue, paléontologue,
+                  archéologue, historien, sociologue, économiste, linguiste, psychologue, psychiatre,
+                  neurologue, anthropologue, ethnologue, géographe, universitaire, académicien,
+                  inventeu, ingénieu, informaticien, pharmacien, vétérinaire, épistémologue]
+    metiers: [Q901, Q170790, Q169470, Q593644, Q864503, Q39631, Q11063, Q201788, Q81096]  # scientifique, mathématicien, physicien, chimiste, biologiste, médecin, astronome, historien, ingénieur
+    sauf: [Nature, Animal, Technologie]
+
+  Politique:
+    natures:
+      - Q7278      # parti politique (sort des sans thème)
+      - Q40231     # élection
+      - Q178790    # syndicat
+      - Q484652    # organisation internationale
+    description: [homme politique, femme politique, personnalité politique, homme d'état, femme d'état,
+                  chef d'état, président, premier ministre, première ministre, ministre, député,
+                  sénateur, sénatrice, maire, gouverneu, diplomate, ambassadeu, ambassadrice,
+                  monarque, roi, reine, empereur, impératrice, prince, princesse, duc, duchesse,
+                  comte, comtesse, marquis, marquise, baron, baronne, seigneur, aristocrate,
+                  noble, pharaon, sultan, calife, émir, tsar, tsarine, militant, révolutionnaire,
+                  syndicaliste, magistrat, juge, avocat]
+    metiers: [Q82955, Q193391, Q116, Q2478141, Q16533, Q40348]  # personnalité politique, diplomate, monarque, aristocrate, juge, avocat
+    sauf: [Pays, Entreprise / Marque, Sport, Musique, Science, Religion]
+
+  Militaire:
+    natures:
+      - Q176799    # unité militaire (~18 cartes sans thème récupérées)
+      - Q728       # arme (sorti d'Objet)
+      - Q15142894  # système d'arme
+      - Q64418     # artillerie
+      - Q12876     # char de combat
+      - Q177597    # navire de guerre (destroyers, frégates)
+      - Q2811      # sous-marin (U-Boot)
+      - Q559026    # classe de navires (ex. Classe Kidd)
+      - Q216916    # avion militaire
+      - Q1785071   # fortification
+    description: [militaire, général, amiral, maréchal, officier, colonel, commandant, capitaine,
+                  lieutenant, soldat, guerrier, guerrière, résistant, chevalier, mercenaire,
+                  aviateur militaire, as de l'aviation]
+    metiers: [Q47064, Q189290]  # militaire, officier
+
+  Religion:
+    natures:
+      - Q9174      # religion
+      - Q179461    # texte religieux
+      - Q178885    # divinité
+      - Q20643955  # personnage biblique
+      - Q4271324   # personnage mythologique
+      - Q16970     # église (édifice)
+      - Q2977      # cathédrale
+      - Q32815     # mosquée
+      - Q44539     # temple
+      - Q160742    # abbaye
+      - Q44613     # monastère
+    description: [prélat, évêque, archevêque, cardinal, pape, prêtre, abbé, moine, religieu,
+                  pasteur, rabbin, imam, théologien, missionnaire, saint, martyr, prophète,
+                   prédicateu, mystique]
+    metiers: [Q250867, Q42603, Q29182, Q1234713]  # prélat catholique, prêtre, évêque, théologien
+
+  Transport:
+    natures:
+      - Q55488     # gare ferroviaire (ex. Gare d'Azilda : 64 d'Objet + 17 de Lieu unifiées)
+      - Q55678     # halte ferroviaire (ex. Gare d'Azilda)
+      - Q928830    # station de métro
+      - Q728937    # ligne ferroviaire
+      - Q1248784   # aéroport
+      - Q12280     # pont
+      - Q34442     # route
+      - Q11436     # aéronef (avion, hélicoptère : sorti d'Objet)
+      - Q11446     # navire (sorti d'Objet)
+      - Q93301     # locomotive (sorti d'Objet)
+      - Q870       # train
+      - Q46970     # compagnie aérienne
+    description: [aviateu, aviatrice]
+    sauf: [Voiture, Militaire, Spatial, Histoire]  # navire de guerre -> Militaire ; épave -> Histoire
 
   Nourriture / Boisson:
     natures:
@@ -140,40 +283,50 @@ themes:
       - Q19861951  # type de préparation culinaire
       - Q40050     # boisson
       - Q154       # boisson alcoolisée
+      - Q958314    # cépage (sorti de Nature)
+    description: [cuisinier, cuisinière, chef cuisinier, cheffe cuisinière, pâtissier, pâtissière, œnologue]
 
   Entreprise / Marque:
     natures:
       - Q4830453  # entreprise
       - Q431289   # marque
       - Q786820   # constructeur automobile
+    description: [entrepreneur, entrepreneuse, homme d'affaires, femme d'affaires, industriel,
+                  dirigeant d'entreprise, chef d'entreprise, cheffe d'entreprise, banquier, banquière,
+                  milliardaire, investisseu, armateur]
+    metiers: [Q131524, Q43845]  # entrepreneur, personnalité du monde des affaires
+    sauf: [Science, Transport, Jeu vidéo, Littérature / BD]  # évite universités, écoles, studios JV, éditeurs
 
   Voiture:
     natures:
       - Q3231690   # modèle d'automobile
       - Q59773381  # série de modèles d'automobile
       - Q1420      # automobile
-      - Q786820    # constructeur automobile
+      - Q786820   # constructeur automobile
 
   Technologie:
     natures:
-      - Q11016   # technologie
-      - Q7397    # logiciel
-      - Q9143    # langage de programmation
-      - Q9135    # système d'exploitation
-      - Q35127   # site web
-      - Q3220391 # service de réseau social
-      - Q68      # ordinateur
-      - Q17517   # téléphone mobile
-      - Q22645   # smartphone
-      - Q5082128 # appareil mobile
-    sauf: [Jeu vidéo]  # un jeu vidéo est aussi un logiciel
+      - Q11016     # technologie
+      - Q7397      # logiciel
+      - Q9143      # langage de programmation
+      - Q9135      # système d'exploitation
+      - Q35127     # site web
+      - Q3220391   # service de réseau social
+      - Q68        # ordinateur
+      - Q17517     # téléphone mobile
+      - Q22645     # smartphone
+      - Q5082128   # appareil mobile
+      - Q15328     # appareil photographique (ex. Canon EOS 550D)
+      - Q313600    # appareil photographique numérique
+      - Q5362345   # montre connectée
+      - Q19799938  # modèle de montre connectée (ex. Apple Watch Ultra 2)
+    sauf: [Jeu vidéo, Voiture, Transport, Militaire]
 
   Objet:
     natures:
       - Q8205328  # objet artificiel physique
       - Q39546    # outil
       - Q1183543  # dispositif
-      - Q728      # arme
       - Q11460    # vêtement
       - Q14745    # meuble
       - Q11422    # jouet
@@ -194,11 +347,17 @@ themes:
       - Q8432      # civilisation
       - Q11514315  # période historique
       - Q839954    # site archéologique
+      - Q852190    # épave (confirmé en Histoire)
 
 # Babie : posée à la main sur le site, le bot ne la pose pas (et n'enlève jamais un thème).
 
 # Corrections à la main, prioritaires sur Wikidata : titre exact de la carte -> ses thèmes (remplacent ceux trouvés ;
 # [] : aucun thème).
 corrections:
-  Ingrid Alexandra de Norvège: [Personne]
+  Ingrid Alexandra de Norvège: [Personne, Politique]
   Marteau: [Objet]
+  Blockchain: [Technologie]
+  Bitcoin: [Technologie]
+  Analyse PESTEL: [Entreprise / Marque]
+  Ballon d'or 2021: [Sport]
+  (505476) 2013 UL15: [Astéroïde]
