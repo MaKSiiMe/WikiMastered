@@ -268,6 +268,44 @@ async def test_buying_a_discord_sale_to_one_wb_picks_a_late_ending_for_at_least_
 
 
 @pytest.mark.asyncio
+async def test_shiny_lists_open_shiny_auctions_with_their_quote(tmp_path):
+    from src.discord_cards import shiny_embeds
+    from src.roi import wb
+
+    client, notifier = make_client(tmp_path, trades)
+    ctx = await make_context(tmp_path, client, notifier)
+    now = datetime.now(UTC)
+
+    def auction(aid, title, shiny, minutes, min_bid, bid=None):
+        return {"auction_id": aid, "card_id": aid, "title": title, "rarity": "L", "is_shiny": shiny, "current_bid": bid,
+                "base_amount": min_bid, "min_bid": min_bid, "end_at": (now + timedelta(minutes=minutes)).isoformat(),
+                "seen_at": now.isoformat()}
+
+    await ctx.db.upsert_auctions([auction("a", "Ada", 1, 90, 5000), auction("b", "Bob", 1, 30, 9000, bid=8000),
+                                  auction("n", "Normale", 0, 10, 100), auction("f", "Finie", 1, -5, 100)])
+    await ctx.db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
+        "VALUES (?, 'a', 'Ada', 'L', 1, ?, ?)",
+        [(f"s{i}", p, (now - timedelta(days=1)).isoformat()) for i, p in enumerate((7000, 8000, 9000))])
+    await ctx.db.db.commit()
+
+    [embed] = await shiny_embeds(ctx, 25)
+    assert embed.title == "✨ Shiny en vente (2)"
+    first, second = embed.description.splitlines()
+    assert first.startswith(f"**Bob** (L) · mise min **{wb(9000)}** · déjà misée · cote ?")  # finit le premier
+    assert second.startswith(f"**Ada** (L) · mise min **{wb(5000)}** · cote {wb(8000)}")
+    assert "Normale" not in embed.description and "Finie" not in embed.description
+    assert (await shiny_embeds(ctx, 25, "low"))[0].description.startswith("**Ada**")
+    assert (await shiny_embeds(ctx, 25, "high"))[0].description.startswith("**Bob**")
+    [cheap] = await shiny_embeds(ctx, 25, "end", 6000)
+    assert cheap.title == "✨ Shiny en vente (1)" and "Bob" not in cheap.description
+    [nothing] = await shiny_embeds(ctx, 25, "end", 10)
+    assert nothing.description == "Aucun shiny en vente vu par le sniper."
+    [one] = await shiny_embeds(ctx, 1)
+    assert one.footer.text.startswith("1 sur 2, fin la plus proche.")
+
+
+@pytest.mark.asyncio
 async def test_top_ranks_cards_by_average_recent_price(tmp_path):
     from src.discord_cards import top_embeds
     from src.roi import wb
