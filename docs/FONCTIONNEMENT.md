@@ -183,7 +183,7 @@ flowchart TD
 ```
 
 - Désactivé par défaut : `ENABLE_THEME_TAGS=true`. Écritures du groupe `themes` : `SIMULATE=themes` pour voir dans les logs ce qui serait posé (`[SIMULÉ]`), sans rien écrire.
-- Une carte peut avoir plusieurs thèmes (Personne + Musique). Pour les personnes, la description Wikidata fait foi (« actrice et chanteuse »), pas la liste complète des métiers.
+- Une carte peut avoir plusieurs thèmes (Personne + Musique). Pour les personnes, la description Wikidata fait foi (« actrice et chanteuse »), pas la liste complète des métiers. `sauf` ne retire pas un thème trouvé par la description ou le métier : une « actrice et écrivaine » a les deux.
 - Le bot ne retire que « Doublon », de l'exemplaire gardé quand son doublon est parti, et « GIF » (ligne suivante).
 - « GIF » (`THEME_GIF_TAG`) va sur l'exemplaire gardé d'une carte vraiment animée (plus d'une image, nombre lu sur Wikipédia) et est retirée de tous les autres. Avec `PROTECTED_TAGS`, la carte de la collection `gifs` est protégée et ses doublons restent à vendre.
 - La vente et la défausse prennent toujours l'exemplaire le plus récent, et l'exemplaire gardé est le plus ancien : un exemplaire « Doublon » part avant l'exemplaire gardé.

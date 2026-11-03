@@ -111,12 +111,15 @@ def themes_of(facts: Facts, rules: Rules) -> list[str]:
     """Thèmes d'un article, dans l'ordre du fichier."""
     person = PERSON in facts.natures
     found: list[str] = []
+    trade: set[str] = set()  # trouvés par la description ou le métier : « sauf » ne les retire pas, une personne cumule
     for theme in rules.themes:
         if facts.natures & theme.natures or facts.taxa & theme.taxa:
             found.append(theme.name)
         elif person and (describes(facts.description, theme.words) if facts.description else facts.jobs & theme.jobs):
             found.append(theme.name)
-    kept = [name for name in found if not set(next(t for t in rules.themes if t.name == name).unless) & set(found)]
+            trade.add(theme.name)
+    kept = [name for name in found
+            if name in trade or not set(next(t for t in rules.themes if t.name == name).unless) & set(found)]
     return [name for name in kept if not next(t for t in rules.themes if t.name == name).alone or len(kept) == 1]
 
 

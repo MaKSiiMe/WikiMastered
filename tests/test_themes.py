@@ -52,17 +52,25 @@ def test_description_words():
     # la main).
     (person("actrice, productrice et mannequin israélienne"), ["Personne", "Cinéma / Série"]),
     # Métiers secondaires de Wikidata ignorés : la description fait foi (Camus, gardien de but étant jeune).
-    (person("écrivain, philosophe et journaliste français", jobs={"Q2066131", "Q33999"}), ["Personne"]),
+    (person("écrivain, philosophe et journaliste français", jobs={"Q2066131", "Q33999"}), ["Personne", "Littérature / BD"]),
     # Sans description : les métiers.
     (person("", jobs={"Q2066131"}), ["Personne", "Sport"]),
     (person("rappeur et chanteur français"), ["Personne", "Musique"]),
-    (person("femme politique française"), ["Personne"]),
+    (person("femme politique française"), ["Personne", "Politique"]),
+    # « sauf » ne retire pas un thème trouvé par la description : une personne cumule ses métiers.
+    (person("actrice, réalisatrice, scénariste et écrivaine française"), ["Personne", "Cinéma / Série", "Littérature / BD"]),
+    (person("pasteur et homme d'État allemand"), ["Personne", "Politique", "Religion"]),
+    (person("compositeur, musicien, disc-jockey et producteur italien"), ["Personne", "Musique"]),
     # Un pays est aussi une île et une entité territoriale : Pays seul.
     (Facts("Q17", {"Q6256", "Q23442", "Q56061", "Q271669"}), ["Pays"]),
     (Facts("Q140", set(), taxa={"Q729"}), ["Animal"]),
     (Facts("Q49740", {"Q7889", "Q7397"}), ["Jeu vidéo"]),  # un jeu vidéo est un logiciel
     (Facts("Q243", {"Q41176", "Q811979", "Q8205328", "Q570116"}), ["Lieu"]),  # tour : objet seulement faute de mieux
     (Facts("Q1", {"Q39546"}), ["Objet"]),
+    (Facts("Q4", {"Q16970", "Q41176", "Q811979", "Q8205328"}), ["Lieu", "Religion"]),  # une église reste un lieu
+    (Facts("Q5", {"Q55488", "Q41176", "Q811979", "Q8205328"}), ["Lieu", "Transport"]),  # une gare aussi
+    (Facts("Q6", {"Q1114461", "Q95074"}), ["Littérature / BD"]),  # un personnage de BD, pas de cinéma
+    (Facts("Q7", {"Q177597", "Q11446", "Q8205328"}), ["Militaire"]),  # un navire de guerre, pas le transport
     (Facts("Q2", {"Q178561", "Q13418847"}), ["Histoire"]),
     (Facts("Q3", {"Q14795564"}), []),  # un jour de l'année
 ])
