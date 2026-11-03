@@ -8,7 +8,7 @@
 - /opportunites : les ventes suivies par le sniper et son plafond pour chacune.
 - /top : les cartes les plus chères en moyenne sur les ventes observées (normales ou shiny), et la mise conseillée
   pour les revendre.
-- /shiny : les shiny en vente vus par le sniper, sans requête au site ; 💰 et plafond pour /snipe si rentable.
+- /shiny : les shiny en vente vus par le sniper, sans requête au site ; 💰 et plafond si rentable, menu pour les demander au sniper.
 - /echange : un échange envisagé est-il équitable ? Valeur de chaque côté et contre-offre (src/trades.py).
 - Boutons des messages « Revente sans acheteur », « Revente à 1 WB », « Position invendue » : identifiant fixe
   (wm:<action>:<vente>), encore actifs après un redémarrage du bot.
@@ -22,6 +22,7 @@ import logging
 import math
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -34,7 +35,7 @@ from src.config import RARITY_RANK, Settings
 from src.core.models import OwnedCard
 from src.core.pricing import Quote, advised_bid
 from src.core.timeutils import utcnow
-from src.discord_bot import COLOR, CONFIRM_SECONDS, GREEN, GREY, ORANGE, RARITIES, Buttons, ago, paris
+from src.discord_bot import BUTTON_SECONDS, COLOR, CONFIRM_SECONDS, GREEN, GREY, ORANGE, RARITIES, Buttons, ago, paris
 from src.roi import plural, wb
 from src.workers.auction_sniper import AuctionSniper, min_sales
 from src.workers.base import Context, Worker
@@ -49,6 +50,7 @@ TOP_MIN_SALES = 3  # … d'une carte vendue au moins ce nombre de fois
 TOP_SIZES = (10, 25, 50)
 TOP_PER_EMBED = 25
 SHINY_SIZES = (25, 50, 100)
+SELECT_MAX = 25  # options d'un menu Discord
 SHINY_SORTS = {"end": "fin la plus proche", "low": "mise la plus basse", "high": "mise la plus haute"}
 OPEN_STATUSES = ("scheduled", "waiting")  # vente pas encore publiée : prix modifiable, annulable
 # Boutons des messages de vente, par sorte de message : (action, libellé, style).
@@ -263,13 +265,51 @@ def shiny_ceiling(quote: Quote | None, s: Settings) -> int | None:
                           quote.average * (1 - s.sale_fee_pct) - s.portfolio_min_profit))  # type: ignore[operator]
 
 
+@dataclass(frozen=True)
+class ShinyPick:
+    title: str
+    rarity: str
+    min_price: int
+    ceiling: int
+
+
+class ShinyPicker(discord.ui.View):
+    """Menu des lignes 💰 de /shiny, pour le seul propriétaire ; une carte choisie : son plafond à confirmer."""
+
+    def __init__(self, owner_id: int, picks: list[ShinyPick],
+                 on_price: Callable[[discord.Interaction, ShinyPick, int], Awaitable[None]]):
+        super().__init__(timeout=BUTTON_SECONDS)
+        self.owner_id = owner_id
+        self.picks = picks[:SELECT_MAX]
+        self.on_price = on_price
+        select: discord.ui.Select = discord.ui.Select(placeholder="🎯 Demander un 💰 au sniper…", options=[
+            discord.SelectOption(label=p.title[:100], value=str(i),
+                                 description=f"mise min {wb(p.min_price)} · plafond {wb(p.ceiling)}")
+            for i, p in enumerate(self.picks)])
+        select.callback = self.chosen  # type: ignore[method-assign]
+        self.select = select
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.owner_id
+
+    async def chosen(self, interaction: discord.Interaction) -> None:
+        pick = self.picks[int(self.select.values[0])]
+
+        async def on_price(submitted: discord.Interaction, price: int) -> None:
+            await self.on_price(submitted, pick, price)
+        await interaction.response.send_modal(PriceModal(f"Mise maximale : {pick.title}", on_price, pick.ceiling))
+
+
 async def shiny_embeds(ctx: Context, size: int, sort: str = "end", max_price: int | None = None,
-                       profitable: bool = False) -> list[discord.Embed]:
+                       profitable: bool = False) -> tuple[list[discord.Embed], list[ShinyPick]]:
     """/shiny : les shiny en vente d'après la dernière lecture du sniper, avec leur cote, 💰 et le plafond à donner à
-    /snipe si la mise minimale le permet ; TOP_PER_EMBED par embed."""
+    /snipe si la mise minimale le permet ; TOP_PER_EMBED par embed. Renvoie aussi les cartes 💰 affichées, une fois
+    chacune : une demande vaut pour la carte, pas pour une vente."""
     now = utcnow()
     rows = await ctx.db.shiny_on_sale(now, sort, max_price)
     lines, total = [], len(rows)
+    picks: dict[tuple[str, str], ShinyPick] = {}
     for r in rows if profitable else rows[:size]:  # `profitable` : le total demande la cote de toutes les ventes
         quote = (await ctx.prices.observed_quote(r["card_id"], True)).get(r["rarity"])
         ceiling = shiny_ceiling(quote, ctx.settings)
@@ -278,6 +318,9 @@ async def shiny_embeds(ctx: Context, size: int, sort: str = "end", max_price: in
             total -= 1
             continue
         if len(lines) < size:
+            if good:
+                picks.setdefault((r["title"], r["rarity"]),
+                                 ShinyPick(r["title"], r["rarity"], r["min_price"] or 0, ceiling))  # type: ignore[arg-type]
             lines.append(f"{'💰 ' if good else ''}**{r['title'][:45]}** ({r['rarity']}) · mise min "
                          f"**{wb(r['min_price'] or 0)}**{' · déjà misée' if r['current_bid'] else ''} · cote "
                          f"{wb(quote.average) if quote else '?'}{f' · snipe ≤ **{wb(ceiling)}**' if good else ''} · "
@@ -285,15 +328,15 @@ async def shiny_embeds(ctx: Context, size: int, sort: str = "end", max_price: in
     title = f"✨ Shiny {'rentables ' if profitable else ''}en vente ({total})"
     if not lines:
         return [discord.Embed(title=title, color=COLOR, description=f"Aucun shiny {'rentable ' if profitable else ''}"
-                                                                    "en vente vu par le sniper.")]
+                                                                    "en vente vu par le sniper.")], []
     pages = [lines[i:i + TOP_PER_EMBED] for i in range(0, len(lines), TOP_PER_EMBED)]
     embeds = [discord.Embed(title=title if not n else f"{title} (suite)", color=COLOR, description="\n".join(page))
               for n, page in enumerate(pages)]
     embeds[-1].set_footer(text=f"{len(lines)} sur {total}, {SHINY_SORTS[sort]}. Lus par le sniper (raretés "
                                f"{', '.join(ctx.settings.sniper_resale_rarities)}) : la mise peut avoir bougé depuis. "
-                               "Cote : ventes de shiny observées. 💰 revente rentable d'après la cote : prix_max à "
-                               "donner à /snipe (shiny). Gagnée, elle est gardée : étiquette de revente pour la vendre.")
-    return embeds
+                               "Cote : ventes de shiny observées. 💰 revente rentable d'après la cote : plafond à "
+                               "demander au sniper. Gagnée, elle est gardée : étiquette de revente pour la vendre.")
+    return embeds, list(picks.values())
 
 
 def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Context, workers: list[Worker]) -> None:
@@ -688,9 +731,25 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                          prix_max: int | None = None, nombre: app_commands.Choice[int] | None = None,
                          rentables: bool = False) -> None:
         await interaction.response.defer(thinking=True)
-        for embed in await shiny_embeds(ctx, nombre.value if nombre else SHINY_SIZES[0], tri.value if tri else "end",
-                                        prix_max, rentables):
+        embeds, picks = await shiny_embeds(ctx, nombre.value if nombre else SHINY_SIZES[0], tri.value if tri else "end",
+                                           prix_max, rentables)
+
+        async def request(submitted: discord.Interaction, pick: ShinyPick, price: int) -> None:
+            added = await snipes.add(ctx.db, pick.title, price, pick.rarity, True)
+            if sniper is not None:
+                await sniper.reload_snipes()
+            log.info("Discord : carte demandée %s", added.label)
+            await submitted.response.send_message(embed=discord.Embed(
+                title=f"🎯 Carte demandée : {added.label}", color=GREEN if sniper else ORANGE,
+                description="Gagnée, elle est gardée, pas revendue." if sniper else
+                            "⚠️ Sniper désactivé (ENABLE_SNIPER) : rien ne sera misé."))
+
+        for embed in embeds[:-1]:
             await interaction.followup.send(embed=embed)
+        if picks:
+            await interaction.followup.send(embed=embeds[-1], view=ShinyPicker(owner, picks, request))
+        else:
+            await interaction.followup.send(embed=embeds[-1])
 
     # ------------------------------------------------------------ échanges
     @tree.command(name="echange", description="Un échange est-il équitable ? Valeur de chaque côté et contre-offre")
