@@ -289,26 +289,50 @@ async def test_shiny_lists_open_shiny_auctions_with_their_quote(tmp_path):
         [(f"s{i}", p, (now - timedelta(days=1)).isoformat()) for i, p in enumerate((7000, 8000, 8000, 9000))])
     await ctx.db.db.commit()
 
-    [embed] = await shiny_embeds(ctx, 25)
+    [embed], picks = await shiny_embeds(ctx, 25)
     assert embed.title == "✨ Shiny en vente (2)"
     first, second = embed.description.splitlines()
     assert first.startswith(f"**Bob** (L) · mise min **{wb(9000)}** · déjà misée · cote ?")  # finit le premier
     s = ctx.settings
     ceiling = int(min(8000 * s.sniper_deal_ratio_max, 8000 * (1 - s.sale_fee_pct) - s.portfolio_min_profit))
     assert second.startswith(f"💰 **Ada** (L) · mise min **{wb(5000)}** · cote {wb(8000)} · snipe ≤ **{wb(ceiling)}**")
-    [good] = await shiny_embeds(ctx, 25, profitable=True)
+    [good], _ = await shiny_embeds(ctx, 25, profitable=True)
     assert good.title == "✨ Shiny rentables en vente (1)" and "Bob" not in good.description
-    [none] = await shiny_embeds(ctx, 25, "end", 10, True)
+    [none], no_picks = await shiny_embeds(ctx, 25, "end", 10, True)
     assert none.description == "Aucun shiny rentable en vente vu par le sniper."
+    assert not no_picks
+    assert [(p.title, p.rarity, p.min_price, p.ceiling) for p in picks] == [("Ada", "L", 5000, ceiling)]
     assert "Normale" not in embed.description and "Finie" not in embed.description
-    assert (await shiny_embeds(ctx, 25, "low"))[0].description.startswith("💰 **Ada**")
-    assert (await shiny_embeds(ctx, 25, "high"))[0].description.startswith("**Bob**")
-    [cheap] = await shiny_embeds(ctx, 25, "end", 6000)
+    assert (await shiny_embeds(ctx, 25, "low"))[0][0].description.startswith("💰 **Ada**")
+    assert (await shiny_embeds(ctx, 25, "high"))[0][0].description.startswith("**Bob**")
+    [cheap], _ = await shiny_embeds(ctx, 25, "end", 6000)
     assert cheap.title == "✨ Shiny en vente (1)" and "Bob" not in cheap.description
-    [nothing] = await shiny_embeds(ctx, 25, "end", 10)
+    [nothing], _ = await shiny_embeds(ctx, 25, "end", 10)
     assert nothing.description == "Aucun shiny en vente vu par le sniper."
-    [one] = await shiny_embeds(ctx, 1)
+    [one], _ = await shiny_embeds(ctx, 1)
     assert one.footer.text.startswith("1 sur 2, fin la plus proche.")
+
+
+@pytest.mark.asyncio
+async def test_shiny_menu_offers_each_pick_and_asks_its_ceiling():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.discord_cards import PriceModal, ShinyPick, ShinyPicker
+
+    on_price = AsyncMock()
+    picks = [ShinyPick(f"Carte {i}", "L", 100, 500 + i) for i in range(30)]
+    view = ShinyPicker(42, picks, on_price)
+    assert len(view.select.options) == 25 and view.select.options[1].label == "Carte 1"
+    assert not await view.interaction_check(MagicMock(user=MagicMock(id=7)))
+
+    view.select._values = ["1"]
+    interaction = MagicMock(response=MagicMock(send_modal=AsyncMock()))
+    await view.chosen(interaction)
+    modal = interaction.response.send_modal.await_args.args[0]
+    assert isinstance(modal, PriceModal) and modal.price.default == "501"
+    submitted = MagicMock()
+    await modal.on_price(submitted, 450)
+    on_price.assert_awaited_once_with(submitted, picks[1], 450)
 
 
 @pytest.mark.asyncio
