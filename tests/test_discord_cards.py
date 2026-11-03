@@ -286,16 +286,22 @@ async def test_shiny_lists_open_shiny_auctions_with_their_quote(tmp_path):
     await ctx.db.db.executemany(
         "INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at) "
         "VALUES (?, 'a', 'Ada', 'L', 1, ?, ?)",
-        [(f"s{i}", p, (now - timedelta(days=1)).isoformat()) for i, p in enumerate((7000, 8000, 9000))])
+        [(f"s{i}", p, (now - timedelta(days=1)).isoformat()) for i, p in enumerate((7000, 8000, 8000, 9000))])
     await ctx.db.db.commit()
 
     [embed] = await shiny_embeds(ctx, 25)
     assert embed.title == "✨ Shiny en vente (2)"
     first, second = embed.description.splitlines()
     assert first.startswith(f"**Bob** (L) · mise min **{wb(9000)}** · déjà misée · cote ?")  # finit le premier
-    assert second.startswith(f"**Ada** (L) · mise min **{wb(5000)}** · cote {wb(8000)}")
+    s = ctx.settings
+    ceiling = int(min(8000 * s.sniper_deal_ratio_max, 8000 * (1 - s.sale_fee_pct) - s.portfolio_min_profit))
+    assert second.startswith(f"💰 **Ada** (L) · mise min **{wb(5000)}** · cote {wb(8000)} · snipe ≤ **{wb(ceiling)}**")
+    [good] = await shiny_embeds(ctx, 25, profitable=True)
+    assert good.title == "✨ Shiny rentables en vente (1)" and "Bob" not in good.description
+    [none] = await shiny_embeds(ctx, 25, "end", 10, True)
+    assert none.description == "Aucun shiny rentable en vente vu par le sniper."
     assert "Normale" not in embed.description and "Finie" not in embed.description
-    assert (await shiny_embeds(ctx, 25, "low"))[0].description.startswith("**Ada**")
+    assert (await shiny_embeds(ctx, 25, "low"))[0].description.startswith("💰 **Ada**")
     assert (await shiny_embeds(ctx, 25, "high"))[0].description.startswith("**Bob**")
     [cheap] = await shiny_embeds(ctx, 25, "end", 6000)
     assert cheap.title == "✨ Shiny en vente (1)" and "Bob" not in cheap.description
