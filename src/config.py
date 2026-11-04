@@ -29,6 +29,7 @@ WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "ventes": ("create_listing",), "inventory": ("create_listing", "bulk_discard"),
     "defausse": ("bulk_discard",), "tags": ("tag_card",), "themes": ("theme_tag",),
     "succes": ("achievements_check", "claim_achievement"),
+    "souhaits": ("wishlist_write",),     # liste de souhaits du site, pour les cartes de collection manquantes
 }
 
 CsvList = Annotated[list[str], NoDecode]
@@ -345,6 +346,9 @@ class Settings(BaseSettings):
     # Carte possédée : le sniper mise aussi sur un exemplaire de rareté plus haute que la meilleure possédée,
     # jusqu'à COLLECTION_MAX_PRICE (le but : chaque carte dans sa plus haute rareté).
     collection_upgrade: bool = False
+    # Met les cartes manquantes en liste de souhaits : le site annonce leurs ventes, plus de recherche par titre.
+    collection_wishlist: bool = False
+    collection_wishlist_seconds: float = 120.0  # lecture des annonces du site toutes les N secondes
     collection_refresh_minutes: float = 360.0
     collection_search_seconds: float = 120.0  # le sniper cherche une carte de collection sur le marché toutes les N s
     # Mises réelles de collection par vérification anti-bot (le site en accepte ~9-10, puis la redemande) :

@@ -423,3 +423,141 @@ def test_gif_list_reads_the_dump_and_keeps_only_animated_articles():
 
     wikidata = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(wiki)), spacing=0)
     assert asyncio.run(animated_articles(pages, wikidata)) == ["Anim", "Zèbre"]
+
+
+def _wishlist_site(wished: list[dict], notifications: list[dict], market: dict | None = None, calls=None,
+                   refuse_add: bool = False):
+    import json
+
+    catalogue = {"14 octobre": "c-14", "2 mars": "c-2", "Mars (planète), étude": "c-m"}
+
+    def handler(request):
+        path = request.url.path
+        if calls is not None:
+            calls.append((request.method, path))
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        if path == "/rest/v1/cards":
+            return httpx.Response(200, json=[{"id": cid, "wikipedia_title": t} for t, cid in catalogue.items()
+                                             if f'"{t}"' in request.url.params["wikipedia_title"]])
+        if path == "/rest/v1/wishlist_items":
+            if request.method == "GET":
+                return httpx.Response(200, json=[{"card_id": w["card_id"]} for w in wished])
+            if request.method == "POST":
+                if refuse_add:
+                    return httpx.Response(400, json={"message": "limite"})
+                wished.extend(json.loads(request.content))
+                return httpx.Response(201)
+            ids = request.url.params["card_id"]
+            wished[:] = [w for w in wished if f'"{w["card_id"]}"' not in ids]
+            return httpx.Response(204)
+        if path == "/rest/v1/notifications":
+            cursor = request.url.params["created_at"][3:]
+            return httpx.Response(200, json=[n for n in notifications if n["created_at"] > cursor])
+        if market and path.startswith("/api/marketplace/") and path.rsplit("/", 1)[1] in market:
+            return httpx.Response(200, json={"auction": market[path.rsplit("/", 1)[1]]})
+        raise AssertionError(f"route inattendue {request.method} {request.url}")
+    return handler
+
+
+def _wishlist_client(tmp_path, handler, **settings):
+    from tests.test_session import cookie_for
+
+    settings.setdefault("dry_run", False)
+    return make_client(tmp_path, handler, supabase_anon_key="anon-key", wm_cookie=cookie_for("a1", "r1", 3600),
+                       collection_sets=["jours"], collection_wishlist=True, **settings)
+
+
+@pytest.mark.asyncio
+async def test_wishlist_follows_missing_cards_and_keeps_the_players_own(tmp_path):
+    from src.workers import wishlist
+
+    wished = [{"card_id": "c-2"}, {"card_id": "c-joueur"}]  # le joueur a déjà mis « 2 mars » et une autre carte
+    client, notifier = _wishlist_client(tmp_path, _wishlist_site(wished, []))
+    ctx = await make_context(tmp_path, client, notifier)
+    titles = {"14 octobre": "14 octobre", "2 mars": "2 mars", "inconnue": "Inconnue"}
+
+    done = await wishlist.sync(ctx, ["14 octobre", "2 mars", "inconnue"], titles)
+    assert (done["added"], done["removed"], done["covered"], done["unknown"]) == (1, 0, 2, 1)
+    assert {w["card_id"] for w in wished} == {"c-2", "c-joueur", "c-14"}
+    assert await wishlist.covered(ctx) == {"14 octobre", "2 mars"}
+
+    # Toutes deux gagnées : seule celle ajoutée par le bot part.
+    done = await wishlist.sync(ctx, [], titles)
+    assert (done["added"], done["removed"], done["covered"]) == (0, 1, 0)
+    assert {w["card_id"] for w in wished} == {"c-2", "c-joueur"}
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_wishlist_refused_keeps_the_title_search(tmp_path):
+    from src.workers import wishlist
+
+    client, notifier = _wishlist_client(tmp_path, _wishlist_site([], [], refuse_add=True))
+    ctx = await make_context(tmp_path, client, notifier)
+    done = await wishlist.sync(ctx, ["14 octobre"], {"14 octobre": "14 octobre"})
+    assert "HTTP 400" in done["error"] and done["covered"] == 0
+    assert await wishlist.covered(ctx) == set()
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_wishlist_writes_nothing_when_simulated(tmp_path):
+    from src.workers import wishlist
+
+    wished: list[dict] = []
+    calls: list = []
+    client, notifier = _wishlist_client(tmp_path, _wishlist_site(wished, [], calls=calls), dry_run=True)
+    ctx = await make_context(tmp_path, client, notifier)
+    done = await wishlist.sync(ctx, ["14 octobre"], {"14 octobre": "14 octobre"})
+    assert wished == [] and done["covered"] == 0 and {m for m, _ in calls} == {"GET"}
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_listings_are_read_once_and_only_for_missing_cards(tmp_path):
+    from datetime import datetime, timedelta
+
+    from src.workers import wishlist
+
+    start = datetime.now(UTC)
+    at = lambda s: (start + timedelta(seconds=s)).isoformat()
+    def note(s, title, aid):
+        return {"created_at": at(s), "data": {"auction_id": aid, "card_id": "x", "card_title": title}}
+    notes = [note(1, "14 octobre", "a1"), note(2, "Carte du joueur", "a2"), note(3, "14 Octobre", "a1")]
+    client, notifier = _wishlist_client(tmp_path, _wishlist_site([], notes))
+    ctx = await make_context(tmp_path, client, notifier)
+
+    assert await wishlist.new_listings(ctx, {"14 octobre"}, start) == ["a1"]
+    assert await wishlist.new_listings(ctx, {"14 octobre"}, start) == []  # curseur avancé
+    notes.append(note(4, "14 octobre", "a3"))
+    assert await wishlist.new_listings(ctx, {"14 octobre"}, start) == ["a3"]  # après un redémarrage aussi : en base
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_sniper_follows_an_announced_sale_without_searching_its_title(tmp_path):
+    from datetime import datetime, timedelta
+
+    from src.workers import wishlist
+    from src.workers.auction_sniper import AuctionSniper, snipe_params
+
+    now = datetime.now(UTC)
+    sale = {"id": "a1", "card": {"id": "c-14", "wikipedia_title": "14 octobre", "rarity": "R"},
+            "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
+            "end_at": (now + timedelta(hours=1)).isoformat(), "base_amount": 5, "current_bid": None,
+            "current_bidder_id": None}
+    notes = [{"created_at": (now + timedelta(seconds=1)).isoformat(),
+              "data": {"auction_id": "a1", "card_id": "c-14", "card_title": "14 octobre"}}]
+    client, notifier = _wishlist_client(tmp_path, _wishlist_site([], notes, {"a1": sale}), collection_max_price=50)
+    ctx = await make_context(tmp_path, client, notifier)
+    await ctx.db.kv_set("collection", {"owned": [], "missing": ["14 octobre", "2 mars"], "total": 366})
+    await ctx.db.kv_set(wishlist.KV_KEY, {"covered": ["14 octobre"]})
+    await ctx.db.kv_set(wishlist.CURSOR_KEY, now.isoformat())
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    await sniper._load_collection()
+    assert sniper._searched() == {"2 mars"}  # annoncée par le site : plus cherchée par son titre
+    await sniper._read_wishlist(snipe_params(ctx.settings, False), now)
+    assert "a1" in sniper._targets
+    await ctx.db.close()
