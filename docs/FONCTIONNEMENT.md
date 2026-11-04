@@ -1,6 +1,6 @@
 # Fonctionnement
 
-Comment le bot décide. Les valeurs citées sont celles par défaut, et chaque réglage cité est commenté dans [.env.example](../.env.example).
+Comment le bot décide. Les valeurs citées sont celles par défaut : volontairement prudentes, elles n'ont pas été optimisées. Chaque réglage cité est commenté dans [.env.example](../.env.example).
 
 - [Vue d'ensemble](#vue-densemble)
 - [Réseau](#réseau)
@@ -45,8 +45,8 @@ Les lectures de tous les workers passent par une file commune, qui fixe le débi
 | Moment | Écart entre deux lectures |
 |---|---|
 | Normal | 1,5 s + aléa (`HTTP_MIN_SPACING_SECONDS`) |
-| Pic de ventes, 09:00 → 02:00 | 1 s (`HTTP_PEAK_SPACING_SECONDS`) |
-| Le site limite le bot pendant le pic | retour à 1,5 s pendant 30 min |
+| Pic de ventes, 09:00 → 02:00, si `HTTP_PEAK_SPACING_SECONDS` est renseigné | cet écart |
+| Le site limite le bot pendant le pic | retour à l'écart normal pendant 30 min |
 
 Une relecture urgente (juste avant une mise) passe devant ; une requête de fond (cotes, lecture complète de la collection) passe après toutes les autres.
 
@@ -74,23 +74,25 @@ flowchart TD
 
 Le site limite à **5 ventes simultanées**. Chaque achat est donc une « position » qui attend une de ces 5 places pour être revendue.
 
+**La revente est coupée par défaut** : tant que `SNIPER_RESALE_RARITIES` est vide, le bot n'achète rien pour revendre et n'observe aucune vente.
+
 ```mermaid
 flowchart TD
-    A["Repérage<br/>nouvelles ventes UR et L toutes les 10 s"] --> B["Vente suivie"]
+    A["Repérage<br/>nouvelles ventes des raretés choisies, toutes les 30 s"] --> B["Vente suivie"]
     B --> C{"Perdue d'avance ?<br/>mise min > plafond"}
     C -->|oui| X["Écartée sans relecture"]
     C -->|non| D["Relue juste avant la fin"]
     D --> E{"Conditions d'achat"}
     E -->|non| X
-    E -->|oui| F["Mise entre 60 et 15 s avant la fin"]
-    F --> G{"Prolongée de 60 s ?"}
-    G -->|oui| D
+    E -->|oui| F["Mise entre 30 et 15 s avant la fin"]
+    F --> G{"Surenchérie ?"}
+    G -->|"oui, avec SNIPER_ALLOW_REBID"| D
     G -->|non| H["Gagnée → position"]
 ```
 
 Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais.
 
-**Estimation d'une carte** : médiane des 5 dernières ventes observées par le bot, à rareté égale, plafonnée par la moyenne du site. Un shiny n'est estimé que sur ses propres ventes : la moyenne du site ne le distingue pas. Ne comptent pas :
+**Estimation d'une carte** : médiane des 7 dernières ventes observées par le bot, à rareté égale, plafonnée par la moyenne du site. Un shiny n'est estimé que sur ses propres ventes : la moyenne du site ne le distingue pas. Ne comptent pas :
 - une vente 3 fois au-dessus ou au-dessous de la médiane ;
 - une vente entre deux joueurs qui ont déjà fait affaire ;
 - une vente sans concurrence (elle ne peut pas faire monter l'estimation).
@@ -99,45 +101,45 @@ Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'
 
 | Condition | Valeur |
 |---|---|
-| Ventes observées | ≥ 3 disputées parmi les 5 dernières ; ≥ 4 ventes pour un shiny |
-| Écart des prix observés | plus haute ≤ 2 × plus basse |
-| Budget d'une position | capital × 0,9 / 5 (~540 WB pour 3 000) |
-| Bénéfice attendu | ≥ 25 % du budget, 30 WB au moins |
-| Bénéfice si la position doit attendre une place | ≥ 50 % du budget, sauf si elle rapporte plus que les ventes en attente : elle passe alors devant elles |
-| Mise / estimation | entre 50 % et 70 % (80 % la nuit, 02:00 → 07:30) |
+| Ventes observées | ≥ 4 disputées parmi les 7 dernières ; ≥ 8 ventes pour un shiny |
+| Écart des prix observés | plus haute ≤ 1,5 × plus basse |
+| Budget d'une position | capital × 0,5 / 5 (~300 WB pour 3 000), 500 WB au plus (`SNIPER_MAX_BID`) |
+| Bénéfice attendu | ≥ 50 % du budget, 100 WB au moins |
+| Bénéfice si la position doit attendre une place | ≥ 100 % du budget, sauf si elle rapporte plus que les ventes en attente : elle passe alors devant elles |
+| Mise / estimation | entre 25 % et 50 % |
 | Revente estimée | ≤ la vente concurrente la moins chère, encore en cours 1 h après la fin de l'enchère et affichée à au moins 50 % de l'estimation |
 | Solde | jamais sous 50 WB (`SNIPER_MIN_BALANCE_RESERVE`) |
-| Positions | sans plafond (`PORTFOLIO_MAX_POSITIONS`, `PORTFOLIO_BUFFER` : 0 = aucun) |
+| Positions | 5 au plus (`PORTFOLIO_MAX_POSITIONS`, 0 = aucun plafond) |
 
-**Mise** : le minimum du site + la moitié de l'écart jusqu'au plafond. Surenchérie, le bot va droit au plafond, une seule fois. Il ignore toute carte sur laquelle tu mises toi-même.
+**Mise** : le minimum du site. `SNIPER_BID_PUSH` la pousse vers le plafond, et `SNIPER_ALLOW_REBID=true` remise au plafond, une seule fois, si elle est surenchérie. Le bot ignore toute carte sur laquelle tu mises toi-même.
 
 ## Positions : revendre
 
-Une carte gagnée est mise en vente dès son arrivée, pour 1 h (`POSITION_LIST_DURATION_MINUTES`) : les 5 places tournent vite. Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher. Une concurrente affichée sous 50 % de l'estimation ne compte pas : c'est un prix de départ, qui montera. Un seul exemplaire d'une carte est en vente à la fois.
+Une carte gagnée est mise en vente dès son arrivée, pour 6 h (`POSITION_LIST_DURATION_MINUTES`). Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher. Une concurrente affichée sous 50 % de l'estimation ne compte pas : c'est un prix de départ, qui montera. Un seul exemplaire d'une carte est en vente à la fois.
 
-Invendue, elle repart au même prix. Le prix ne baisse qu'avec le temps passé en vente sans acheteur, d'une étape toutes les 6 h (`POSITION_STEP_MINUTES`). L'attente d'une place de vente ne compte pas.
+Le prix baisse avec le temps passé en vente sans acheteur, d'une étape toutes les 6 h (`POSITION_STEP_MINUTES`). L'attente d'une place de vente ne compte pas. Le bot ne descend jamais sous le prix d'achat.
 
 ```mermaid
 stateDiagram-v2
     direction LR
     [*] --> V1: achetée
-    V1: 0 à 6 h en vente<br/>achat + 50 % du bénéfice attendu<br/>(au moins achat + 15 %)
-    V2: 6 à 12 h<br/>−10 %, plancher = prix d'achat
-    V3: 12 à 18 h<br/>−10 %, plancher = achat − 10 %
-    V4: Après 18 h : liquidation<br/>départ à 1 WB, fin 00-03 h ou 06-09 h
+    V1: 1re vente<br/>achat + 25 % du bénéfice attendu<br/>(au moins achat + 20 %)
+    V2: 2e, 3e, 4e vente<br/>−5 % à chaque fois
+    V3: Ensuite<br/>au prix d'achat, tant qu'une place est libre
+    V4: Gardée<br/>toutes les places prises
     V1 --> V2: invendue
     V2 --> V3: invendue
     V3 --> V4: invendue
     V1 --> [*]: vendue
     V2 --> [*]: vendue
     V3 --> [*]: vendue
-    V4 --> [*]: vendue
 ```
 
-- **Liquidation** : au moins 3 h en vente. Les L parties à 1 WB à ces heures-là se sont vendues autour de leur prix habituel (relevé du 15 au 26/10/2026).
-- **Position chère** (achetée 1 000 WB ou plus, `POSITION_EXPENSIVE_*`) : une seule baisse de 10 %, puis liquidation dès 12 h, pour ne pas bloquer son capital et sa place.
+- **Liquidation** (coupée par défaut, `POSITION_FIRE_SALE_AFTER`) : après N étapes, la carte repart à 1 WB, avec une fin à 00-03 h ou 06-09 h.
+- **Perte permise** (coupée par défaut, `POSITION_MAX_LOSS`) : après `POSITION_LOSS_AFTER` étapes, le prix peut passer sous le prix d'achat.
+- **Position chère** (coupée par défaut, `POSITION_EXPENSIVE_*`) : moins de baisses et une liquidation plus tôt pour une carte achetée à partir de ce prix.
 - **Position qui traîne** : détenue depuis plus de 48 h (`POSITION_STALE_HOURS`), elle déclenche une alerte avec des boutons.
-- **Reventes plus longues** : avec `POSITION_LIST_LONG_BELOW=N`, une revente dure 12 h tant que moins de N positions sont détenues, ou 1 h si 12 h la ferait finir à une heure où les L se vendent mal (11-13 h, 18-22 h, `POSITION_AVOID_END_HOURS`).
+- **Reventes plus longues** : avec `POSITION_LIST_LONG_BELOW=N`, une revente dure `POSITION_LIST_LONG_MINUTES` tant que moins de N positions sont détenues, sauf si elle finirait à une heure de `POSITION_AVOID_END_HOURS`.
 
 **Étiquette « revente »** (`MANUAL_RESALE_TAG`) : une carte que tu achètes ou tires toi-même et que tu étiquettes est reprise comme une position, avec les mêmes règles. Sans achat retrouvé (carte d'un paquet), son prix d'achat est 0 et elle part à sa cote.
 
@@ -147,7 +149,7 @@ Toutes les 30 s, le bot publie ce qui attend s'il reste une place de vente (tes 
 
 ```mermaid
 flowchart LR
-    P["Place libre"] --> A["1. Liquidation à 1 WB<br/>dont l'heure est venue"]
+    P["Place libre"] --> A["1. Liquidation à 1 WB<br/>dont l'heure est venue, si activée"]
     A --> V["2. Vente demandée<br/>par /vendre"]
     V --> B["3. Plus grand gain<br/>revente ou doublon"]
     B --> C["4. La plus ancienne"]
@@ -168,7 +170,7 @@ flowchart LR
 
 ## Collections
 
-Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur les cartes manquantes (jusqu'à `COLLECTION_MAX_PRICE`, 50 WB), les garde et leur pose une étiquette. `COLLECTION_SETS` choisit celles qui sont actives, ex. `jours,gifs` ; vide, aucune ne l'est.
+Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur les cartes manquantes (jusqu'à `COLLECTION_MAX_PRICE`, 10 WB), les garde et leur pose une étiquette. `COLLECTION_SETS` choisit celles qui sont actives ; vide, aucune ne l'est.
 
 | Collection | Contenu |
 |---|---|
@@ -182,14 +184,14 @@ Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur 
 flowchart TD
     Y["config/collections.yaml<br/>+ jours intégrés"] --> L["Lecture de ta collection<br/>toutes les 6 h"]
     L --> M["Cartes manquantes<br/>+ meilleure rareté de chaque carte possédée"]
-    M --> S["Sniper : cherche une carte de collection<br/>sur le marché toutes les 30 s"]
+    M --> S["Sniper : cherche une carte de collection<br/>sur le marché toutes les 2 min"]
     S --> B{"Mise min ≤ COLLECTION_MAX_PRICE ?"}
     B -->|oui| W["Mise au minimum"]
     W --> K["Gagnée : gardée"]
     K --> T["Étiquette de la collection<br/>sur le meilleur exemplaire"]
 ```
 
-- Rareté (`COLLECTION_UPGRADE`, actif par défaut) : une carte possédée est aussi misée quand une vente propose une rareté plus haute que ta meilleure (R → SR, SR → UR…), au même plafond `COLLECTION_MAX_PRICE`. Les recherches alternent : une carte manquante, puis une carte à monter.
+- Rareté (`COLLECTION_UPGRADE`, coupé par défaut) : une carte possédée est aussi misée quand une vente propose une rareté plus haute que ta meilleure (R → SR, SR → UR…), au même plafond `COLLECTION_MAX_PRICE`. Les recherches alternent : une carte manquante, puis une carte à monter.
 - L'étiquette passe sur le nouvel exemplaire, puis est retirée de l'ancien, qui n'est plus protégé : il peut être vendu ou défaussé.
 - Seuls les titres exacts comptent : « 14 octobre », pas « 14 octobre 1066 ».
 - Jamais deux enchères sur la même carte, jamais sur une carte que tu cherches toi-même.

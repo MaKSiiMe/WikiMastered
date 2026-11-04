@@ -7,13 +7,13 @@ Bot pour [WikiMasters](https://www.wiki-masters.com) : il repère les cartes ven
 > [!CAUTION]
 > **Ton compte est en jeu.** Les règles de la communauté WikiMasters (section 3) interdisent les bots et les scripts qui ouvrent des paquets, misent ou échangent à la place du joueur, avec des sanctions qui vont jusqu'au bannissement définitif. Ce projet automatise des mises et des ventes : il est concerné. Lis ces règles avant de te lancer. Si tu le fais tourner, le risque est pour ton compte, et rien ici ne le supprime.
 
-Par défaut, `DRY_RUN=true` : rien n'est envoyé au site, le bot annonce seulement ce qu'il ferait, avec le préfixe `[DRY RUN]`.
+Par défaut, `DRY_RUN=true` : rien n'est envoyé au site, le bot annonce seulement ce qu'il ferait, avec le préfixe `[DRY RUN]`. Et même en réel, il n'achète rien pour revendre tant que tu n'as pas choisi tes raretés (`SNIPER_RESALE_RARITIES`). Les réglages par défaut sont volontairement prudents et n'ont pas été optimisés : à toi de trouver les tiens.
 
 ## Ce que fait le bot
 
 | Worker | Rôle | Par défaut |
 |---|---|---|
-| [`sniper`](src/workers/auction_sniper.py) | Achète des UR et des L sous leur prix, pour les revendre ; mise aussi pour les collections | actif |
+| [`sniper`](src/workers/auction_sniper.py) | Achète sous leur prix des cartes des raretés que tu choisis, pour les revendre ; mise aussi pour les collections | actif, sans revente |
 | [`inventory`](src/workers/inventory_manager.py) | Revend les achats ; vend les doublons et défausse les cartes sans valeur si tu l'actives | actif (`AUTO_LIST`, `AUTO_DISCARD` coupés) |
 | [`collection`](src/workers/collection.py) | Suit tes collections : jours de l'année, GIF animés, ou ta propre liste | dès que `COLLECTION_SETS` est rempli |
 | [`etiquettes`](src/workers/themes.py) | Range la collection par thème (Personne, Pays, Musique…) grâce à Wikidata | coupé (`ENABLE_THEME_TAGS`) |
@@ -29,7 +29,7 @@ Les règles détaillées (estimation des prix, mises, remises en vente…) sont 
 
 - **Il ne passe pas la vérification anti-bot.** Le site la redemande environ toutes les 9 à 10 mises acceptées. C'est à toi de la faire dans ton navigateur : le bot te prévient sur Discord et attend, et ses mises restent bloquées tant qu'elle n'est pas faite. Compte donc sur plusieurs interventions par jour si tu veux qu'il achète régulièrement.
 - **Il n'ouvre pas de paquets** et ne répond pas aux échanges.
-- **Il ne garantit aucun gain.** Une revente peut partir à perte, et une carte invendue finit à 1 WB ([détail](docs/FONCTIONNEMENT.md#positions--revendre)).
+- **Il ne garantit aucun gain.** Une carte achetée peut rester invendue et immobiliser ton capital ([détail](docs/FONCTIONNEMENT.md#positions--revendre)).
 
 ## Démarrer
 
