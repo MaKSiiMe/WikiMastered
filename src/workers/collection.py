@@ -323,4 +323,15 @@ class CollectionWorker(Worker):
                                f"reste {state['to_tag']}.")
         if state.get("tag_error"):
             self.log.warning("étiquettes de collection : %s", state["tag_error"])
+        if self.settings.collection_wishlist:
+            await self._sync_wishlist(state)
         return self.settings.collection_refresh_minutes * 60
+
+    async def _sync_wishlist(self, state: dict) -> None:
+        from src.workers import wishlist  # import local : wishlist.py importe ce module
+
+        done = await wishlist.sync(self.ctx, state["missing"], targets(self.ctx))
+        self.log.info("liste de souhaits : %d cartes annoncées par le site, +%d, -%d, %d titres sans carte",
+                      done["covered"], done["added"], done["removed"], done["unknown"])
+        if done["error"]:
+            self.notifier.warning("Liste de souhaits", f"{done['error']}\nCes cartes restent cherchées par leur titre.")

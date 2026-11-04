@@ -48,6 +48,7 @@ from src.snipes import load as load_snipes
 from src.snipes import remove as remove_snipe
 from src.workers.base import Worker
 from src.workers.collection import KV_KEY as COLLECTION_KV
+from src.workers import wishlist
 from src.workers.collection import collection_key, record_win, targets as collection_targets
 from src.workers.inventory_manager import ANTIBOT_HINT, RIVAL_MIN_SHARE
 
@@ -443,6 +444,7 @@ class AuctionSniper(Worker):
         self._bids_since_check = 0  # mises réelles acceptées depuis la dernière vérification (ou CHECK_QUOTA_BIDS)
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
+        self._wishlist_covered: set[str] = set()  # le site annonce leurs ventes : plus de recherche par titre
         # Cartes possédées à monter en rareté (COLLECTION_UPGRADE) : clé -> rang de la meilleure rareté possédée.
         self._collection_best: dict[str, int] = {}
         # Jours manquants d'après la dernière lecture (avant de retirer ceux que le bot a gagnés), et
@@ -589,8 +591,10 @@ class AuctionSniper(Worker):
         sources = [((kind, rarity), every) for rarity in self.settings.sniper_resale_rarities
                    for kind, every in (("recent", self.settings.sniper_discovery_seconds),
                                        ("ended", self.settings.sniper_observe_seconds))]
-        if self._collection_missing or self._snipes or self._collection_best:
+        if self._searched() or self._collection_best:
             sources.append((("day", ""), self.settings.collection_search_seconds))
+        if self.settings.collection_wishlist and self._collection_missing:
+            sources.append((("wishlist", ""), self.settings.collection_wishlist_seconds))
         return [((now - self._last_read.get(key, _EPOCH)).total_seconds() - every, every, key)
                 for key, every in sources]
 
@@ -634,9 +638,26 @@ class AuctionSniper(Worker):
                     and self._beyond(max(a.end_at for a in auctions), params, now) >= ENDED_DEEPER_MIN_TARGETS:
                 self._ended_page[rarity] = page + 1
                 self._last_read[(kind, rarity)] = _EPOCH  # la page suivante passe au prochain passage
+        elif kind == "wishlist":
+            await self._read_wishlist(params, now)
         else:
             auctions, _ = await self.api.market_page(sort="ending_soon", q=self._next_day(), limit=MARKET_LIMIT)
             await self._ingest(auctions, params, now)
+
+    def _searched(self) -> set[str]:
+        """Cartes à chercher par leur titre : les manquantes que le site n'annonce pas, et celles demandées."""
+        return (self._collection_missing - self._wishlist_covered) | set(self._snipes)
+
+    async def _read_wishlist(self, params: SnipeParams, now: datetime) -> None:
+        """Ventes de cartes manquantes annoncées par le site : chacune est relue, puis suivie comme les autres."""
+        try:
+            ids = await wishlist.new_listings(self.ctx, self._collection_missing, now)
+        except ApiError as exc:
+            self.log.warning("annonces de la liste de souhaits illisibles : %s", exc)
+            return
+        for aid in ids:
+            with contextlib.suppress(ApiError):  # déjà terminée ou retirée
+                await self._ingest([await self.api.auction(aid)], params, utcnow())
 
     def _in_window(self, aid: str, params: SnipeParams, now: datetime) -> bool:
         """Cible de revente ou de collection pas encore misée, dans sa fenêtre de mise."""
@@ -662,7 +683,7 @@ class AuctionSniper(Worker):
     def _next_day(self) -> str:
         """Prochain titre à chercher : rotation sur les jours manquants et les cartes demandées sur Discord, en
         alternance avec les cartes possédées à monter en rareté (une recherche sur deux au plus pour elles)."""
-        wanted = self._collection_missing | set(self._snipes)
+        wanted = self._searched()
         self._upgrade_turn = not self._upgrade_turn
         if self._collection_best and (self._upgrade_turn or not wanted):
             self._upgrade_queue = [k for k in self._upgrade_queue if k in self._collection_best]
@@ -1086,6 +1107,7 @@ class AuctionSniper(Worker):
         won = {collection_key(t) for t, _ in wins}
         self._collection_wanted = set(state.get("missing", []))
         self._collection_missing = self._collection_wanted - won
+        self._wishlist_covered = await wishlist.covered(self.ctx) if self.settings.collection_wishlist else set()
         self._day_titles = collection_targets(self.ctx)
         best: dict[str, int] = {}
         if self.settings.collection_upgrade:
