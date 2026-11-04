@@ -1,6 +1,6 @@
 """Logs du bot : une console lisible, et un journal détaillé pour les analyses.
 
-Console (logs Portainer, `ssh wm-logs 2h`) : une ligne courte par événement utile, au niveau LOG_LEVEL, avec un
+Console (logs du conteneur) : une ligne courte par événement utile, au niveau LOG_LEVEL, avec un
 nom de source court (sniper, reseau, discord…). Journal (`data/logs/journal.jsonl`, un fichier par jour,
 JOURNAL_KEEP_DAYS gardés) : tous les logs, DEBUG compris, et les événements structurés (`event`) — décisions du
 sniper, statistiques des workers et du réseau, messages Discord —, une ligne JSON chacun. Il se relit avec

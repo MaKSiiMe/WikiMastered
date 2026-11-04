@@ -110,7 +110,7 @@ async def stats_loop(ctx: Context, workers: list[Worker]) -> None:
 
 
 def print_journal(settings: Settings, since: str, kinds: str, events_only: bool) -> None:
-    """Lignes du journal (JSON) sur la sortie : `ssh wm-logs journal 6h` les récupère pour les analyses."""
+    """Lignes du journal (JSON) sur la sortie, pour les analyser hors du conteneur."""
     start = datetime.now() - journal.parse_duration(since)
     wanted = {k.strip() for k in kinds.split(",") if k.strip()} or None
     for line in journal.read(settings.data_dir / "logs", start, wanted, events_only=events_only):

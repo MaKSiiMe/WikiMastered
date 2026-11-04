@@ -32,7 +32,7 @@ endpoints:
     params: {sort: "{sort}", page: "{page}", stats: "0", q: "{q}"}
     defaults: {sort: added, q: ""}
 
-  player_collection:            # collection publique d'un joueur (profil de vib, relevé du 02/11), page>=0, page de 50
+  player_collection:            # collection publique d'un joueur (profil d'un joueur, relevé du 02/11), page>=0, page de 50
     method: GET
     path: /api/profile/{username}/collection
     params: {page: "{page}", sort: rarity, stats: "1", tag_id: "{tag_id}", pending: "1"}

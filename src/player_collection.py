@@ -3,7 +3,7 @@ celles de notre liste, et celles hors liste qui sont vraiment animées (notre li
 
 Lecture seule, en requêtes de fond, à la demande ; aucune mise : rien ne compte pour la vérification anti-bot. Le
 résultat est gardé en base (kv « player_collection »), exemplaires compris, pour l'analyser ensuite. La route a été
-relevée le 02/11 sur le profil de vib ; sa réponse n'a pas encore été vue, d'où les autres clés gardées dans `extra`.
+relevée le 02/11 sur le profil d'un joueur ; sa réponse n'a pas encore été vue, d'où les autres clés gardées dans `extra`.
 """
 
 from __future__ import annotations

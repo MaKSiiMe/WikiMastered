@@ -138,7 +138,7 @@ async def test_warnings_needing_action_are_copied_to_the_alert_channel():
     n.warning("Serveurs instables", "500", important=False)  # se règle seul
     n.info("Revente sans acheteur", "x", topic=Topic.SALES, thread=position_thread(BID, "↩️ sans acheteur"))
     n.warning("Revente abandonnée", "x", topic=Topic.SALES, thread=position_thread(BID, "⚠️ abandonnée", ring=True))
-    n.info("Échange proposé par Olé", "✅ À ton avantage", topic=Topic.TRADES, alert=True)
+    n.info("Échange proposé par Camille", "✅ À ton avantage", topic=Topic.TRADES, alert=True)
     n.critical("Session perdue", "cookie")
     await n.close()
 
@@ -146,6 +146,6 @@ async def test_warnings_needing_action_are_copied_to_the_alert_channel():
     assert copies == [
         ("Position qui traîne", "Ada (L) : achetée 900 WB il y a 30 h.\n→ <#555>", None),
         ("Revente abandonnée : Albert Camus (L ✨)", "⚠️ abandonnée\n→ <#555>", None),
-        ("Échange proposé par Olé", "✅ À ton avantage\n→ <#555>", None),
+        ("Échange proposé par Camille", "✅ À ton avantage\n→ <#555>", None),
         ("Session perdue", "cookie", "<@1>"),  # la critique elle-même, avec la mention
     ]

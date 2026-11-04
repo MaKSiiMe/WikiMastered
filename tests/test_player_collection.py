@@ -43,12 +43,12 @@ async def test_reads_every_page_of_the_tag_and_keeps_the_result(tmp_path, monkey
 
     client, notifier = make_client(tmp_path, site)
     ctx = await make_context(tmp_path, client, notifier)
-    state = await player_collection.scan(ctx, "vib", "tag-1")
-    assert [u.path for u in seen] == ["/api/profile/vib/collection"] * 2
+    state = await player_collection.scan(ctx, "un_joueur", "tag-1")
+    assert [u.path for u in seen] == ["/api/profile/un_joueur/collection"] * 2
     assert seen[0].params["tag_id"] == "tag-1" and seen[1].params["page"] == "1"
     assert state["cards"] == 51 and state["by_rarity"] == {"L": 1, "R": 50}
     assert '"total": 51' in state["extra"]
-    assert (await ctx.db.kv_get(player_collection.KV_KEY))["username"] == "vib"
+    assert (await ctx.db.kv_get(player_collection.KV_KEY))["username"] == "un_joueur"
     assert "51 cartes (51 exemplaires)" in summary(state)
     await ctx.db.close()
 
@@ -59,6 +59,6 @@ async def test_unknown_answer_is_shown_rather_than_read_as_empty(tmp_path):
 
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"cards": [{"x": 1}]}))
     ctx = await make_context(tmp_path, client, notifier)
-    text = summary(await player_collection.scan(ctx, "vib"))
+    text = summary(await player_collection.scan(ctx, "un_joueur"))
     assert "Réponse du site sans carte reconnue" in text and '"cards"' in text
     await ctx.db.close()

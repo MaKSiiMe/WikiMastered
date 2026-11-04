@@ -13,7 +13,7 @@ from src.core.notifier import Level
 from src.workers.trade_watch import KV_KEY, TradeWatch
 from tests.test_integration import ME, make_client, make_context
 
-OLE = "22222222-2222-2222-2222-222222222222"
+AUTRE = "22222222-2222-2222-2222-222222222222"
 # 28/10 : Jeffrey Epstein (L) se vendait ~12 000, Emma Watson et Zendaya ~5 500 (ventes observées du 23 au 28/10).
 SALES = {"jeffrey": ("Jeffrey Epstein", [11500, 12600, 13500, 12100, 11800, 12200]),
          "emma": ("Emma Watson", [5400, 5600, 5500, 5450, 5550]),
@@ -27,7 +27,7 @@ def item(card: str, by: str) -> dict:
 
 def trade(tid: str, initiator: str, recipient: str, items: list[dict], status: str = "pending") -> dict:
     return {"id": tid, "status": status, "initiator_id": initiator, "recipient_id": recipient,
-            "initiator": {"username": "Olé" if initiator == OLE else "MaKSiiMe"}, "initiator_wikibidous": 0,
+            "initiator": {"username": "Camille" if initiator == AUTRE else "Moi"}, "initiator_wikibidous": 0,
             "recipient_wikibidous": 0, "items": items}
 
 
@@ -58,9 +58,9 @@ class Sent:
 
 @pytest.mark.asyncio
 async def test_unfair_offer_is_announced_once_with_a_counter_offer(tmp_path):
-    """Olé propose Emma Watson contre Jeffrey Epstein : défavorable, contre-offre Emma + ~6 500 WB ou + Zendaya."""
-    offer = trade("t1", OLE, ME, [item("emma", OLE), item("jeffrey", ME)])
-    mine = trade("t0", ME, OLE, [item("jeffrey", ME), item("emma", OLE), item("zendaya", OLE)])
+    """Camille propose Emma Watson contre Jeffrey Epstein : défavorable, contre-offre Emma + ~6 500 WB ou + Zendaya."""
+    offer = trade("t1", AUTRE, ME, [item("emma", AUTRE), item("jeffrey", ME)])
+    mine = trade("t0", ME, AUTRE, [item("jeffrey", ME), item("emma", AUTRE), item("zendaya", AUTRE)])
     ctx = await context(tmp_path, [offer, mine])
     worker = TradeWatch(ctx)
     worker.notifier = sent = Sent()  # type: ignore[assignment]
@@ -70,7 +70,7 @@ async def test_unfair_offer_is_announced_once_with_a_counter_offer(tmp_path):
     level, title, headline, kwargs = sent.messages[0]
     text = "\n".join([headline, *(f"{n}\n{v}" for n, v in kwargs["columns"] + kwargs["sections"])])
     text = text.replace("\u202f", " ")  # wb() : espace fine entre les milliers
-    assert level is Level.WARNING and title == "Échange proposé par Olé"
+    assert level is Level.WARNING and title == "Échange proposé par Camille"
     assert "❌ Défavorable : -6 650 WB" in text
     assert "Tu donnes ~12 150 WB\n**L · Jeffrey Epstein**\n~12 150 WB · 6 ventes en 7 j" in text
     assert "L · Emma Watson + **6 700 WB**" in text
@@ -141,8 +141,8 @@ async def test_trade_items_with_ids_only_are_named_and_priced(tmp_path):
         [(f"e{i}", "emma", "Emma Watson", p, (now - timedelta(hours=i + 1)).isoformat())
          for i, p in enumerate(SALES["emma"][1])])
     await ctx.db.db.commit()
-    raw = trade("t", OLE, ME, [{"card_id": "emma", "user_card_id": "u-emma", "offered_by": ME},
-                               {"card_id": "zendaya", "user_card_id": "u-z", "offered_by": OLE}])
+    raw = trade("t", AUTRE, ME, [{"card_id": "emma", "user_card_id": "u-emma", "offered_by": ME},
+                               {"card_id": "zendaya", "user_card_id": "u-z", "offered_by": AUTRE}])
     e = await trades.evaluate_trade(ctx, Trade.model_validate(raw), ME)
     assert (e.given[0].label, e.given[0].value) == ("L · Emma Watson", 5500)
     assert (e.received[0].label, e.received[0].value) == ("? · Zendaya", None)
