@@ -68,3 +68,7 @@ Le bot tourne seul. Une alerte 🔴 sur Discord signale les cas où il faut agir
 ## Crédits
 
 Les routes du site ne sont pas devinées : elles viennent du code des extensions communautaires [WikiMastersTools](https://github.com/qkerman/WikiMastersTools-kzfamily), [WikiRemastered](https://github.com/Lypningeuh/WikiRemastered), [wikimasters-plus](https://github.com/ThePommespanzer/wikimasters-plus), [wikimasters-farm](https://github.com/3d3n-pyc/wikimasters-farm) et [wikimasters-bot](https://github.com/LockBlock-dev/wikimasters-bot). Thèmes tirés de [Wikidata](https://www.wikidata.org), liste des GIF tirée de [Wikipédia](https://fr.wikipedia.org).
+
+## Licence
+
+[MIT](LICENSE), sans aucune garantie. La police DejaVu Sans garde [sa propre licence](src/assets/DejaVuSans-LICENSE.txt). La licence couvre ce code, pas son usage sur WikiMasters : les règles du site restent les siennes.
