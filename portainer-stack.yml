@@ -1,6 +1,6 @@
 # Stack Portainer (Stacks > Add stack > Repository, chemin : portainer-stack.yml).
 # Les variables saisies dans Portainer (onglet Environment variables) sont écrites
-# par Portainer dans stack.env, lu ci-dessous. Guide : docs/PORTAINER.md
+# par Portainer dans stack.env, lu ci-dessous. Guide : docs/INSTALLATION.md
 services:
   wikimastered:
     build: .

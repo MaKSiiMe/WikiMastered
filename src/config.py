@@ -60,7 +60,7 @@ class Settings(BaseSettings):
 
     # --- Général -------------------------------------------------------------
     dry_run: bool = True
-    # Écritures réelles malgré DRY_RUN=true (ex. packs : ouvrir les paquets pour de vrai).
+    # Écritures réelles malgré DRY_RUN=true (ex. ventes).
     live_writes: CsvList = Field(default_factory=list)
     # Écritures simulées malgré DRY_RUN=false (ex. sniper : tout est réel sauf les mises des positions).
     simulate: CsvList = Field(default_factory=list)
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     # --- Discord ----------------------------------------------------------------
     discord_webhook_url: str = ""
     discord_alert_webhook_url: str = ""
-    # Salon d'activité (paquets, digests, récap périodique, tendances, simulé) : vide = salon principal ;
+    # Salon d'activité (récap périodique, simulé) : vide = salon principal ;
     # « off » = logs seulement. Le salon principal garde alertes, achats, ventes, cartes gagnées, bilans.
     discord_activity_webhook_url: str = ""
     # Un salon par catégorie (un webhook chacun) : il reçoit tous ses messages, sauf les alertes critiques (salon

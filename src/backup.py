@@ -8,7 +8,7 @@ réglages changés sur Discord. Perdue, le sniper n'estime plus rien pendant des
 - La copie est vérifiée (PRAGMA quick_check) avant d'être gardée : une sauvegarde abîmée ne remplace rien.
 - Compressée (gzip, ≈ ÷ 4) dans BACKUP_DIR (un volume à part : le volume des données peut être perdu sans elle),
   nommée wikimastered-AAAA-MM-JJ-HHMM.db.gz ; les BACKUP_KEEP plus récentes sont gardées.
-- Restauration : docs/PORTAINER.md, « Sauvegardes ».
+- Restauration : docs/INSTALLATION.md, « Sauvegardes ».
 """
 
 from __future__ import annotations

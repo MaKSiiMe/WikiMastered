@@ -1,6 +1,6 @@
 # Fonctionnement
 
-Comment le bot décide. Chaque réglage cité est commenté dans [.env.example](../.env.example).
+Comment le bot décide. Les valeurs citées sont celles par défaut, et chaque réglage cité est commenté dans [.env.example](../.env.example).
 
 - [Vue d'ensemble](#vue-densemble)
 - [Réseau](#réseau)
@@ -8,8 +8,10 @@ Comment le bot décide. Chaque réglage cité est commenté dans [.env.example](
 - [Positions : revendre](#positions--revendre)
 - [Inventaire : doublons et défausse](#inventaire--doublons-et-défausse)
 - [Collections](#collections)
+- [Étiquettes de thème](#étiquettes-de-thème)
 - [Cotes, succès, sécurité](#cotes-succès-sécurité)
 - [Discord](#discord)
+- [Logs et journal](#logs-et-journal)
 - [Routes et données](#routes-et-données)
 
 ## Vue d'ensemble
@@ -21,11 +23,13 @@ flowchart LR
         I["💰 Inventaire"]
         C["📅 Collection"]
         A["🏆 Succès"]
+        T["🏷️ Étiquettes"]
         V["💰 Cotes"]
+        U["📈 Valeur"]
         G["🛡️ Garde du profil"]
         E["🤝 Échanges"]
     end
-    S & I & C & A & V & G & E --> Q["Client HTTP<br/>une requête à la fois"]
+    S & I & C & A & T & V & U & G & E --> Q["Client HTTP<br/>une requête à la fois"]
     Q --> W[("wiki-masters.com")]
     Workers --> DB[("SQLite<br/>data/wikimastered.db")]
     Workers --> D["Discord"]
@@ -78,13 +82,15 @@ flowchart TD
     C -->|non| D["Relue juste avant la fin"]
     D --> E{"Conditions d'achat"}
     E -->|non| X
-    E -->|oui| F["Mise entre 20 et 11 s avant la fin"]
+    E -->|oui| F["Mise entre 60 et 15 s avant la fin"]
     F --> G{"Prolongée de 60 s ?"}
     G -->|oui| D
     G -->|non| H["Gagnée → position"]
 ```
 
-**Estimation d'une carte** : médiane des 5 dernières ventes observées par le bot, plafonnée par la moyenne du site. Ne comptent pas :
+Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais.
+
+**Estimation d'une carte** : médiane des 5 dernières ventes observées par le bot, à rareté égale, plafonnée par la moyenne du site. Un shiny n'est estimé que sur ses propres ventes : la moyenne du site ne le distingue pas. Ne comptent pas :
 - une vente 3 fois au-dessus ou au-dessous de la médiane ;
 - une vente entre deux joueurs qui ont déjà fait affaire ;
 - une vente sans concurrence (elle ne peut pas faire monter l'estimation).
@@ -93,28 +99,32 @@ flowchart TD
 
 | Condition | Valeur |
 |---|---|
-| Ventes observées | ≥ 3 disputées parmi les 5 dernières |
+| Ventes observées | ≥ 3 disputées parmi les 5 dernières ; ≥ 4 ventes pour un shiny |
 | Écart des prix observés | plus haute ≤ 2 × plus basse |
 | Budget d'une position | capital × 0,9 / 5 (~540 WB pour 3 000) |
-| Bénéfice attendu | ≥ 25 % du budget (50 % si la position doit attendre une place) |
-| Mise / estimation | entre 40 % et 70 % (80 % la nuit, 02:00 → 07:30) |
-| Revente estimée | ≤ la vente concurrente la moins chère |
+| Bénéfice attendu | ≥ 25 % du budget, 30 WB au moins |
+| Bénéfice si la position doit attendre une place | ≥ 50 % du budget, sauf si elle rapporte plus que les ventes en attente : elle passe alors devant elles |
+| Mise / estimation | entre 50 % et 70 % (80 % la nuit, 02:00 → 07:30) |
+| Revente estimée | ≤ la vente concurrente la moins chère, encore en cours 1 h après la fin de l'enchère et affichée à au moins 50 % de l'estimation |
+| Solde | jamais sous 50 WB (`SNIPER_MIN_BALANCE_RESERVE`) |
 | Positions | sans plafond (`PORTFOLIO_MAX_POSITIONS`, `PORTFOLIO_BUFFER` : 0 = aucun) |
 
 **Mise** : le minimum du site + la moitié de l'écart jusqu'au plafond. Surenchérie, le bot va droit au plafond, une seule fois. Il ignore toute carte sur laquelle tu mises toi-même.
 
 ## Positions : revendre
 
-Une carte gagnée est mise en vente dès son arrivée, pour 12 h s'il y a moins de 5 positions, sinon pour 6 h. Si les 12 h la feraient finir à une heure où les L se vendent mal (11-13 h, 18-22 h), le bot prend 6 h quand elles finissent mieux ; 6 h n'est jamais allongée à 12 h, pour libérer les places de vente. La durée est revue au moment de publier, pour une carte qui a attendu une place. Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher.
+Une carte gagnée est mise en vente dès son arrivée, pour 1 h (`POSITION_LIST_DURATION_MINUTES`) : les 5 places tournent vite. Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher. Une concurrente affichée sous 50 % de l'estimation ne compte pas : c'est un prix de départ, qui montera. Un seul exemplaire d'une carte est en vente à la fois.
+
+Invendue, elle repart au même prix. Le prix ne baisse qu'avec le temps passé en vente sans acheteur, d'une étape toutes les 6 h (`POSITION_STEP_MINUTES`). L'attente d'une place de vente ne compte pas.
 
 ```mermaid
 stateDiagram-v2
     direction LR
     [*] --> V1: achetée
-    V1: 1re vente<br/>achat + 50 % du bénéfice attendu<br/>(au moins achat + 15 %)
-    V2: 2e vente<br/>−10 %, plancher = prix d'achat
-    V3: 3e vente<br/>−10 %, plancher = achat − 10 %
-    V4: Liquidation<br/>départ à 1 WB, fin 00-03 h ou 06-09 h
+    V1: 0 à 6 h en vente<br/>achat + 50 % du bénéfice attendu<br/>(au moins achat + 15 %)
+    V2: 6 à 12 h<br/>−10 %, plancher = prix d'achat
+    V3: 12 à 18 h<br/>−10 %, plancher = achat − 10 %
+    V4: Après 18 h : liquidation<br/>départ à 1 WB, fin 00-03 h ou 06-09 h
     V1 --> V2: invendue
     V2 --> V3: invendue
     V3 --> V4: invendue
@@ -124,20 +134,26 @@ stateDiagram-v2
     V4 --> [*]: vendue
 ```
 
-Les L parties à 1 WB à ces heures-là se sont vendues autour de leur prix habituel (du 15 au 26/10).
+- **Liquidation** : au moins 3 h en vente. Les L parties à 1 WB à ces heures-là se sont vendues autour de leur prix habituel (relevé du 15 au 26/10/2026).
+- **Position chère** (achetée 1 000 WB ou plus, `POSITION_EXPENSIVE_*`) : une seule baisse de 10 %, puis liquidation dès 12 h, pour ne pas bloquer son capital et sa place.
+- **Position qui traîne** : détenue depuis plus de 48 h (`POSITION_STALE_HOURS`), elle déclenche une alerte avec des boutons.
+- **Reventes plus longues** : avec `POSITION_LIST_LONG_BELOW=N`, une revente dure 12 h tant que moins de N positions sont détenues, ou 1 h si 12 h la ferait finir à une heure où les L se vendent mal (11-13 h, 18-22 h, `POSITION_AVOID_END_HOURS`).
 
 **Étiquette « revente »** (`MANUAL_RESALE_TAG`) : une carte que tu achètes ou tires toi-même et que tu étiquettes est reprise comme une position, avec les mêmes règles. Sans achat retrouvé (carte d'un paquet), son prix d'achat est 0 et elle part à sa cote.
 
 ## Inventaire : doublons et défausse
 
-Toutes les 10 min, le bot regarde s'il reste une place de vente (tes ventes manuelles comptent). Une place libre va, dans l'ordre :
+Toutes les 30 s, le bot publie ce qui attend s'il reste une place de vente (tes ventes manuelles comptent). Une place libre va, dans l'ordre :
 
 ```mermaid
 flowchart LR
     P["Place libre"] --> A["1. Liquidation à 1 WB<br/>dont l'heure est venue"]
-    A --> B["2. Plus grand gain<br/>revente ou doublon ≥ 15 WB"]
-    B --> C["3. La plus ancienne"]
+    A --> V["2. Vente demandée<br/>par /vendre"]
+    V --> B["3. Plus grand gain<br/>revente ou doublon"]
+    B --> C["4. La plus ancienne"]
 ```
+
+**Doublons** (`AUTO_LIST`) : toutes les 10 min, les doublons les mieux cotés, à partir de 15 WB (`SELL_MIN_VALUE`), rejoignent cette file, 5 en attente au plus.
 
 **Jamais vendu ni défaussé**
 
@@ -148,9 +164,19 @@ flowchart LR
 | Étiquettes de `PROTECTED_TAGS` | — |
 | Engagé dans un échange, déjà en vente | — |
 
-**Défausse** (`AUTO_DISCARD`) : les doublons, plus les derniers exemplaires des raretés de `DISCARD_LAST_COPY_RARITIES` (ex. `C,PC`) s'ils sont déjà cotés et ne se sont jamais vendus au-dessus de `DISCARD_MAX_VALUE`. Elle ne fait jamais repasser la collection sous un palier de succès atteint.
+**Défausse** (`AUTO_DISCARD`) : les doublons, plus les derniers exemplaires des raretés de `DISCARD_LAST_COPY_RARITIES` (ex. `C,PC`) s'ils sont déjà cotés et ne se sont jamais vendus au-dessus de `DISCARD_MAX_VALUE` (2 WB). Elle ne fait jamais repasser la collection sous un palier de succès atteint (`ACHIEVEMENT_MILESTONES`). Sans paliers renseignés, aucune défausse n'a lieu, par prudence ; `ACHIEVEMENT_MILESTONES=0` indique qu'il n'y en a aucun à protéger.
 
 ## Collections
+
+Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur les cartes manquantes (jusqu'à `COLLECTION_MAX_PRICE`, 50 WB), les garde et leur pose une étiquette. `COLLECTION_SETS` choisit celles qui sont actives, ex. `jours,gifs` ; vide, aucune ne l'est.
+
+| Collection | Contenu |
+|---|---|
+| `jours` | Les 366 jours de l'année, intégrés au code |
+| `gifs` | Les articles dont l'image principale est un GIF animé ([liste](../config/gifs_animes.txt)) |
+| la tienne | À décrire dans [config/collections.yaml](../config/collections.yaml) : un nom, une étiquette, les titres |
+
+`COLLECTION_TITLES` ajoute des titres isolés. Pour protéger les cartes gagnées, ajoute leur étiquette à `PROTECTED_TAGS`.
 
 ```mermaid
 flowchart TD
@@ -165,7 +191,6 @@ flowchart TD
 
 - Rareté (`COLLECTION_UPGRADE`, actif par défaut) : une carte possédée est aussi misée quand une vente propose une rareté plus haute que ta meilleure (R → SR, SR → UR…), au même plafond `COLLECTION_MAX_PRICE`. Les recherches alternent : une carte manquante, puis une carte à monter.
 - L'étiquette passe sur le nouvel exemplaire, puis est retirée de l'ancien, qui n'est plus protégé : il peut être vendu ou défaussé.
-
 - Seuls les titres exacts comptent : « 14 octobre », pas « 14 octobre 1066 ».
 - Jamais deux enchères sur la même carte, jamais sur une carte que tu cherches toi-même.
 - Chaque vérification anti-bot laisse passer ~10 mises : la collection n'en prend que 2 (`COLLECTION_BIDS_PER_CHECK`), le reste va aux L.
@@ -202,11 +227,11 @@ flowchart TD
 | Jamais vendue | 30 jours |
 | Cotée sous 50 WB | jamais |
 
-**Succès** : chaque soir à 22:50, le bot fait recalculer tes succès et réclame les récompenses.
+**Succès** (avec `SUPABASE_ANON_KEY`) : chaque soir à 22:50, le bot fait recalculer tes succès et réclame les récompenses.
 
 **Échanges** : toutes les 10 min, le bot relit les échanges en cours. Chaque échange qu'on te propose (contre-offres comprises) est annoncé une fois dans le salon principal : valeur de chaque carte (médiane des ventes observées sur 7 jours, même rareté, shiny à part), nombre de ventes de la semaine, verdict (équitable à 10 % près) et, s'il est défavorable, la contre-offre à envoyer : des WB en plus, une carte de la bonne valeur qui part vite, ou une de tes cartes retirée. Le bot ne répond jamais à ta place. `/echange` fait la même évaluation pour un échange que tu envisages.
 
-**Garde du profil** : toutes les 15 min, le bot relit ton profil. Au premier avertissement de triche ou à la première sanction, il s'arrête net, même après un redémarrage, jusqu'à `rm data/HALT`.
+**Garde du profil** (avec `SUPABASE_ANON_KEY`, sinon une alerte le signale au démarrage) : toutes les 15 min, le bot relit ton profil. Au premier avertissement de triche ou à la première sanction, il s'arrête net, même après un redémarrage, jusqu'à `rm data/HALT`.
 
 ## Discord
 
@@ -223,7 +248,7 @@ Avec `DISCORD_WEBHOOK_SNIPER`, `_VENTES`, `_COLLECTION`, `_BILAN` et `_SYSTEME`,
 
 **Code couleur**, le même pour tous les messages (salons, commandes, graphiques ; `src/core/colors.py`) : 🔵 information, 🟢 tout va bien, gain ou réglage activé, 🟠 à surveiller, 🔴 problème ou perte, ⚪ réglage coupé, annulé ou rien à faire.
 
-Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, prix, revente visée), modifié à chaque étape (en vente, sans acheteur et remise en vente, à 1 WB…), et republié en bas du salon quand elle est vendue ou qu'un problème demande ton attention (Discord ne signale pas une modification). Les boutons (changer le prix, brader, garder) sont ceux de la dernière étape. Les mises du sniper ne sont plus résumées toutes les heures : le récap des enchères de 08:00 et `/sniper` en donnent le détail (`NOTIFY_EACH_BID=true` : un message par mise).
+Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, prix, revente visée), modifié à chaque étape (en vente, sans acheteur et remise en vente, à 1 WB…), et republié en bas du salon quand elle est vendue ou qu'un problème demande ton attention (Discord ne signale pas une modification). Les boutons (changer le prix, brader, garder) sont ceux de la dernière étape. Les mises du sniper n'ont pas de message propre : le récap des enchères de 08:00 et `/sniper` en donnent le détail (`NOTIFY_EACH_BID=true` : un message par mise).
 
 | Message | Quand | Contenu |
 |---|---|---|
@@ -235,17 +260,12 @@ Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, 
 
 | Où | Contenu | Lecture |
 |---|---|---|
-| Console (logs Portainer) | une ligne courte par événement, au niveau `LOG_LEVEL` ; source courte (`sniper`, `reseau`, `discord`…) ; les messages Discord y sont recopiés sans mise en forme | `ssh wm-logs 2h` |
+| Console (logs du conteneur) | une ligne courte par événement, au niveau `LOG_LEVEL` ; source courte (`sniper`, `reseau`, `discord`…) ; les messages Discord y sont recopiés sans mise en forme | `docker logs --since 2h wikimastered` |
 | Relevé `stats` | toutes les 15 min (`STATS_MINUTES`) : passages de chaque worker (nombre, durée moyenne, p95, max, erreurs), temps du sniper par étape, requêtes au site (débit, échecs, attente d'un créneau par worker, latence des routes les plus appelées) ; le dernier est aussi dans `/etat` | console |
 | Journal `data/logs/journal.jsonl` | tout, DEBUG compris, une ligne JSON par entrée ; plus les événements `stats` (détail par route) et `enchere` (chaque nouvelle issue d'une enchère examinée par le sniper : mise minimale, estimation, ventes, issue) ; un fichier par jour, `JOURNAL_KEEP_DAYS` gardés | `python -m src.main journal --since 6h [--ev stats,enchere] [--events]` |
 
 ## Routes et données
 
-**Routes** : aucune n'est inventée. Elles viennent des extensions communautaires ([WikiMastersTools](https://github.com/qkerman/WikiMastersTools-kzfamily), [WikiRemastered](https://github.com/Lypningeuh/WikiRemastered), [wikimasters-farm](https://github.com/3d3n-pyc/wikimasters-farm), [wikimasters-bot](https://github.com/LockBlock-dev/wikimasters-bot)) et sont décrites dans [config/endpoints.yaml](../config/endpoints.yaml).
-
-| Besoin | Commande |
-|---|---|
-| Corriger une route | `python -m src.tools.parse_curl --name place_bid --write < requete.curl` (écrit `config/endpoints.local.yaml`) |
-| Découvrir une route | `python -m src.tools.browser_login --record`, puis naviguer : les appels vont dans `data/inspect/capture/` |
+**Routes** : aucune n'est inventée. Elles viennent des [extensions communautaires](../README.md#crédits) et sont décrites dans [config/endpoints.yaml](../config/endpoints.yaml). Si le site change : [corriger ou ajouter une route](DEVELOPPEMENT.md#corriger-ou-ajouter-une-route).
 
 **Données** : le volume `data/` contient la base SQLite, le journal `logs/journal.jsonl`, la session et le `heartbeat` du healthcheck. Après chaque bilan, les cotes et ventes observées de plus de 60 jours sont purgées. Le plus haut prix de chaque carte est gardé.

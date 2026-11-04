@@ -397,7 +397,7 @@ def test_gif_collection_is_shipped_without_its_own_tag():
 
     gifs = collection.defined(Settings())["gifs"]
     assert gifs.tag == "" and "Royaumes francs" in gifs.titles and len(gifs.titles) == len(set(gifs.titles))
-    assert {"Cuisine du Yémen", "Déclin de l’Empire byzantin", "Shitposting"} <= set(gifs.titles)  # vues chez vib
+    assert {"Cuisine du Yémen", "Déclin de l’Empire byzantin", "Shitposting"} <= set(gifs.titles)  # vues chez un autre joueur
 
 
 def test_gif_list_reads_the_dump_and_keeps_only_animated_articles():

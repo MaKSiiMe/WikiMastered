@@ -144,7 +144,7 @@ def test_bad_discord_ids_never_stop_the_bot():
     """Un pseudo à la place de l'identifiant : commandes coupées, mais le bot démarre."""
     from src.config import Settings
 
-    s = Settings(_env_file=None, discord_owner_id="MaKSiiMe", discord_guild_id=" 123 ")
+    s = Settings(_env_file=None, discord_owner_id="un_pseudo", discord_guild_id=" 123 ")
     assert s.discord_owner_id == -1 and s.discord_guild_id == 123
     assert Settings(_env_file=None, discord_owner_id="").discord_owner_id == 0
 

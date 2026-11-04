@@ -3,7 +3,7 @@
 Sert au worker « echanges » (chaque échange qu'on te propose, évalué une fois) et à /echange (un échange que tu
 envisages). Valeur d'une carte : médiane de ses ventes observées des TRADE_DAYS derniers jours (même rareté, shiny à
 part, ventes suspectes écartées) ; moins de TRADE_MIN_SALES ventes : l'estimation du bot, sans requête. Le nombre de
-ventes dit si elle part vite : le 28/10, Olé refusait Jeffrey Epstein (L, ~12 000) « qui se vend pas trop » contre
+ventes dit si elle part vite : le 28/10, un joueur refusait Jeffrey Epstein (L, ~12 000) « qui se vend pas trop » contre
 Emma Watson + Zendaya (~5 500 chacune), alors que le bot en voyait autant de ventes que des deux autres.
 Aucune route connue ne propose ni ne contre un échange : le bot dit quoi envoyer, tu l'envoies sur le site.
 """
