@@ -333,5 +333,10 @@ class CollectionWorker(Worker):
         done = await wishlist.sync(self.ctx, state["missing"], targets(self.ctx))
         self.log.info("liste de souhaits : %d cartes annoncées par le site, +%d, -%d, %d titres sans carte",
                       done["covered"], done["added"], done["removed"], done["unknown"])
+        try:
+            if cleared := await wishlist.clear_backlog(self.ctx):
+                self.log.info("liste de souhaits : %d anciennes notifications marquées comme lues", cleared)
+        except ApiError as exc:
+            self.log.warning("anciennes notifications illisibles : %s", exc)
         if done["error"]:
             self.notifier.warning("Liste de souhaits", f"{done['error']}\nCes cartes restent cherchées par leur titre.")

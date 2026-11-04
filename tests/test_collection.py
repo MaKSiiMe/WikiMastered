@@ -426,7 +426,7 @@ def test_gif_list_reads_the_dump_and_keeps_only_animated_articles():
 
 
 def _wishlist_site(wished: list[dict], notifications: list[dict], market: dict | None = None, calls=None,
-                   refuse_add: bool = False):
+                   refuse_add: bool = False, refuse_read: bool = False):
     import json
 
     catalogue = {"14 octobre": "c-14", "2 mars": "c-2", "Mars (planète), étude": "c-m"}
@@ -452,8 +452,18 @@ def _wishlist_site(wished: list[dict], notifications: list[dict], market: dict |
             wished[:] = [w for w in wished if f'"{w["card_id"]}"' not in ids]
             return httpx.Response(204)
         if path == "/rest/v1/notifications":
+            if "read" in request.url.params:
+                unread = [n for n in notifications if not n.get("read")]
+                start, size = int(request.url.params["offset"]), int(request.url.params["limit"])
+                return httpx.Response(200, json=unread[start:start + size])
             cursor = request.url.params["created_at"][3:]
             return httpx.Response(200, json=[n for n in notifications if n["created_at"] > cursor])
+        if path == "/api/notifications":
+            if refuse_read:
+                return httpx.Response(400, json={"error": "non"})
+            for n in notifications:
+                n["read"] = n.get("read") or n.get("id") in json.loads(request.content)["ids"]
+            return httpx.Response(200, json={"ok": True})
         if market and path.startswith("/api/marketplace/") and path.rsplit("/", 1)[1] in market:
             return httpx.Response(200, json={"auction": market[path.rsplit("/", 1)[1]]})
         raise AssertionError(f"route inattendue {request.method} {request.url}")
@@ -522,8 +532,9 @@ async def test_listings_are_read_once_and_only_for_missing_cards(tmp_path):
 
     start = datetime.now(UTC)
     at = lambda s: (start + timedelta(seconds=s)).isoformat()
-    def note(s, title, aid):
-        return {"created_at": at(s), "data": {"auction_id": aid, "card_id": "x", "card_title": title}}
+    def note(s, title, aid, kind="marketplace_wishlist_listed"):
+        return {"id": f"n{s}", "type": kind, "created_at": at(s),
+                "data": {"auction_id": aid, "card_id": "x", "card_title": title}}
     notes = [note(1, "14 octobre", "a1"), note(2, "Carte du joueur", "a2"), note(3, "14 Octobre", "a1")]
     client, notifier = _wishlist_client(tmp_path, _wishlist_site([], notes))
     ctx = await make_context(tmp_path, client, notifier)
@@ -532,6 +543,47 @@ async def test_listings_are_read_once_and_only_for_missing_cards(tmp_path):
     assert await wishlist.new_listings(ctx, {"14 octobre"}, start) == []  # curseur avancé
     notes.append(note(4, "14 octobre", "a3"))
     assert await wishlist.new_listings(ctx, {"14 octobre"}, start) == ["a3"]  # après un redémarrage aussi : en base
+    # Une surenchère sur une carte de collection : marquée comme lue, mais pas une vente à suivre.
+    notes.append(note(5, "14 octobre", "a4", "marketplace_outbid"))
+    assert await wishlist.new_listings(ctx, {"14 octobre"}, start) == []
+    assert {n["id"] for n in notes if n.get("read")} == {"n1", "n3", "n4", "n5"}  # pas la carte hors collection
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_old_collection_notifications_are_cleared_once(tmp_path):
+    from src.workers import wishlist
+
+    def note(i, title):
+        return {"id": f"n{i}", "type": "marketplace_wishlist_listed", "created_at": f"2026-11-04T10:{i % 60:02}:00",
+                "data": {"auction_id": f"a{i}", "card_id": "x", "card_title": title}}
+    # Plus d'une page, avec des cartes hors collection à laisser non lues.
+    notes = [note(i, "14 octobre" if i % 3 else "Carte du joueur") for i in range(250)]
+    calls: list = []
+    client, notifier = _wishlist_client(tmp_path, _wishlist_site([], notes, calls=calls))
+    ctx = await make_context(tmp_path, client, notifier)
+
+    assert await wishlist.clear_backlog(ctx) == 166
+    assert all(n.get("read") == (n["data"]["card_title"] == "14 octobre") for n in notes)
+    calls.clear()
+    assert await wishlist.clear_backlog(ctx) == 0 and calls == []  # une seule fois
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_refused_marking_does_not_lose_a_sale(tmp_path):
+    from datetime import datetime, timedelta
+
+    from src.workers import wishlist
+
+    start = datetime.now(UTC)
+    notes = [{"id": "n1", "type": "marketplace_wishlist_listed", "created_at": (start + timedelta(seconds=1)).isoformat(),
+              "data": {"auction_id": "a1", "card_title": "14 octobre"}}]
+    client, notifier = _wishlist_client(tmp_path, _wishlist_site([], notes, refuse_read=True))
+    ctx = await make_context(tmp_path, client, notifier)
+    assert await wishlist.new_listings(ctx, {"14 octobre"}, start) == ["a1"]
+    assert await wishlist.clear_backlog(ctx) == 0
+    assert await ctx.db.kv_get(wishlist.BACKLOG_KEY) is None  # réessayé plus tard
     await ctx.db.close()
 
 
@@ -547,7 +599,7 @@ async def test_sniper_follows_an_announced_sale_without_searching_its_title(tmp_
             "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
             "end_at": (now + timedelta(hours=1)).isoformat(), "base_amount": 5, "current_bid": None,
             "current_bidder_id": None}
-    notes = [{"created_at": (now + timedelta(seconds=1)).isoformat(),
+    notes = [{"id": "n1", "type": "marketplace_wishlist_listed", "created_at": (now + timedelta(seconds=1)).isoformat(),
               "data": {"auction_id": "a1", "card_id": "c-14", "card_title": "14 octobre"}}]
     client, notifier = _wishlist_client(tmp_path, _wishlist_site([], notes, {"a1": sale}), collection_max_price=50)
     ctx = await make_context(tmp_path, client, notifier)

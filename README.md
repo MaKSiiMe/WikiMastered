@@ -67,7 +67,7 @@ Le bot tourne seul. Une alerte 🔴 sur Discord signale les cas où il faut agir
 
 ## Crédits
 
-Les routes du site ne sont pas devinées : elles viennent du code des extensions communautaires [WikiMastersTools](https://github.com/qkerman/WikiMastersTools-kzfamily), [WikiRemastered](https://github.com/Lypningeuh/WikiRemastered), [wikimasters-plus](https://github.com/ThePommespanzer/wikimasters-plus), [wikimasters-farm](https://github.com/3d3n-pyc/wikimasters-farm) et [wikimasters-bot](https://github.com/LockBlock-dev/wikimasters-bot). Thèmes tirés de [Wikidata](https://www.wikidata.org), liste des GIF tirée de [Wikipédia](https://fr.wikipedia.org).
+Les routes du site ne sont pas devinées : elles viennent du code des extensions communautaires [WikiMastersTools](https://github.com/qkerman/WikiMastersTools-kzfamily), [WikiRemastered](https://github.com/Lypningeuh/WikiRemastered), [wikimasters-plus](https://github.com/ThePommespanzer/wikimasters-plus), [wikimasters-farm](https://github.com/3d3n-pyc/wikimasters-farm), [wikimasters-bot](https://github.com/LockBlock-dev/wikimasters-bot), [wikimasters-cli](https://github.com/qpautrat/wikimasters-cli) et [Wikimasters-Toolbox](https://github.com/LeadOn/Wikimasters-Toolbox). L'idée de trouver la clé publique dans les scripts du site vient de [wmbot](https://github.com/AirKyzzZ/wikimasters-bot). Thèmes tirés de [Wikidata](https://www.wikidata.org), liste des GIF tirée de [Wikipédia](https://fr.wikipedia.org).
 
 ## Licence
 

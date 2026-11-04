@@ -29,7 +29,7 @@ WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "ventes": ("create_listing",), "inventory": ("create_listing", "bulk_discard"),
     "defausse": ("bulk_discard",), "tags": ("tag_card",), "themes": ("theme_tag",),
     "succes": ("achievements_check", "claim_achievement"),
-    "souhaits": ("wishlist_write",),     # liste de souhaits du site, pour les cartes de collection manquantes
+    "souhaits": ("wishlist_write", "mark_notifications_read"),     # liste de souhaits du site, pour les cartes de collection manquantes
 }
 
 CsvList = Annotated[list[str], NoDecode]
