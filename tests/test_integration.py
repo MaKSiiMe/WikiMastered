@@ -48,7 +48,7 @@ def make_client(tmp_path: Path, handler, **overrides) -> tuple[WikiMastersClient
         "data_dir": tmp_path, "wm_cookie": "a=b", "wm_user_id": ME, "http_min_spacing_seconds": 0,
         "http_jitter_seconds": 0, "http_write_spacing_seconds": 0,
         "backoff_base_seconds": 0.01, "backoff_rate_limit_base_seconds": 0.01,
-        # Les tests du sniper revendent toutes les raretés (par défaut : UR et L seulement).
+        # Les tests du sniper revendent toutes les raretés (par défaut : aucune).
         "sniper_resale_rarities": list(RARITIES),
         # Fenêtre de mise des tests écrits avant le 16/10 (enchères à ~15 s de la fin) : 20 s → 11 s.
         "sniper_window_seconds": 20, "sniper_min_seconds_left": 11, "night_window_seconds": 20,

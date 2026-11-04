@@ -591,7 +591,7 @@ class InventoryManager(Worker):
     async def position_minutes(self, now: datetime | None = None) -> int:
         """Durée de revente d'une position publiée à `now` : longue (12 h, plus vue) tant que moins de
         POSITION_LIST_LONG_BELOW positions sont détenues, carte en cours de programmation comprise ; sinon courte
-        (1 h depuis le 01/11), pour faire tourner les 5 places de vente. Ventes réelles : seules les positions
+        (POSITION_LIST_DURATION_MINUTES), pour faire tourner les 5 places de vente. Ventes réelles : seules les positions
         réelles comptent. 12 h qui finirait dans POSITION_AVOID_END_HOURS : la courte si elle finit ailleurs ; jamais
         12 h à la place de la courte."""
         s = self.settings

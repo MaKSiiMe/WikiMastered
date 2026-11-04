@@ -463,6 +463,10 @@ class AuctionSniper(Worker):
     async def _check_config(self) -> None:
         """Signale au démarrage les réglages qui contredisent la stratégie orientée capital."""
         s = self.settings
+        if not s.sniper_resale_rarities:
+            self.notifier.info("Sniper : aucune revente", "SNIPER_RESALE_RARITIES est vide : le bot n'achète rien pour "
+                               "revendre et n'observe aucune vente. Choisis des raretés pour activer la revente.",
+                               important=True)
         if s.sniper_daily_budget:
             budget = (await self.portfolio(utcnow())).position_budget
             if s.sniper_daily_budget < budget:
@@ -1314,8 +1318,8 @@ class AuctionSniper(Worker):
 
     def recap(self) -> list[str]:
         outcomes, self._outcomes = self._outcomes, {}
-        watched = "/".join(self.settings.sniper_resale_rarities)
-        found = f"Repérage : {len(self._targets)} vente(s) suivie(s) ({watched} et jours manquants), " \
+        watched = " et ".join(filter(None, ("/".join(self.settings.sniper_resale_rarities), "jours manquants")))
+        found = f"Repérage : {len(self._targets)} vente(s) suivie(s) ({watched}), " \
                 f"{self._days_found} vente(s) de cartes de collection trouvée(s)"
         if self._gaps:
             found += f", {self._gaps} trou(s) dans les nouvelles ventes"
