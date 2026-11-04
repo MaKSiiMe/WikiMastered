@@ -21,7 +21,7 @@ Par défaut, `DRY_RUN=true` : rien n'est envoyé au site, le bot annonce seuleme
 | [`echanges`](src/workers/trade_watch.py) | Évalue les échanges qu'on te propose et suggère une contre-offre ; ne répond jamais à ta place | actif |
 | [`cotes`](src/workers/value_scan.py) | Cote toute la collection toutes les 12 h, pour la défausse des derniers exemplaires | actif |
 | [`valeur`](src/workers/account_value.py) | Calcule la valeur du compte (`/valeur`) toutes les 6 h | actif |
-| [`garde`](src/workers/profile_guard.py) | Relit ton profil et arrête tout le bot à la première sanction du site | actif avec `SUPABASE_ANON_KEY` |
+| [`garde`](src/workers/profile_guard.py) | Relit ton profil et arrête tout le bot à la première sanction du site ; prévient quand tes paquets sont pleins | actif avec `SUPABASE_ANON_KEY` |
 
 Les règles détaillées (estimation des prix, mises, remises en vente…) sont dans [docs/FONCTIONNEMENT.md](docs/FONCTIONNEMENT.md).
 

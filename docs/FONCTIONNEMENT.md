@@ -233,7 +233,7 @@ flowchart TD
 
 **Échanges** : toutes les 10 min, le bot relit les échanges en cours. Chaque échange qu'on te propose (contre-offres comprises) est annoncé une fois dans le salon principal : valeur de chaque carte (médiane des ventes observées sur 7 jours, même rareté, shiny à part), nombre de ventes de la semaine, verdict (équitable à 10 % près) et, s'il est défavorable, la contre-offre à envoyer : des WB en plus, une carte de la bonne valeur qui part vite, ou une de tes cartes retirée. Le bot ne répond jamais à ta place. `/echange` fait la même évaluation pour un échange que tu envisages.
 
-**Garde du profil** (avec `SUPABASE_ANON_KEY`, sinon une alerte le signale au démarrage) : toutes les 15 min, le bot relit ton profil. Au premier avertissement de triche ou à la première sanction, il s'arrête net, même après un redémarrage, jusqu'à `rm data/HALT`.
+**Garde du profil** (avec `SUPABASE_ANON_KEY`, sinon une alerte le signale au démarrage) : toutes les 15 min, le bot relit ton profil. Au premier avertissement de triche ou à la première sanction, il s'arrête net, même après un redémarrage, jusqu'à `rm data/HALT`. La même lecture prévient quand `PACKS_ALERT_AT` paquets attendent d'être ouverts (stock calculé depuis la dernière régénération, message unique jusqu'à ce qu'il redescende) ; le bot ne les ouvre jamais.
 
 ## Discord
 
