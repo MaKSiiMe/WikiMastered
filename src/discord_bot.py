@@ -31,6 +31,7 @@ from src.core import colors, timeutils
 from src.core.client import ApiError
 from src.core.stats import network_brief
 from src.core.timeutils import utcnow
+from src import friends
 from src.player_collection import scan as scan_player, summary as summary_player
 from src.recap import STALE_AFTER
 from src.roi import plural, roi_discord, wb
@@ -707,6 +708,30 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             return
         await interaction.followup.send(embed=discord.Embed(title=f"🔎 Collection de {pseudo}",
                                                             description=summary_player(state)[:4000], color=COLOR))
+
+    @tree.command(name="amis", description="Tes cartes de collection manquantes que possèdent tes amis (rien ne leur est envoyé)")
+    @app_commands.describe(pseudo="le détail pour cet ami : valeur, doublons, offre équilibrée",
+                           actualiser="relire le site, sinon la liste de moins d'une heure est reprise")
+    async def friends_missing(interaction: discord.Interaction, pseudo: str = "", actualiser: bool = False) -> None:
+        if not s.collection_wishlist:
+            await interaction.response.send_message(embed=discord.Embed(
+                title="🤝 Cartes chez tes amis", description="Il faut `COLLECTION_WISHLIST=true` : la recherche passe "
+                "par ta liste de souhaits.", color=colors.WARN))
+            return
+        await interaction.response.defer(thinking=True)
+        name = pseudo.strip()
+        title = f"🤝 Tes cartes manquantes chez {name}" if name else "🤝 Cartes manquantes chez tes amis"
+        try:
+            text = friends.friend_text(await friends.friend_cards(ctx, name)) if name else \
+                friends.overview_text(await friends.overview(ctx, actualiser))
+        except ApiError as exc:
+            await interaction.followup.send(embed=discord.Embed(title=title, description=f"Lecture refusée : {exc}",
+                                                                color=colors.WARN))
+            return
+        embed = discord.Embed(title=title, description=text[:4000], color=COLOR)
+        embed.set_footer(text="Rien n'est envoyé à tes amis : l'échange se propose sur le site"
+                              + ("" if name else " · /amis pseudo pour le détail"))
+        await interaction.followup.send(embed=embed)
 
     @tree.command(name="sniper", description="Récap des enchères misées par le sniper")
     @app_commands.describe(heures="période, en heures (24 par défaut)")

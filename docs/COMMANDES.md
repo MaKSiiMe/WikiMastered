@@ -54,6 +54,7 @@ Une carte demandée par `/snipe` est cherchée par son titre, comme une carte de
 |---|---|
 | `/collection` | Avancement des collections, cartes manquantes |
 | `/collection-joueur <pseudo> [etiquette]` | Collection publique d'un joueur (une de ses étiquettes au choix), comparée à la liste des GIF |
+| `/amis [pseudo] [actualiser]` | Tes cartes manquantes que possèdent tes amis, classés par nombre de cartes (liste reprise pendant 1 h, sauf avec `actualiser`). Avec `pseudo` : valeur de chaque carte, doublons, favorites, et l'offre équilibrée pour ses doublons. Rien n'est envoyé à tes amis : l'échange se propose sur le site. Demande `COLLECTION_WISHLIST` |
 | `/plafond-collection [wb_max]` | Voir ou changer la mise maximale d'une carte de collection manquante, sans redéployer |
 
 ### Piloter

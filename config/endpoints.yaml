@@ -38,6 +38,16 @@ endpoints:
     params: {page: "{page}", sort: rarity, stats: "1", tag_id: "{tag_id}", pending: "1"}
     defaults: {tag_id: ""}
 
+  friend_wishlisted:            # ses cartes qui sont dans ma liste de souhaits, page>=0 [wikimasters-cli]
+    method: GET
+    path: /api/profile/{username}/collection
+    params: {page: "{page}", sort: rarity, stats: "0", pending: "1", wishlisted_by_me: "1"}
+
+  wishlist_catalog:             # ma liste de souhaits et les amis qui possèdent chaque carte, page>=0, page de 50
+    method: GET                 #   [wikimasters-cli] -> { cards: [...], friendOwners: {card_id: [{username, rarities}]} }
+    path: /api/cards
+    params: {page: "{page}", sort: rarity, wishlist: "1"}
+
   collection_stats:             # [WR api.js, KZ] -> { total: int, rarities: [ {rarity, count} ] }
     method: GET
     path: /api/my-collection/stats

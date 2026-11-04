@@ -194,6 +194,7 @@ flowchart TD
 - Liste de souhaits (`COLLECTION_WISHLIST`, coupé par défaut, avec la clé publique du site) : à chaque lecture de la collection, le bot met les cartes manquantes dans ta liste de souhaits du site et retire celles qu'il y avait mises et que tu possèdes maintenant, jamais les tiennes. Le site annonce alors chaque mise en vente, et le sniper lit ces annonces toutes les `COLLECTION_WISHLIST_SECONDS` au lieu de chercher ces cartes par leur titre. Ces annonces s'ajoutent à tes notifications du site. Si tu coupes l'option, ce que le bot a ajouté reste dans ta liste.
 - Rareté (`COLLECTION_UPGRADE`, coupé par défaut) : une carte possédée est aussi misée quand une vente propose une rareté plus haute que ta meilleure (R → SR, SR → UR…), au même plafond `COLLECTION_MAX_PRICE`. Les recherches alternent : une carte manquante, puis une carte à monter.
 - L'étiquette passe sur le nouvel exemplaire, puis est retirée de l'ancien, qui n'est plus protégé : il peut être vendu ou défaussé.
+- Cartes chez tes amis : `/amis`, à la demande, lit ta liste de souhaits dans le catalogue du site, qui donne les amis possédant chaque carte. Lecture seule : le bot ne peut pas proposer d'échange.
 - Seuls les titres exacts comptent : « 14 octobre », pas « 14 octobre 1066 ».
 - Jamais deux enchères sur la même carte, jamais sur une carte que tu cherches toi-même.
 - Chaque vérification anti-bot laisse passer ~10 mises : la collection n'en prend que 2 (`COLLECTION_BIDS_PER_CHECK`), le reste va aux L.

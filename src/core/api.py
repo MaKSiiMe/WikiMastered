@@ -80,6 +80,24 @@ class WikiMastersAPI:
                 break
         return list(rows.values()), extra
 
+    async def wishlist_catalog_page(self, page: int) -> dict[str, Any]:
+        """Une page de ma liste de souhaits, avec les amis qui possèdent chaque carte, en requête de fond."""
+        data = await self.client.get("wishlist_catalog", page=page, background=True)
+        return data if isinstance(data, dict) else {}
+
+    async def friend_wishlisted(self, username: str) -> tuple[list[OwnedCard], set[str]]:
+        """Les exemplaires de ce joueur qui sont dans ma liste de souhaits, et les identifiants déjà pris par un échange."""
+        rows: dict[str, OwnedCard] = {}
+        pending: set[str] = set()
+        for page in range(MAX_COLLECTION_PAGES):
+            data = await self.client.get("friend_wishlisted", username=username, page=page, background=True)
+            result = CollectionPage.model_validate(data)
+            rows.update({row.id: row for row in result.rows()})
+            pending.update(str(i) for i in (result.model_extra or {}).get("pendingTradeCardIds") or [])
+            if len(result.collection) < COLLECTION_PAGE_SIZE:
+                break
+        return list(rows.values()), pending
+
     async def market_page(self, *, page: int = 1, sort: str = "ending_soon", q: str = "",
                           limit: int = 50, rarity: str = "", background: bool = False) -> tuple[list[Auction], bool]:
         result = MarketPage.model_validate(
