@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 
@@ -127,3 +128,65 @@ async def test_bot_adopts_session_renewed_by_a_console_command(tmp_path):
     assert await WikiMastersAPI(bot).balance() == 42
     assert server.refreshes == ["r1"]  # un seul renouvellement
     assert bot.auth_session().refresh_token == "r2"
+
+
+def jwt_for(**claims) -> str:
+    encode = lambda data: base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
+    return f"{encode({'alg': 'HS256'})}.{encode(claims)}.signaturesignature"
+
+
+ANON = jwt_for(role="anon", ref=REF)
+PAGE = '<script src="/_next/static/chunks/a.js?dpl=1"></script><script src="/_next/static/chunks/b.js"></script>'
+
+
+def site(seen: list[str], scripts: dict[str, str], page: str = PAGE, status: int = 200):
+    def handler(request):
+        assert "cookie" not in request.headers  # page publique : jamais la session
+        seen.append(str(request.url))
+        if request.url.path == "/login":
+            return httpx.Response(status, text=page)
+        return httpx.Response(200, text=scripts.get(request.url.path, ""))
+    return handler
+
+
+def public_client(tmp_path, handler, **settings):
+    client, _ = make_client(tmp_path, handler, wm_cookie=cookie_for("a1", "r1", 3600), **settings)
+    client._public_http = lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return client
+
+
+@pytest.mark.asyncio
+async def test_public_key_is_found_in_the_site_scripts_and_kept(tmp_path):
+    other = jwt_for(role="anon", ref="autre") + " " + jwt_for(role="service_role", ref=REF)
+    seen: list[str] = []
+    scripts = {"/_next/static/chunks/a.js": other, "/_next/static/chunks/b.js": f'x="{ANON}"'}
+    client = public_client(tmp_path, site(seen, scripts))
+    await client.discover_anon_key()
+    assert client.settings.supabase_anon_key == ANON
+    assert (tmp_path / "supabase_anon_key").read_text() == ANON
+    assert all(url.startswith(client.endpoints.base_url) for url in seen) and len(seen) == 3
+    await client.close()
+
+    # Site indisponible au redémarrage : la clé trouvée reste en place.
+    client = public_client(tmp_path, site([], {}, status=503))
+    assert client.settings.supabase_anon_key == ANON
+    await client.discover_anon_key()
+    assert client.settings.supabase_anon_key == ANON
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_public_key_set_by_hand_means_no_request(tmp_path):
+    seen: list[str] = []
+    client = public_client(tmp_path, site(seen, {}), supabase_anon_key="a-la-main")
+    await client.discover_anon_key()
+    assert seen == [] and client.settings.supabase_anon_key == "a-la-main"
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_public_key_not_found_leaves_the_bot_without_it(tmp_path):
+    client = public_client(tmp_path, site([], {}))
+    await client.discover_anon_key()
+    assert client.settings.supabase_anon_key == "" and not client.can_refresh
+    await client.close()

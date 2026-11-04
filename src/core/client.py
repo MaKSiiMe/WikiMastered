@@ -41,6 +41,10 @@ log = logging.getLogger(__name__)
 _RATE_HINT = re.compile(r"rate.?limit|too many requests|trop de requ[eê]tes", re.I)
 _AUTH_COOKIE = re.compile(r"^sb-([a-z0-9]+)-auth-token(?:\.(\d+))?$", re.I)
 SUPABASE_CHUNK_SIZE = 3180  # taille maximale d'un morceau de cookie [@supabase/ssr]
+ANON_KEY_FILE = "supabase_anon_key"  # clé publique trouvée sur le site, gardée si le site ne répond pas au démarrage
+ANON_KEY_MAX_SCRIPTS = 40
+_ANON_JWT = re.compile(r"eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]+")
+_SITE_SCRIPT = re.compile(r"""/_next/static/[^"'\\\s?]+\.js""")
 # Réponses métier qui ne sont ni une perte de session ni une limitation globale.
 _DOMAIN_KEYS = {"human_verification_required", "rate_limited", "rate_limit_daily", "min"}
 
@@ -114,6 +118,18 @@ def parse_cookie_header(header: str) -> dict[str, str]:
 def _b64url_json(data: str) -> Any:
     data += "=" * (-len(data) % 4)
     return json.loads(base64.urlsafe_b64decode(data).decode("utf-8"))
+
+
+def anon_key_in(text: str, ref: str) -> str:
+    """La clé publique du projet Supabase `ref` dans ce texte, sinon "". Seul un jeton `anon` de ce projet compte."""
+    for token in _ANON_JWT.findall(text):
+        try:
+            claims = _b64url_json(token.split(".")[1])
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if isinstance(claims, dict) and claims.get("role") == "anon" and claims.get("ref") == ref:
+            return token
+    return ""
 
 
 def _auth_cookie(header: str) -> tuple[str, Any] | None:
@@ -287,6 +303,9 @@ class WikiMastersClient:
         self._refresh_blocked = False
         self._last_refresh = float("-inf")
         self._auth_cache: tuple[str, AuthSession | None] = ("", None)
+        self._anon_key_set = bool(settings.supabase_anon_key)  # réglée à la main : le site n'est pas interrogé
+        if not self._anon_key_set:
+            settings.supabase_anon_key = self._saved_anon_key()
 
         cookie = self._initial_cookie()
         self._set_cookies(cookie)
@@ -368,6 +387,58 @@ class WikiMastersClient:
         return True
 
     # ------------------------------------------------------- session Supabase
+    def _saved_anon_key(self) -> str:
+        try:
+            return (self.settings.data_dir / ANON_KEY_FILE).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    async def discover_anon_key(self) -> None:
+        """Sans SUPABASE_ANON_KEY : cherche au démarrage la clé publique dans les scripts du site, comme un navigateur
+        qui charge la page de connexion. En cas d'échec, la dernière clé trouvée reste en place."""
+        session = self.auth_session()
+        if self._anon_key_set or self.halted or session is None:
+            return
+        try:
+            key = await self._fetch_anon_key(session.ref)
+        except httpx.HTTPError as exc:
+            log.warning("Clé publique du site : recherche interrompue (%s).", type(exc).__name__)
+            return
+        if not key:
+            log.warning("Clé publique introuvable sur le site : renseigne SUPABASE_ANON_KEY.")
+            return
+        self.settings.supabase_anon_key = key
+        path = self.settings.data_dir / ANON_KEY_FILE
+        try:
+            temp = path.with_suffix(".tmp")
+            temp.write_text(key, encoding="utf-8")
+            temp.replace(path)
+        except OSError as exc:
+            log.warning("Clé publique du site : non enregistrée (%s).", type(exc).__name__)
+        log.info("Clé publique du site trouvée : renouvellement de session, garde et succès possibles.")
+
+    def _public_http(self) -> httpx.AsyncClient:
+        """Pour les pages publiques : sans la session, que le site n'a pas à voir ici (et qui redirigerait /login)."""
+        return httpx.AsyncClient(http2=True, headers={"User-Agent": self.settings.wm_user_agent},
+                                 timeout=httpx.Timeout(self.settings.http_timeout_seconds))
+
+    async def _fetch_anon_key(self, ref: str) -> str:
+        base = self.endpoints.base_url
+        async with self._public_http() as http:
+            await self._acquire_slot()
+            page = await http.get(f"{base}/login")
+            if page.status_code != 200:
+                log.warning("Clé publique du site : page de connexion en HTTP %s.", page.status_code)
+                return ""
+            if key := anon_key_in(page.text, ref):
+                return key
+            for path in sorted(set(_SITE_SCRIPT.findall(page.text)))[:ANON_KEY_MAX_SCRIPTS]:
+                await self._acquire_slot()
+                script = await http.get(base + path)  # toujours sur le site lui-même
+                if script.status_code == 200 and (key := anon_key_in(script.text, ref)):
+                    return key
+        return ""
+
     def auth_session(self) -> AuthSession | None:
         header = self.cookie_header()
         if header != self._auth_cache[0]:
@@ -391,7 +462,7 @@ class WikiMastersClient:
         """« actif », ou pourquoi le renouvellement automatique de la session ne peut pas se faire."""
         session = self.auth_session()
         if not self.settings.supabase_anon_key:
-            return "inactif (SUPABASE_ANON_KEY vide)"
+            return "inactif (clé publique introuvable, SUPABASE_ANON_KEY vide)"
         if session is None or not session.refresh_token:
             return "impossible (pas de refresh_token dans le cookie)"
         return "bloqué (jeton refusé)" if self._refresh_blocked else "actif"
@@ -776,7 +847,8 @@ class WikiMastersClient:
             return
         self._session_ok.clear()
         hint = ("" if self.settings.supabase_anon_key else
-                "\n\nPour que ça ne se reproduise plus : ajoute SUPABASE_ANON_KEY dans la stack, avec un cookie "
+                "\n\nPour que ça ne se reproduise plus : le bot n'a pas trouvé sa clé publique sur le site, ajoute "
+                "SUPABASE_ANON_KEY dans la stack, avec un cookie "
                 "pris dans une fenêtre privée (docs/INSTALLATION.md, « Récupérer la session du bot »). Le bot renouvellera "
                 "alors sa session lui-même.")
         self.notifier.critical(

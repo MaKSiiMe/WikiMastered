@@ -578,6 +578,7 @@ async def supervise(name: str, start: Callable[[], Awaitable[None]], notifier) -
 
 async def run_bot(settings: Settings) -> None:
     async with build_context(settings) as ctx:
+        await ctx.client.discover_anon_key()
         await load_pauses(ctx)
         if changed := await load_overrides(ctx):
             log.info("Réglages changés sur Discord : %s", ", ".join(f"{k}={v}" for k, v in changed.items()))
@@ -601,8 +602,9 @@ async def run_bot(settings: Settings) -> None:
         if settings.enable_profile_guard and settings.supabase_anon_key:
             workers.insert(0, ProfileGuard(ctx))  # en premier : une sanction arrête le bot avant les autres
         elif settings.enable_profile_guard:
-            ctx.notifier.warning("Garde des sanctions inactive", "SUPABASE_ANON_KEY manquante : le profil ne peut "
-                                 "pas être lu, une sanction du site n'arrêterait pas le bot.")
+            ctx.notifier.warning("Garde des sanctions inactive", "Clé publique introuvable sur le site et "
+                                 "SUPABASE_ANON_KEY vide : le profil ne peut pas être lu, une sanction du site "
+                                 "n'arrêterait pas le bot.")
         if ctx.client.halted:
             ctx.notifier.critical("Bot à l'arrêt", f"{ctx.client.halted}\nAucune requête ne part. Pour reprendre : "
                                   "`rm data/HALT` dans la console du conteneur, puis redémarre la stack.")

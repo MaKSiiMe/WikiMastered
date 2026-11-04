@@ -87,7 +87,8 @@ class Settings(BaseSettings):
     wm_user_id: str = ""
     wm_extra_headers: dict[str, str] = Field(default_factory=dict)
     # Renouvellement autonome de la session Supabase (API standard /auth/v1/token).
-    # Clé publique « anon » : DevTools > Réseau > une requête vers *.supabase.co > en-tête `apikey`.
+    # Clé publique « anon » : vide, le bot la cherche au démarrage dans les scripts du site.
+    # À la main : DevTools > Réseau > une requête vers *.supabase.co > en-tête `apikey`.
     supabase_anon_key: str = ""
     supabase_url: str = ""                  # vide = https://<ref>.supabase.co, ref lu dans le cookie
     session_refresh_margin_minutes: float = 10.0
@@ -151,6 +152,7 @@ class Settings(BaseSettings):
     # Garde : profil relu toutes les N min ; une sanction du site arrête tout le bot (data/HALT).
     enable_profile_guard: bool = True
     profile_check_minutes: float = 15.0
+    packs_alert_at: int = 10                # message quand ce nombre de paquets attend d'être ouvert ; 0 = jamais
     # Échanges proposés relus toutes les N min : chacun est évalué une fois (src/trades.py), avec une contre-offre à
     # envoyer s'il est défavorable. Équitable : chaque côté vaut au moins (1 - TRADE_FAIR_MARGIN) fois l'autre.
     enable_trade_watch: bool = True

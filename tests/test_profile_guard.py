@@ -9,7 +9,7 @@ import pytest
 
 from src.core.client import Halted, WikiMastersClient
 from src.core.endpoints import Endpoints
-from src.workers.profile_guard import ProfileGuard, sanctions
+from src.workers.profile_guard import ProfileGuard, packs_available, sanctions
 from tests.test_integration import ROOT, make_client, make_context
 from tests.test_session import cookie_for
 
@@ -63,3 +63,61 @@ async def test_a_strike_halts_every_request_even_after_a_restart(tmp_path):
     with pytest.raises(Halted):
         await again.supabase("POST", "rpc/get_my_profile", json_body={})
     await db.close()
+
+
+def test_packs_count_what_regenerated_since_the_last_read():
+    """`packs_remaining` reste figé tant que la page des paquets n'est pas ouverte (0 pendant 1 h le 04/11)."""
+    profile = {"packs_remaining": 0, "packs_last_regen_at": (NOW - timedelta(minutes=35)).isoformat()}
+    assert packs_available(profile, NOW) == (3, 10)
+    assert packs_available({**profile, "packs_last_regen_at": (NOW - timedelta(days=1)).isoformat()}, NOW) == (10, 10)
+    assert packs_available({**profile, "pack_cap": 20, "pack_regen_ms": 60_000}, NOW) == (20, 20)
+    assert packs_available({"packs_remaining": 4}, NOW) == (4, 10)  # sans date : la valeur telle quelle
+    assert packs_available({"packs_remaining": 4, "packs_last_regen_at": "2026-10-16T15:00:00"}, NOW) == (4, 10)
+    assert packs_available({}, NOW) is None
+
+
+@pytest.mark.asyncio
+async def test_full_packs_are_announced_once_until_they_are_opened(tmp_path):
+    stocks = [9, 10, 10, 4, 10]
+
+    def handler(request):
+        return httpx.Response(200, json={**CLEAN, "packs_remaining": stocks.pop(0)})
+
+    client, notifier = make_client(tmp_path, handler, supabase_anon_key="anon-key",
+                                   wm_cookie=cookie_for("a1", "r1", 3600))
+    ctx = await make_context(tmp_path, client, notifier)
+    guard = ProfileGuard(ctx)
+    await guard.setup()
+    announced = []
+    for _ in range(5):
+        await guard.step()
+        announced.append(sum(title == "Paquets pleins" for _, title in notifier.sent))
+    assert announced == [0, 1, 1, 1, 2]
+
+    # Redémarrage alors que le stock est encore plein : pas de second message.
+    stocks.append(10)
+    again = ProfileGuard(ctx)
+    await again.setup()
+    await again.step()
+    assert sum(title == "Paquets pleins" for _, title in notifier.sent) == 2
+    assert client.halted is None
+    await client.close()
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_packs_alert_can_be_turned_off_or_lowered(tmp_path):
+    def handler(request):
+        return httpx.Response(200, json={**CLEAN, "packs_remaining": 6})
+
+    for threshold, titles in ((0, []), (5, ["6 paquets à ouvrir"])):
+        (tmp_path / str(threshold)).mkdir()
+        client, notifier = make_client(tmp_path / str(threshold), handler, supabase_anon_key="anon-key",
+                                       wm_cookie=cookie_for("a1", "r1", 3600), packs_alert_at=threshold)
+        ctx = await make_context(tmp_path / str(threshold), client, notifier)
+        guard = ProfileGuard(ctx)
+        await guard.setup()
+        await guard.step()
+        assert [title for _, title in notifier.sent] == titles
+        await client.close()
+        await ctx.db.close()

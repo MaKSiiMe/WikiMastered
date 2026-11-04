@@ -35,13 +35,12 @@ Il te faut :
 
 1. Ouvre une **fenêtre de navigation privée** et connecte-toi sur <https://www.wiki-masters.com>.
 2. Ouvre les DevTools (F12) > *Réseau*, recharge la page, filtre sur `wikibidous` et clique sur la requête `/api/wikibidous`. Dans *En-têtes de requête*, copie la valeur complète de `cookie` (elle contient `sb-…-auth-token`, parfois en `.0`, `.1` : prends tout) et celle de `user-agent`.
-3. Filtre ensuite sur `supabase.co`, clique sur n'importe quelle requête et copie l'en-tête `apikey` (une longue chaîne qui commence par `eyJ`). Cette clé est envoyée à tous les visiteurs du site : ce n'est pas un mot de passe.
-4. **Ferme la fenêtre sans cliquer sur « Se déconnecter ».** La session reste valable pour le bot. Évite aussi « Se déconnecter » dans ton navigateur habituel : Supabase ferme alors en principe toutes les sessions du compte, celle du bot comprise.
+3. **Ferme la fenêtre sans cliquer sur « Se déconnecter ».** La session reste valable pour le bot. Évite aussi « Se déconnecter » dans ton navigateur habituel : Supabase ferme alors en principe toutes les sessions du compte, celle du bot comprise.
 
 Une session reste valable tant qu'elle n'est pas révoquée : déconnexion de toutes les sessions, changement de mot de passe, ou jeton consommé par un autre appareil.
 
 > [!IMPORTANT]
-> `SUPABASE_ANON_KEY` (l'`apikey` ci-dessus) est facultative pour démarrer, mais sans elle le bot ne renouvelle pas sa session et la **garde des sanctions**, les étiquettes et les succès ne fonctionnent pas. Renseigne-la dès le début.
+> Au démarrage, le bot cherche tout seul sa clé publique dans les scripts du site. Sans elle, il ne renouvelle pas sa session et la **garde des sanctions**, les étiquettes et les succès ne fonctionnent pas. Si la recherche échoue, une alerte « Garde des sanctions inactive » le signale : dans une fenêtre privée, ouvre les DevTools > *Réseau*, filtre sur `supabase.co`, copie l'en-tête `apikey` d'une requête (une longue chaîne qui commence par `eyJ`) et mets-la dans `SUPABASE_ANON_KEY`. Cette clé est envoyée à tous les visiteurs du site : ce n'est pas un mot de passe.
 
 ## 2. Créer le webhook Discord
 
@@ -58,7 +57,7 @@ git clone https://github.com/<ton-pseudo>/WikiMastered.git && cd WikiMastered
 cp .env.example .env
 ```
 
-Dans `.env`, remplis `WM_COOKIE` et `WM_USER_AGENT` (entre apostrophes), `DISCORD_WEBHOOK_URL`, et décommente `SUPABASE_ANON_KEY`. Laisse `DRY_RUN=true`. Puis :
+Dans `.env`, remplis `WM_COOKIE` et `WM_USER_AGENT` (entre apostrophes), et `DISCORD_WEBHOOK_URL`. Laisse `DRY_RUN=true`. Puis :
 
 ```bash
 mkdir -p backups && sudo chown -R 1000:1000 data backups   # le conteneur tourne sous l'UID 1000
@@ -90,7 +89,6 @@ Dans *Environment variables*, clique sur **Advanced mode** et colle, une variabl
 DRY_RUN=true
 WM_COOKIE=<le cookie de la fenêtre privée>
 WM_USER_AGENT=<le user-agent>
-SUPABASE_ANON_KEY=<la valeur de apikey>
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 ```
 
@@ -198,7 +196,7 @@ Chaque mise à jour redémarre le bot. Le message « Bot démarré » le confirm
 
 ### Session perdue
 
-Avec `SUPABASE_ANON_KEY`, le bot renouvelle sa session tout seul. Si Discord affiche « Session expirée » ou « Session : renouvellement refusé », refais l'[étape 1](#1-récupérer-la-session-du-bot), puis au choix :
+Avec sa clé publique, le bot renouvelle sa session tout seul. Si Discord affiche « Session expirée » ou « Session : renouvellement refusé », refais l'[étape 1](#1-récupérer-la-session-du-bot), puis au choix :
 
 - sans redémarrer, dans la console du conteneur : `cat > /app/data/session_cookie.txt`, colle le cookie, Entrée puis Ctrl+D. Le bot le charge en moins de 30 s ;
 - ou remplace `WM_COOKIE` et redémarre.
@@ -245,7 +243,7 @@ Tout est dans `data/` : base SQLite, journal, session. Avec Portainer, c'est le 
 
 | Symptôme | Cause et solution |
 |---|---|
-| « Garde des sanctions inactive » au démarrage | `SUPABASE_ANON_KEY` manquante. Refais l'[étape 1](#1-récupérer-la-session-du-bot) |
+| « Garde des sanctions inactive » au démarrage | Clé publique introuvable sur le site. Renseigne `SUPABASE_ANON_KEY` : voir l'[étape 1](#1-récupérer-la-session-du-bot) |
 | « Session : renouvellement refusé » | Le navigateur et le bot partagent la même session. Reprends un cookie dans une fenêtre privée, [étape 1](#1-récupérer-la-session-du-bot) |
 | « Commandes Discord inactives » | `DISCORD_OWNER_ID` manquant ou pas un nombre : il faut ton identifiant, pas ton pseudo |
 | Pas de commande `/…` dans Discord | Sans `DISCORD_GUILD_ID`, jusqu'à une heure d'attente |
