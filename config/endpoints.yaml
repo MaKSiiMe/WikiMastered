@@ -103,6 +103,11 @@ endpoints:
     path: /api/achievements/claim
     json: {achievement_id: "{achievement_id}"}
 
+  mark_notifications_read:      # route de la cloche du site, relevée par wikimasters-cli
+    method: PATCH
+    path: /api/notifications
+    json: {ids: "{ids}"}
+
   bulk_discard:                 # [WR api.js, discard.js] 50 exemplaires max par lot
     method: POST                # -> { discarded_count, failed: [] }
     path: /api/user-cards/bulk-discard

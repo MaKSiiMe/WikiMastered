@@ -130,6 +130,9 @@ class WikiMastersAPI:
     async def claim_achievement(self, achievement_id: str) -> MutationResult:
         return await self.client.mutate("claim_achievement", achievement_id=achievement_id)
 
+    async def mark_notifications_read(self, ids: list[str]) -> MutationResult:
+        return await self.client.mutate("mark_notifications_read", ids=ids)
+
     async def place_bid(self, auction_id: str, amount: int, *, live: bool | None = None) -> MutationResult:
         # Mise du sniper dans les dernières secondes : elle passe devant les requêtes des autres workers.
         return await self.client.mutate("place_bid", live=live, urgent=True, auction_id=auction_id,

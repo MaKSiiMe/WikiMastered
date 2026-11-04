@@ -6,6 +6,7 @@ main le 04/11/2026). Le sniper lit ces notifications au lieu de chercher ces car
 ~30 titres par heure, 1 500 cartes demandaient plus de deux jours par tour.
 
 Seules les cartes ajoutées par le bot sont retirées ensuite : celles que le joueur a mises lui-même restent.
+Les notifications de ces cartes sont marquées comme lues, pour ne pas noyer les autres dans la cloche du site.
 """
 
 from __future__ import annotations
@@ -14,21 +15,24 @@ import logging
 from datetime import datetime
 from typing import Any, Iterable
 
-from src.core.client import ApiError
+from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.workers.base import Context
 from src.core.timeutils import utcnow
-from src.workers.collection import collection_key
+from src.workers.collection import collection_key, targets
 
 log = logging.getLogger(__name__)
 
 KV_KEY = "collection_wishlist"
 CURSOR_KEY = "collection_wishlist_cursor"  # à part : le sniper l'écrit pendant que le worker collection écrit KV_KEY
 WRITE = "wishlist_write"
+BACKLOG_KEY = "collection_wishlist_backlog"  # notifications déjà accumulées : marquées une seule fois
 LISTED = "marketplace_wishlist_listed"
+COLLECTION_TYPES = f"in.({LISTED},marketplace_outbid,marketplace_auction_won)"
 LOOKUP_BATCH = 50    # titres par recherche : la liste passe dans l'adresse
 WRITE_BATCH = 200
 PAGE = 1000          # PostgREST ne renvoie pas plus par défaut
-NOTIFICATIONS_PER_READ = 20
+NOTIFICATIONS_PER_READ = 100
+BACKLOG_MAX_PAGES = 20
 
 
 def _quoted(values: Iterable[str]) -> str:
@@ -119,6 +123,55 @@ async def sync(ctx: Context, missing: list[str], titles: dict[str, str]) -> dict
     return result
 
 
+def _of_collection(ctx: Context, rows: list[dict], by_id: dict[str, str]) -> list[str]:
+    """Notifications des cartes suivies par les collections : celles des autres cartes restent non lues."""
+    keys = set(targets(ctx))
+    out = []
+    for row in rows:
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        key = by_id.get(str(data.get("card_id"))) or collection_key(str(data.get("card_title") or ""))
+        if key in keys and row.get("id"):
+            out.append(str(row["id"]))
+    return out
+
+
+async def _mark_read(ctx: Context, ids: list[str]) -> bool:
+    """Échec sans conséquence : la cloche garde juste quelques notifications de plus."""
+    if not ids:
+        return True
+    try:
+        result = await ctx.api.mark_notifications_read(ids)
+    except (ApiError, RateLimited, UncertainMutation) as exc:
+        log.warning("notifications de collection non marquées comme lues : %s", exc)
+        return False
+    return result.dry_run or result.ok
+
+
+async def clear_backlog(ctx: Context) -> int:
+    """Une seule fois : marque comme lues les notifications de collection déjà accumulées. Renvoie leur nombre."""
+    if await ctx.db.kv_get(BACKLOG_KEY) or not ctx.settings.is_live("mark_notifications_read"):
+        return 0
+    by_id = {c: k for k, c in ((await ctx.db.kv_get(KV_KEY) or {}).get("ids") or {}).items() if c}
+    marked = kept = 0
+    for _ in range(BACKLOG_MAX_PAGES):
+        # Les marquées sortent du filtre : on saute seulement celles laissées non lues.
+        status, rows = await ctx.client.supabase("GET", "notifications", background=True, params={
+            "select": "id,type,data", "user_id": f"eq.{ctx.client.user_id}", "type": COLLECTION_TYPES,
+            "read": "eq.false", "order": "created_at.desc,id", "limit": str(NOTIFICATIONS_PER_READ),
+            "offset": str(kept)})
+        if status != 200 or not isinstance(rows, list):
+            raise ApiError(status, rows, "supabase:notifications")
+        ids = _of_collection(ctx, rows, by_id)
+        if not await _mark_read(ctx, ids):
+            return marked  # réessayé au prochain passage
+        marked += len(ids)
+        kept += len(rows) - len(ids)
+        if len(rows) < NOTIFICATIONS_PER_READ:
+            await ctx.db.kv_set(BACKLOG_KEY, True)
+            return marked
+    return marked
+
+
 async def covered(ctx: Context) -> set[str]:
     return set((await ctx.db.kv_get(KV_KEY) or {}).get("covered") or [])
 
@@ -129,7 +182,7 @@ async def new_listings(ctx: Context, wanted: set[str], now: datetime | None = No
     known = await ctx.db.kv_get(CURSOR_KEY)
     cursor = known or (now or utcnow()).isoformat()
     status, rows = await ctx.client.supabase("GET", "notifications", params={
-        "select": "created_at,data", "user_id": f"eq.{ctx.client.user_id}", "type": f"eq.{LISTED}",
+        "select": "id,type,created_at,data", "user_id": f"eq.{ctx.client.user_id}", "type": COLLECTION_TYPES,
         "created_at": f"gt.{cursor}", "order": "created_at.asc", "limit": str(NOTIFICATIONS_PER_READ)})
     if status != 200 or not isinstance(rows, list):
         raise ApiError(status, rows, "supabase:notifications")
@@ -138,8 +191,9 @@ async def new_listings(ctx: Context, wanted: set[str], now: datetime | None = No
     for row in rows:
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
         key = by_id.get(str(data.get("card_id"))) or collection_key(str(data.get("card_title") or ""))
-        if key in wanted and data.get("auction_id"):
+        if row.get("type") == LISTED and key in wanted and data.get("auction_id"):
             auctions.append(str(data["auction_id"]))
+    await _mark_read(ctx, _of_collection(ctx, rows, by_id))
     if rows:
         cursor = str(rows[-1]["created_at"])
     if cursor != known:
