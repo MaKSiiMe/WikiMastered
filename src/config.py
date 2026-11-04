@@ -95,13 +95,12 @@ class Settings(BaseSettings):
     # --- Réseau / anti-ban -----------------------------------------------------
     http_min_spacing_seconds: float = 1.5
     http_jitter_seconds: float = 0.8
-    # Pic de ventes (heures de Paris) : un écart plus court, pour relire plus de ventes à miser. Du 18 au 24/10, 1100 à
-    # 1430 L finissaient par heure de 09 h à 02 h, deux fois moins de 03 h à 08 h. Dès que le site limite le bot (429,
+    # Pic de ventes (heures de Paris) : un écart plus court, pour relire plus de ventes à miser. Dès que le site limite le bot (429,
     # ou une route refusée deux fois de suite), retour à HTTP_MIN_SPACING_SECONDS pendant HTTP_PEAK_COOLDOWN_MINUTES ;
     # une panne du site (500, délai dépassé) ne ralentit pas. HTTP_PEAK_SPACING_SECONDS=0 : jamais.
     http_peak_start: time = time(9, 0)
     http_peak_end: time = time(2, 0)
-    http_peak_spacing_seconds: float = 1.0
+    http_peak_spacing_seconds: float = 0.0
     http_peak_cooldown_minutes: float = 30.0
     # Les écarts ci-dessus plafonnent les lectures (GET) de tous les workers réunis. En plus, chaque worker peut avoir
     # son propre écart minimal entre deux de ses lectures : cotes=5,etiquettes=3 (ou en JSON). Un worker absent n'a
@@ -161,47 +160,46 @@ class Settings(BaseSettings):
 
     # --- Cotes ------------------------------------------------------------------
     price_cache_ttl_minutes: float = 180.0
-    price_min_sales: int = 2     # ventes observées minimum avant d'acheter une carte
+    price_min_sales: int = 4     # ventes observées minimum avant d'acheter une carte
     # Un shiny en demande plus : son marché est maigre (Mark Wahlberg ✨, achetée 6119 le 24/10 sur 3 ventes de 3400,
     # 7797 et 8000, revendue 5000). Seules ses propres ventes comptent, la cote du site n'entre pas dans l'estimation.
-    sniper_shiny_min_sales: int = 4
-    price_recent_sales: int = 5  # estimation = médiane des N dernières ventes observées
+    sniper_shiny_min_sales: int = 8
+    price_recent_sales: int = 7  # estimation = médiane des N dernières ventes observées
     # Achat d'une position : parmi ces N ventes, au moins tant de ventes disputées (plus d'une mise), et la plus
     # haute pas plus de X fois la plus basse (0 = sans limite). Le 18/10, l'éclipse XXIe était achetée 882 sur une
     # estimation de 1197 faite de 3 ventes au prix de départ et de 2 disputées (970 et 1774).
-    sniper_min_contested_sales: int = 3
-    sniper_max_price_spread: float = 2.0
+    sniper_min_contested_sales: int = 4
+    sniper_max_price_spread: float = 1.5
 
     # --- Module D : sniper ------------------------------------------------------
-    # Pause entre deux passages (une requête chacun) quand aucune cible n'attend. À 2,5-4 s, le sniper plafonnait à
-    # ~0,3 lecture/s le 31/10 (1 seule limitation du site en 16 h), et repérait les nouvelles L toutes les 13-23 s au
-    # lieu de 10 : « plus de 50 nouvelles ventes … manquées » chaque heure.
-    sniper_poll_min_seconds: float = 1.0
-    sniper_poll_max_seconds: float = 1.5
+    # Pause entre deux passages (une requête chacun) quand aucune cible n'attend. Plus courte : repérage plus rapide,
+    # mais plus de requêtes au site.
+    sniper_poll_min_seconds: float = 3.0
+    sniper_poll_max_seconds: float = 5.0
     # Le marché est trop gros pour lire les fins imminentes (environ 12 fins par seconde) : le sniper
-    # repère les nouvelles ventes de ces raretés (tri « recent ») et ne revend que celles-ci.
-    sniper_resale_rarities: CsvList = Field(default_factory=lambda: ["UR", "L"])
-    sniper_discovery_seconds: float = 10.0  # nouvelles ventes de chaque rareté suivie, toutes les N s
-    sniper_observe_seconds: float = 30.0    # ventes tout juste terminées (prix observés), toutes les N s
-    # Fenêtre de mise : de 60 s à 15 s avant la fin. Large : le site lent (16/10) relisait trop peu de cibles dans
-    # une fenêtre de 9 s (139 sur 159 « pas relues à temps »). Une mise en tête est relue avant la fin et rejouée.
-    sniper_window_seconds: int = 60
+    # repère les nouvelles ventes de ces raretés (tri « recent ») et ne revend que celles-ci. Vide : aucun achat pour
+    # revendre, et aucune vente observée.
+    sniper_resale_rarities: CsvList = Field(default_factory=list)
+    sniper_discovery_seconds: float = 30.0  # nouvelles ventes de chaque rareté suivie, toutes les N s
+    sniper_observe_seconds: float = 60.0    # ventes tout juste terminées (prix observés), toutes les N s
+    # Fenêtre de mise : le bot mise s'il reste moins de N s (et au moins SNIPER_MIN_SECONDS_LEFT). Trop courte, un site
+    # lent ne relit pas toutes les cibles à temps. Une mise en tête est relue avant la fin.
+    sniper_window_seconds: int = 30
     # Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais (marge de 5 s).
     sniper_min_seconds_left: int = 15
-    sniper_deal_ratio_max: float = 0.70
-    # Position sautée si notre mise vaut moins de cette part de l'estimation (0 = jamais) : du 17 au 20/10,
-    # 0 gagnée sur 33 réelles (5 sur 60 simulées), parties à ~2 fois notre mise ; une place du quota anti-bot perdue.
-    # Du 31/10 au 01/11, sous 50 % : 0 gagnée sur 18.
-    sniper_min_bid_share: float = 0.50
-    sniper_max_bid: int = 0          # 0 = pas de plafond absolu (le budget par position s'applique)
+    sniper_deal_ratio_max: float = 0.50
+    # Position sautée si notre mise vaut moins de cette part de l'estimation (0 = jamais) : une enchère très sous sa
+    # valeur partira bien plus haut, et la mise userait une place du quota anti-bot pour rien.
+    sniper_min_bid_share: float = 0.25
+    sniper_max_bid: int = 500        # plafond absolu d'une mise, /snipe excepté (0 = aucun, le budget par position s'applique)
     sniper_daily_budget: int = 0     # 0 = pas de budget quotidien
     sniper_min_balance_reserve: int = 50
     sniper_prefetch_seconds: float = 8.0
-    sniper_allow_rebid: bool = True
-    # Mise d'une position : la mise minimale + cette part de l'écart jusqu'à notre plafond ; surenchérie, la
-    # mise suivante va droit au plafond. Le 17/10 : 2 L réelles gagnées sur 29, les rivaux surenchérissent d'un
-    # pas (+10 %) en 20-30 s, et chaque mise use le quota de la vérification anti-bot (~9-10 mises). 0 = minimum.
-    sniper_bid_push: float = 0.5
+    sniper_allow_rebid: bool = False
+    # Mise d'une position : la mise minimale + cette part de l'écart jusqu'à notre plafond ; surenchérie (si
+    # SNIPER_ALLOW_REBID), la mise suivante va droit au plafond. Chaque mise use le quota de la vérification anti-bot
+    # (~9-10 mises). 0 = minimum.
+    sniper_bid_push: float = 0.0
     sniper_settle_grace_seconds: int = 30
     # Vérification anti-bot en attente : une seule mise réelle tentée toutes les N s, pour voir si elle est levée
     # (le 16/10, ~45 mises refusées en 1 h 30). 0 = chaque mise est tentée : la levée est vue tout de suite, utile
@@ -213,37 +211,35 @@ class Settings(BaseSettings):
     # Arbitrage nocturne
     night_start: time = time(2, 0)
     night_end: time = time(7, 30)
-    night_deal_ratio_max: float = 0.80
-    night_window_seconds: int = 60
+    night_deal_ratio_max: float = 0.50
+    night_window_seconds: int = 30
     night_budget_bonus: int = 0
 
     # --- Capital : positions achetées pour être revendues ----------------------------
     portfolio_slots: int = 5              # = places de vente simultanées du site
-    # Plafonds de positions (0 = aucun). Supprimés le 31/10 : 5 positions attendaient une place de vente et le bot
-    # n'achetait plus aucune L depuis 18:40 ; les durées de revente raccourcissent à la place (position_minutes).
-    portfolio_max_positions: int = 0      # plafond absolu : positions détenues + enchères du bot
+    # Plafonds de positions (0 = aucun).
+    portfolio_max_positions: int = 5      # plafond absolu : positions détenues + enchères du bot
     portfolio_buffer: int = 0             # positions en attente d'une place de vente, au-delà des places libres
-    portfolio_queue_profit_ratio: float = 0.5  # bénéfice exigé pour une position qui devra attendre
-    portfolio_capital_ratio: float = 0.9  # part des WikiBidous engagée en positions
-    portfolio_min_profit_ratio: float = 0.25  # bénéfice attendu ≥ 25 % du budget d'une position
-    portfolio_min_profit: int = 30        # plancher absolu du bénéfice attendu
+    portfolio_queue_profit_ratio: float = 1.0  # bénéfice exigé pour une position qui devra attendre
+    portfolio_capital_ratio: float = 0.5  # part des WikiBidous engagée en positions
+    portfolio_min_profit_ratio: float = 0.5  # bénéfice attendu ≥ 50 % du budget d'une position
+    portfolio_min_profit: int = 100       # plancher absolu du bénéfice attendu
     sale_fee_pct: float = 0.0             # commission éventuelle du site sur une vente
     # Revente d'une position : c'est une enchère, les joueurs font monter le prix. Le prix de départ est le prix
     # d'achat + cette marge (commission comprise) ; jamais sous le prix d'achat, même remise en vente.
-    position_list_margin: float = 0.15
+    position_list_margin: float = 0.20
     # Prix de départ relevé : prix d'achat + cette part du bénéfice attendu à l'achat. Les enchères montent peu
     # (relevé du 16/10 : prix final / prix de départ, médiane ×1,11 en UR, ×1,23 en L ; 41 % et 29 % sans
     # surenchère) et les 5 places de vente sont rares : un départ bas vendrait presque au prix d'achat.
-    position_list_profit_share: float = 0.5
+    position_list_profit_share: float = 0.25
     # Revente publiée dès que la carte est arrivée (16/10 : 2 L sur 3 attendaient le lendemain 11 h, capital
     # immobilisé ; l'heure de fin change peu le prix, voir `python -m src.main hours`). False : fenêtre ci-dessous.
     position_post_now: bool = True
     position_post_start: time = time(11, 0)  # fenêtre de publication (Paris) si POSITION_POST_NOW=false
     position_post_end: time = time(12, 0)
-    # Durée de la revente : 1 h. Le 31/10, ~4 L gagnées par heure pour ~10 ventes par jour (5 places, ventes de 6 et
-    # 12 h) : 20 reventes attendaient une place. Les rivaux revendent en 10-60 min. Moins de
-    # POSITION_LIST_LONG_BELOW positions détenues (rien n'attend de place) : POSITION_LIST_LONG_MINUTES, plus vue.
-    position_list_duration_minutes: int = 60
+    # Durée de la revente. Plus courte, les 5 places de vente tournent plus vite ; plus longue, la vente est plus vue.
+    # Moins de POSITION_LIST_LONG_BELOW positions détenues (rien n'attend de place) : POSITION_LIST_LONG_MINUTES.
+    position_list_duration_minutes: int = 360
     position_list_long_minutes: int = 720
     position_list_long_below: int = 0     # 0 = toujours POSITION_LIST_DURATION_MINUTES
     # Heures de fin (Paris) évitées par la revente de 12 h : 6 h si elle finit hors de ces heures (6 h n'est jamais
@@ -256,18 +252,18 @@ class Settings(BaseSettings):
     # avec des reventes d'1 h, compter les ventes enverrait une carte à 1 WB en 3 h. Même prix entre deux étapes.
     # 0 = une étape par vente sans acheteur ; vide = 360.
     position_step_minutes: int = 360
-    position_relist_discount: float = 0.9 # étape franchie : remise en vente à prix × 0,9
-    position_max_relists: int = 2         # puis au prix d'achat, tant qu'une place de vente est libre
+    position_relist_discount: float = 0.95 # étape franchie : remise en vente à prix × cette valeur
+    position_max_relists: int = 3         # puis au prix d'achat, tant qu'une place de vente est libre
     # Après POSITION_LOSS_AFTER étapes sans acheteur, la revente peut descendre jusqu'à POSITION_MAX_LOSS
     # sous le prix d'achat : une carte qui ne part pas bloque une des 5 places (~900 WB par revente qui tourne) et son
     # capital (Mark Wahlberg ✨, achetée 6119, invendue à 7037 puis à 6333 le 25/10). 0 = jamais sous le prix d'achat.
-    position_max_loss: float = 0.10
+    position_max_loss: float = 0.0
     position_loss_after: int = 2
     # Après POSITION_FIRE_SALE_AFTER étapes sans acheteur, la revente part à 1 WB pour environ
     # POSITION_FIRE_SALE_MINUTES, fin entre 00 h et 03 h ou entre 06 h et 09 h (Paris). Du 15 au 26/10, les L parties
     # de ≤ 10 WB se sont vendues ×0,94 leur prix habituel (médiane) : ×1,08-1,11 et 3-4 % sous la moitié pour une fin
     # à 00-03 h ou 06-09 h, contre ×0,81 et 22 % sous la moitié à 18-21 h. 0 = jamais.
-    position_fire_sale_after: int = 3
+    position_fire_sale_after: int = 0
     position_fire_sale_minutes: int = 360
     # Durée minimale d'une revente à 1 WB : le 26/10, Mark Wahlberg ✨ (achetée 6119) n'est restée qu'1 h en vente
     # (seule durée qui finissait dans la fenêtre 00-03 h), vendue 5000. Plus courte, elle vise la fenêtre suivante.
@@ -279,7 +275,7 @@ class Settings(BaseSettings):
     # l'échelle de remises (≈ 24-40 h), quelque chose bloque : pas de place de vente, exemplaire introuvable, favori.
     # 0 = jamais.
     position_stale_hours: float = 48.0
-    position_expensive_from: int = 1000
+    position_expensive_from: int = 0
     position_expensive_max_relists: int = 1
     position_expensive_fire_sale_after: int = 2
 
@@ -343,12 +339,12 @@ class Settings(BaseSettings):
     # --- Module G : collection (cartes gardées, jamais revendues) ---------------------
     collection_sets: CsvList = Field(default_factory=list)    # « jours » + clés de config/collections.yaml
     collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
-    collection_max_price: int = 50                              # mise maximale pour une carte manquante
+    collection_max_price: int = 10                              # mise maximale pour une carte manquante
     # Carte possédée : le sniper mise aussi sur un exemplaire de rareté plus haute que la meilleure possédée,
     # jusqu'à COLLECTION_MAX_PRICE (le but : chaque carte dans sa plus haute rareté).
-    collection_upgrade: bool = True
+    collection_upgrade: bool = False
     collection_refresh_minutes: float = 360.0
-    collection_search_seconds: float = 30.0  # le sniper cherche une carte de collection sur le marché toutes les N s
+    collection_search_seconds: float = 120.0  # le sniper cherche une carte de collection sur le marché toutes les N s
     # Mises réelles de collection par vérification anti-bot (le site en accepte ~9-10, puis la redemande) :
     # le reste est gardé pour les L. 0 = pas de limite.
     collection_bids_per_check: int = 2

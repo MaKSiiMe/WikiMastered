@@ -23,6 +23,8 @@ Ces commandes demandent un bot Discord ([installation](INSTALLATION.md#activer-l
 
 ### Cartes et marché
 
+Les ventes observées, les prix et le marché suivi demandent une revente active (`SNIPER_RESALE_RARITIES`).
+
 | Commande | Réponse |
 |---|---|
 | `/carte <carte>` | Tes exemplaires, les ventes observées, ce que le bot en fait. Boutons : garder, vendre, demander au sniper |

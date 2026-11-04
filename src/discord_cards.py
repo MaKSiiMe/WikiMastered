@@ -333,7 +333,7 @@ async def shiny_embeds(ctx: Context, size: int, sort: str = "end", max_price: in
     embeds = [discord.Embed(title=title if not n else f"{title} (suite)", color=COLOR, description="\n".join(page))
               for n, page in enumerate(pages)]
     embeds[-1].set_footer(text=f"{len(lines)} sur {total}, {SHINY_SORTS[sort]}. Lus par le sniper (raretés "
-                               f"{', '.join(ctx.settings.sniper_resale_rarities)}) : la mise peut avoir bougé depuis. "
+                               f"{', '.join(ctx.settings.sniper_resale_rarities) or 'aucune'}) : la mise peut avoir bougé depuis. "
                                "Cote : ventes de shiny observées. 💰 revente rentable d'après la cote : plafond à "
                                "demander au sniper. Gagnée, elle est gardée : étiquette de revente pour la vendre.")
     return embeds, list(picks.values())

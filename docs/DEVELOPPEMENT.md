@@ -12,7 +12,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
-Les tests n'appellent ni le site ni Discord. Une PR passe par la CI ([`ci.yml`](../.github/workflows/ci.yml)) : tests et construction de l'image Docker.
+Les tests n'appellent ni le site ni Discord. Ils fixent leurs propres réglages dans [`tests/conftest.py`](../tests/conftest.py), indépendants des valeurs par défaut. Une PR passe par la CI ([`ci.yml`](../.github/workflows/ci.yml)) : tests et construction de l'image Docker.
 
 ## Organisation du code
 
@@ -55,8 +55,10 @@ Les docstrings en tête des modules, en particulier `auction_sniper.py`, `invent
 ## Ajouter un réglage
 
 1. Ajoute le champ dans `Settings` (`src/config.py`) ; son nom en majuscules devient la variable d'environnement.
-2. Documente-le dans [`.env.example`](../.env.example), avec sa valeur par défaut.
+2. Documente-le dans [`.env.example`](../.env.example), avec sa valeur par défaut. [`tests/test_docs.py`](../tests/test_docs.py) échoue sinon, comme pour une commande non documentée ou un lien cassé.
 3. Mets à jour [Fonctionnement](FONCTIONNEMENT.md) ou [Installation](INSTALLATION.md) s'il change un comportement décrit.
+
+Un défaut qui change modifie le comportement de toute instance qui n'a pas renseigné ce réglage : préviens-les, et ajoute l'ancienne valeur à `tests/conftest.py` si des tests en dépendent.
 
 ## Ajouter un worker
 

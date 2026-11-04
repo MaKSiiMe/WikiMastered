@@ -115,15 +115,15 @@ Si `inspect` affiche `ÉCART` ou `ERREUR`, le site a sans doute changé : voir [
 
 ## 5. Choisir les réglages
 
-Ce sont les réglages les plus utiles au départ. Tous les autres sont commentés dans [`.env.example`](../.env.example).
+Ce sont les réglages les plus utiles au départ. Tous les autres sont commentés dans [`.env.example`](../.env.example). Les valeurs par défaut sont volontairement prudentes et n'ont pas été optimisées : à toi de les ajuster, avec `python -m src.main sniper-report --breakdown` et `python -m src.main sniper-backtest`.
 
 | Réglage | Par défaut | À savoir |
 |---|---|---|
-| `SNIPER_RESALE_RARITIES` | `UR,L` | Raretés achetées pour la revente |
-| `SNIPER_MAX_BID` | `0` (aucun) | Plafond absolu d'une mise. Sans lui, le budget d'une position est capital × 0,9 / 5 |
+| `SNIPER_RESALE_RARITIES` | vide | Raretés achetées pour la revente, ex. `SR`. **Vide : aucun achat pour revendre, et aucune vente observée** |
+| `SNIPER_MAX_BID` | `500` | Plafond absolu d'une mise (`0` : aucun). Le budget d'une position, capital × 0,5 / 5, s'applique aussi |
 | `SNIPER_DAILY_BUDGET` | `0` (aucun) | Un budget trop petit bloque presque tous les achats : il doit dépasser le prix d'une position |
-| `COLLECTION_SETS` | vide | Collections à compléter, ex. `jours,gifs` ([détail](FONCTIONNEMENT.md#collections)). Vide : aucune |
-| `COLLECTION_MAX_PRICE` | `50` | Mise maximale pour une carte de collection, en WB |
+| `COLLECTION_SETS` | vide | Collections à compléter, ex. `ma_liste` ([détail](FONCTIONNEMENT.md#collections)). Vide : aucune |
+| `COLLECTION_MAX_PRICE` | `10` | Mise maximale pour une carte de collection, en WB |
 | `COLLECTION_TAG` | `date` | Étiquette des jours. Crée-la une fois sur le site |
 | `PROTECTED_TAGS` | vide | Étiquettes jamais vendues ni défaussées, ex. `date,GIF` |
 | `AUTO_LIST` | `false` | Vente automatique des doublons cotés au moins `SELL_MIN_VALUE` (15 WB) |
@@ -146,7 +146,7 @@ Groupes : `sniper`, `collection`, `ventes`, `defausse`, `tags`, `themes`, `succe
 
 Par étapes, car le bot dépense alors de vrais WB. Après chaque changement, redémarre : `docker compose up -d` avec Compose, **Pull and redeploy** avec Portainer.
 
-1. **Observe un ou deux jours en simulation.** Regarde les messages `[DRY RUN]`, le bilan du soir et le récap des enchères de 08:00. `python -m src.main inventory scan` montre ce que l'inventaire ferait.
+1. **Choisis tes raretés** (`SNIPER_RESALE_RARITIES`) et observe quelques jours en simulation : le bot doit d'abord voir assez de ventes pour estimer les cartes. Regarde les messages `[DRY RUN]`, le bilan du soir et le récap des enchères de 08:00. `python -m src.main inventory scan` montre ce que l'inventaire ferait.
 2. **`DRY_RUN=false` et `SIMULATE=sniper`** : ventes, collection et étiquettes deviennent réelles ; seules les mises des positions du sniper restent simulées. Ajoute `AUTO_LIST=true` pour vendre les doublons.
 3. **Retire `SIMULATE`** quand le bloc « Validation de la simulation » du bilan dit que le passage en réel est envisageable : au moins 10 reventes simulées, et un bilan positif même en comptant les invendues comme perdues.
 
@@ -250,11 +250,11 @@ Tout est dans `data/` : base SQLite, journal, session. Avec Portainer, c'est le 
 | « Commandes Discord inactives » | `DISCORD_OWNER_ID` manquant ou pas un nombre : il faut ton identifiant, pas ton pseudo |
 | Pas de commande `/…` dans Discord | Sans `DISCORD_GUILD_ID`, jusqu'à une heure d'attente |
 | Aucun message Discord | Vérifie `DISCORD_WEBHOOK_URL` et lis les logs (`docker logs wikimastered`) : sans webhook, les messages y sont seulement recopiés |
-| Le bot mise peu ou plus du tout | Regarde `/etat` : vérification anti-bot en attente, route en pause, sniper en pause. Sinon, `python -m src.main sniper-report --breakdown`. Il faut aussi quelques jours de ventes observées avant que le bot sache estimer les cartes |
+| Le bot ne mise pas | `SNIPER_RESALE_RARITIES` est vide par défaut. Sinon, regarde `/etat` : vérification anti-bot en attente, route en pause, sniper en pause. Sinon, `python -m src.main sniper-report --breakdown`. Il faut aussi quelques jours de ventes observées avant que le bot sache estimer les cartes |
 | Aucune collection dans le récap | `COLLECTION_SETS` est vide |
 | Une étiquette n'est pas posée | Elle doit d'abord être créée sur le site. `python -m src.main etiquettes` liste celles qui manquent |
 | Conteneur `unhealthy` | Le bot n'écrit plus son `heartbeat` : lis les logs. Avec Docker Compose, vérifie les droits de `data/` (UID 1000) |
 | Sauvegarde impossible (Docker Compose) | `backups/` doit appartenir à l'UID 1000 : `sudo chown -R 1000:1000 backups` |
 
 > [!NOTE]
-> Si plusieurs d'entre vous font tourner le bot, vous visez les mêmes cartes avec les mêmes règles : vous ferez monter vos prix mutuellement. Pensez à varier `SNIPER_RESALE_RARITIES`, les collections ou les plafonds.
+> Si plusieurs bots visent les mêmes raretés ou les mêmes collections, ils font monter leurs prix mutuellement et se prennent les cartes. Mettez-vous d'accord pour varier `SNIPER_RESALE_RARITIES` et `COLLECTION_SETS`.
