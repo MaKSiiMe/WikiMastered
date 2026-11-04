@@ -486,7 +486,7 @@ class WikiMastersClient:
                         "Session : renouvellement refusé",
                         f"Supabase refuse le jeton de renouvellement (HTTP {resp.status_code} {detail}).\n"
                         "Cause la plus fréquente : ton navigateur et le bot partagent la même session. "
-                        "Donne au bot sa propre session (docs/PORTAINER.md, « Session autonome »), "
+                        "Donne au bot sa propre session (docs/INSTALLATION.md, « Récupérer la session du bot »), "
                         "puis dépose le nouveau cookie.",
                     )
                 return False
@@ -777,7 +777,7 @@ class WikiMastersClient:
         self._session_ok.clear()
         hint = ("" if self.settings.supabase_anon_key else
                 "\n\nPour que ça ne se reproduise plus : ajoute SUPABASE_ANON_KEY dans la stack, avec un cookie "
-                "pris dans une fenêtre privée (docs/PORTAINER.md, « Session autonome »). Le bot renouvellera "
+                "pris dans une fenêtre privée (docs/INSTALLATION.md, « Récupérer la session du bot »). Le bot renouvellera "
                 "alors sa session lui-même.")
         self.notifier.critical(
             f"Session expirée (HTTP {status})",
