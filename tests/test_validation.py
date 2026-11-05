@@ -783,3 +783,32 @@ async def test_expensive_position_fire_sale_after_two_unsold(tmp_path):
     row = await db._one("SELECT base_amount, duration_minutes, reason FROM listings ORDER BY id DESC LIMIT 1")
     assert row["base_amount"] == 1 and row["duration_minutes"] >= 180 and row["reason"].startswith("liquidation")
     await db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shiny", [True, False])
+async def test_shiny_sale_notes_its_page(tmp_path, shiny):
+    """05/11 : le message d'un shiny mis en vente et les logs donnent la page de la vente ; les autres cartes, non."""
+    def handler(request):
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        return httpx.Response(201, json={"auction_id": "vente-1"})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False)
+    sent = []
+    notifier.send = lambda level, title, description="", **fields: sent.append((title, fields))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    bid = await db.record_bid(auction_id="achat-1", card_id="c", title="Six-seven", rarity="L", is_shiny=shiny,
+                              amount=500, reference_price=900, reason="revente", night=False, dry_run=False,
+                              status="won", ceiling=500, end_at=now)
+    await db.schedule_listing(owned_card_id="o1", card_id="c", title="Six-seven", rarity="L", base_amount=700,
+                              duration_minutes=60, post_at=now - timedelta(seconds=1), target_end=now,
+                              reason="position", bid_id=bid)
+    await InventoryManager(ctx).post_due_listings()
+    fields = next(f for title, f in sent if title == "Carte mise en vente")
+    page = "https://www.wiki-masters.com/marketplace/vente-1"
+    assert fields.get("page") == (page if shiny else None)
+    assert (f"[page de la vente]({page})" in fields["thread"].line) is shiny
+    await db.close()

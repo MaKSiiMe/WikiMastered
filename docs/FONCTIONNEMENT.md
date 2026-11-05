@@ -115,7 +115,7 @@ Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'
 
 ## Positions : revendre
 
-Une carte gagnée est mise en vente dès son arrivée, pour 6 h (`POSITION_LIST_DURATION_MINUTES`). Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher. Une concurrente affichée sous 50 % de l'estimation ne compte pas : c'est un prix de départ, qui montera. Un seul exemplaire d'une carte est en vente à la fois.
+Une carte gagnée est mise en vente dès son arrivée, pour 6 h (`POSITION_LIST_DURATION_MINUTES`). Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher. Une concurrente affichée sous 50 % de l'estimation ne compte pas : c'est un prix de départ, qui montera. Un seul exemplaire d'une carte est en vente à la fois. Pour un shiny, le message de la position et les logs donnent la page de l'achat, puis celle de chaque mise en vente.
 
 Le prix baisse avec le temps passé en vente sans acheteur, d'une étape toutes les 6 h (`POSITION_STEP_MINUTES`). L'attente d'une place de vente ne compte pas. Le bot ne descend jamais sous le prix d'achat.
 

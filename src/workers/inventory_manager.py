@@ -40,7 +40,7 @@ from src.core.api import COLLECTION_PAGE_SIZE
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
 from src.core.models import Auction, DiscardResult, MyBids, OwnedCard, parse_items
-from src.core.notifier import Thread, Topic, position_thread
+from src.core.notifier import Thread, Topic, auction_url, position_thread
 from src.core.pricing import ANY, Quote
 from src.core.text import tag_key
 from src.core.timeutils import local_dt, now_local, random_in_window, utcnow
@@ -764,13 +764,17 @@ class InventoryManager(Worker):
             target = f", revente visée ~{quote:.0f} WB" if quote else ""
             origin = f"achetée {price} WB" if price is not None else "aucun achat trouvé (carte d'un paquet ?)"
             start = "au-dessus du prix d'achat" if price is not None else "à sa cote"
+            page, link = {}, ""
+            if c.is_shiny and price is not None:  # page de l'achat : message de la position et logs
+                page = {"page": auction_url(s.wm_base_url, buy["auction_id"])}
+                link = f" · [page de l'achat]({page['page']})"
             self.notifier.success("Carte à revendre prise en charge",
                                   f"{label} : {origin}{target}. Le bot la revend comme ses positions (départ {start}, "
                                   f"remises à -10 %, puis à 1 WB après {fire_sale_delay(s)} sans acheteur).",
                                   important=True, thread=position_thread(
                                       {"id": bid_id, "title": c.title, "rarity": c.rarity, "is_shiny": c.is_shiny},
-                                      f"🏷️ prise en charge : {origin}", ring=True,
-                                      head=f"Achat manuel : {origin}{target}"))
+                                      f"🏷️ prise en charge : {origin}{link}", ring=True,
+                                      head=f"Achat manuel : {origin}{target}"), **page)
         await self.db.kv_set(MANUAL_KV, {"adopted": sorted(adopted_ids), "missing": sorted(missing_ids)})
         return adopted
 
@@ -982,9 +986,11 @@ class InventoryManager(Worker):
                 await self.db.update_listing(row["id"], status="posted", posted_at=utcnow(), duration_minutes=minutes,
                                              target_end=target_end, auction_id=auction_id)
                 if row["bid_id"]:
+                    page = await self._shiny_sale_page(row, auction_id)
+                    link = f" · [page de la vente]({page['page']})" if page else ""
                     self.notifier.info("Carte mise en vente", label, durée=f"{minutes} min", important=True,
                                        thread=position_thread(listing_bid(row), f"💰 en vente à {price} WB, fin "
-                                                                                f"{local_hm(target_end)}"))
+                                                                                f"{local_hm(target_end)}{link}"), **page)
                 else:
                     self.log.info("doublon mis en vente : %s (%d min)", label, minutes)
             else:
@@ -1058,6 +1064,11 @@ class InventoryManager(Worker):
                           target, row["base_amount"])
         return target
 
+    async def _shiny_sale_page(self, row, auction_id: str | None) -> dict[str, str]:
+        """Page de la vente d'un shiny, à passer au message (les logs gardent `page`) ; vide pour une autre carte."""
+        bid = await self.db.get_bid(row["bid_id"]) if row["bid_id"] and auction_id else None
+        return {"page": auction_url(self.settings.wm_base_url, auction_id)} if bid and bid["is_shiny"] else {}
+
     async def _listing_auction_id(self, payload, card_id: str) -> str | None:
         """Identifiant de l'enchère créée : dans la réponse, sinon dans mes ventes en cours."""
         if isinstance(payload, dict):
@@ -1090,7 +1101,8 @@ class InventoryManager(Worker):
                 known.add(auction.id)
                 await self.db.update_listing(row["id"], status="posted", auction_id=auction.id,
                                              target_end=auction.end_at, error=None)
-                self.notifier.info("Mise en vente vérifiée", f"{label} : bien en vente.")
+                self.notifier.info("Mise en vente vérifiée", f"{label} : bien en vente.",
+                                   **await self._shiny_sale_page(row, auction.id))
             else:
                 await self.db.update_listing(row["id"], status="failed", error="non créée (vérifiée dans mes ventes)")
                 again = " Elle sera reprogrammée." if row["bid_id"] else ""

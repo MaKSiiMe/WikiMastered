@@ -578,3 +578,21 @@ async def test_leading_bid_outbid_before_the_last_seconds_is_replayed(tmp_path, 
     assert "prolongée" not in caplog.text
     assert sniper._leading["col"][1] == 14 and sniper._targets["col"].recheck
     await db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shiny", [True, False])
+async def test_shiny_win_notes_the_purchase_page(tmp_path, shiny):
+    """05/11 : le message d'un shiny acheté et les logs donnent la page de l'achat ; les autres cartes, non."""
+    market = {"w": ended("w", "Six-seven", winner=ME, final=479)}
+    sniper, db, notifier = await start(tmp_path, market, [])
+    sent = []
+    notifier.send = lambda level, title, description="", **fields: sent.append((title, fields))
+    await outbid_bid(db, "w", "Six-seven", 479)
+    await db._exec("UPDATE bids SET is_shiny = ?", (int(shiny),))
+    await sniper._settle()
+    fields = next(f for title, f in sent if title == "Position achetée !")
+    page = "https://www.wiki-masters.com/marketplace/w"
+    assert fields.get("page") == (page if shiny else None)
+    assert (f"[page de l'achat]({page})" in fields["thread"].line) is shiny
+    await db.close()

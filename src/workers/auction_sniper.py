@@ -39,7 +39,7 @@ from src.core import journal
 from src.core.client import ApiError, RateLimited, UncertainMutation
 from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
 from src.core.models import Auction, BidResult, Card, OwnedCard
-from src.core.notifier import Topic, position_thread
+from src.core.notifier import Topic, auction_url, position_thread
 from src.core.pricing import Quote, combine, trusted
 from src.core.timeutils import in_window, local_dt, now_local, utcnow
 from src.snipes import REASON as SNIPE_REASON
@@ -1612,7 +1612,11 @@ class AuctionSniper(Worker):
             fields["bénéfice attendu"] = f"~{ref - amount:.0f} WB"
             head += f" · revente visée ~{ref:.0f} WB ({ref - amount:+.0f})"
         fields["nuit"] = "oui" if row["night"] else "non"
-        thread = position_thread(row, f"🎯 {bought}" + (" (nuit)" if row["night"] else ""), head=head, ring=True)
+        bought += " (nuit)" if row["night"] else ""
+        if row["is_shiny"]:  # page de l'achat : message de la position et logs
+            fields["page"] = auction_url(self.settings.wm_base_url, row["auction_id"])
+            bought += f" · [page de l'achat]({fields['page']})"
+        thread = position_thread(row, f"🎯 {bought}", head=head, ring=True)
         if simulated:
             self.notifier.info("Achat simulé remporté", name, topic=Topic.SALES, thread=thread, **look, **fields)
         else:
