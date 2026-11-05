@@ -81,6 +81,11 @@ def position_thread(bid: Any, line: str, *, head: str | None = None, ring: bool 
     return Thread(f"position:{bid['id']}", f"{bid['title']} ({bid['rarity'] or '?'}{shiny})", line, head, ring)
 
 
+def auction_url(base_url: str, auction_id: str) -> str:
+    """Page d'une vente sur le site (route relevée dans le code du site le 05/11/2026)."""
+    return f"{base_url.rstrip('/')}/marketplace/{auction_id}"
+
+
 class Level(Enum):
     INFO = colors.INFO
     SUCCESS = colors.OK
