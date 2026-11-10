@@ -109,6 +109,7 @@ Le bot n'envoie jamais de message privé : tout arrive dans les salons des webho
 | `python -m src.main hours [--rarity UR,L]` | À quelle heure de fin les enchères se vendent le mieux |
 | `python -m src.main gifs` | Les cartes GIF se vendent-elles mieux ? |
 | `python -m src.main sniper-backtest [--days 7] [--capital 20000] [--resale 1] [--rarity L]` | Autres réglages rejoués sur les ventes observées, sans requête au site |
+| `python -m src.main sniper-value [--days 7]` | Ce que rapporte une mise selon sa valeur, seuil par seuil, pour choisir `SNIPER_MIN_BID_VALUE` ; sans requête au site |
 
 **Collection et inventaire**
 

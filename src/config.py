@@ -203,6 +203,15 @@ class Settings(BaseSettings):
     # SNIPER_ALLOW_REBID), la mise suivante va droit au plafond. Chaque mise use le quota de la vérification anti-bot
     # (~9-10 mises). 0 = minimum.
     sniper_bid_push: float = 0.0
+    # Part des mises laissées au minimum malgré SNIPER_BID_PUSH (une enchère sur N, tirée de son identifiant) : un
+    # groupe témoin, pour mesurer si pousser la mise rapporte plus qu'il ne coûte (`sniper-report --breakdown`,
+    # ligne « mise au minimum »). 0 = aucune.
+    sniper_bid_push_control_share: float = 0.0
+    # Valeur minimale d'une mise, en WB : chance de gagner × (revente attendue − mise), d'après les mises réelles
+    # des SNIPER_BID_VALUE_DAYS derniers jours (core/winmodel.py). Le quota de la vérification anti-bot va ainsi aux
+    # mises qui rapportent le plus. `python -m src.main sniper-value` aide à choisir. 0 = pas de seuil.
+    sniper_min_bid_value: float = 0.0
+    sniper_bid_value_days: float = 14.0
     sniper_settle_grace_seconds: int = 30
     # Vérification anti-bot en attente : une seule mise réelle tentée toutes les N s, pour voir si elle est levée
     # (le 16/10, ~45 mises refusées en 1 h 30). 0 = chaque mise est tentée : la levée est vue tout de suite, utile
@@ -217,6 +226,7 @@ class Settings(BaseSettings):
     night_deal_ratio_max: float = 0.50
     night_window_seconds: int = 30
     night_budget_bonus: int = 0
+    night_min_bid_value: float = 0.0  # valeur minimale d'une mise la nuit (0 = SNIPER_MIN_BID_VALUE)
 
     # --- Capital : positions achetées pour être revendues ----------------------------
     portfolio_slots: int = 5              # = places de vente simultanées du site

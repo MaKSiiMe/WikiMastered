@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from src.core import timeutils
+from src.core.winmodel import CONTROL_MARK
 from src.roi import plural, wb
 
 COLLECTION_PREFIX = "collection"
@@ -252,12 +253,23 @@ def _time_left(r) -> str:
     return _bucket(r["first_seconds_left"], [(30, "< 30 s"), (60, "30-60 s")], "≥ 60 s")
 
 
+def _push(r) -> str:
+    """Mise poussée au-dessus du minimum (SNIPER_BID_PUSH), ou laissée au minimum : à dessein (groupe témoin,
+    SNIPER_BID_PUSH_CONTROL_SHARE), ou parce que le minimum touchait déjà le plafond."""
+    if str(r["reason"] or "").endswith(CONTROL_MARK):
+        return "au minimum (témoin)"
+    if r["first_amount"] is None or r["first_min"] is None:
+        return "inconnu"
+    return "poussée" if r["first_amount"] > r["first_min"] else "au minimum"
+
+
 BREAKDOWN: list[tuple[str, Callable[..., str]]] = [
     ("Avant notre mise", _contest),
     ("Notre mise / estimation", _bid_share),
     ("Estimation", _estimate),
     ("Fin de l'enchère (Paris)", _end_hour),
     ("Temps restant à notre mise (nouvelles mises seulement)", _time_left),
+    ("Mise poussée au-dessus du minimum", _push),
 ]
 
 
@@ -265,7 +277,7 @@ BREAKDOWN: list[tuple[str, Callable[..., str]]] = [
 ORDER = ["personne n'avait misé", "déjà misée, minimum ≤ ×1,5 le départ", "déjà misée, minimum ×1,5 à ×3",
          "déjà misée, minimum > ×3 le départ", "< 40 %", "40-55 %", "55-70 %", "≥ 70 %", "< 500 WB", "500-1000 WB",
          "1000-2000 WB", "≥ 2000 WB", "00-08 h", "08-14 h", "14-20 h", "20-24 h", "< 30 s", "30-60 s", "≥ 60 s",
-         "inconnu"]
+         "poussée", "au minimum (témoin)", "au minimum", "inconnu"]
 
 
 def _gain(r, fee: float) -> float:

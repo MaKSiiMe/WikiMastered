@@ -790,6 +790,14 @@ class Database:
             "SELECT card_id, average, observed_at FROM price_history WHERE rarity = ? AND average IS NOT NULL "
             "ORDER BY observed_at", (rarity,))
 
+    async def bid_outcomes(self, since: datetime) -> list[aiosqlite.Row]:
+        """Mises de positions réelles depuis `since`, pour la valeur d'une mise (core/winmodel.py) : acceptées par le
+        site (gagnées ou perdues), et refusées par la vérification anti-bot (des occasions manquées)."""
+        return await self._all(
+            "SELECT auction_id, amount, reference_price, is_shiny, status, sale_price, reason FROM bids "
+            "WHERE dry_run = 0 AND reason LIKE 'revente%' AND placed_at >= ? AND (status IN ('won', 'lost', 'outbid') "
+            "OR (status = 'rejected' AND note LIKE '%anti-bot%')) ORDER BY id", (iso(since),))
+
     async def position_bids_outcome(self, since: datetime, rarity: str) -> aiosqlite.Row:
         """Enchères de positions misées depuis `since` (dernière mise de chacune) : nombre, gagnées (réelles ou
         simulées), mises réelles parties (refusées exclues)."""
