@@ -212,7 +212,7 @@ def test_queued_position_jumps_less_profitable_waiting_sales():
     assert pf((200.0,)).required_profit == 135            # une seule vente en attente pour 2 places
     assert pf((200.0, 90.0, 500.0)).required_profit == 201  # passer devant la 2e plus rentable (200) suffit
     assert pf((900.0, 800.0, 700.0)).required_profit == 270  # jamais plus que l'ancien seuil (50 % du budget)
-    assert pf((math.inf, math.inf)).required_profit == 270   # liquidations, ventes demandées : toujours devant
+    assert pf((math.inf, math.inf)).required_profit == 270   # ventes demandées sur Discord : toujours devant
     assert pf((200.0, 90.0)).queue_profit((300.0,)) == 201   # une position ouverte dans le passage compte aussi
     assert pf((), sale_room=0).required_profit == 270        # places prises par tes ventes : vraie attente
 
@@ -220,7 +220,7 @@ def test_queued_position_jumps_less_profitable_waiting_sales():
 def test_waiting_profits_follow_the_sale_queue():
     rows = [{"amount": 3000, "reference_price": 4500.0, "reason": None, "base_amount": None},
             {"amount": None, "reference_price": None, "reason": "cote 1400", "base_amount": 1407},
-            {"amount": 800, "reference_price": 1000.0, "reason": "liquidation après 3 invendus", "base_amount": None}]
+            {"amount": None, "reference_price": None, "reason": "vente manuelle (Discord)", "base_amount": 500}]
     assert waiting_profits(rows, 0.0) == (1500.0, 1407.0, math.inf)
     assert waiting_profits(rows[:1], 0.1) == (4500 * 0.9 - 3000,)
 

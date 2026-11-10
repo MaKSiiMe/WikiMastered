@@ -110,12 +110,12 @@ async def test_message_buttons_survive_a_restart():
     """L'action et la vente sont dans l'identifiant du bouton : le bot les retrouve après un redémarrage."""
     view = message_view({"kind": "relist", "listing": 42})
     ids = [item.custom_id for item in view.children]
-    assert ids == ["wm:price:42", "wm:cheap:42", "wm:keep:42"]
+    assert ids == ["wm:price:42", "wm:keep:42"]
     template = MessageButton.__discord_ui_compiled_template__
     assert all(re.fullmatch(template, i) for i in ids)
     assert not re.fullmatch(template, "wm:verif-faite")  # le bouton anti-bot garde le sien
     assert message_view({"kind": "relist"}) is None and message_view({"kind": "autre", "listing": 1}) is None
-    assert set(MESSAGE_BUTTONS) == {"relist", "fire_sale", "kept", "stale"}
+    assert set(MESSAGE_BUTTONS) == {"relist", "kept", "stale"}
 
 
 @pytest.mark.asyncio
@@ -206,13 +206,13 @@ async def test_stale_position_is_signalled_once_with_buttons(tmp_path):
     assert await inv.warn_stale_positions() == 0  # une seule alerte
     assert len(sent) == 1
     view = message_view(actions)
-    assert [i.custom_id for i in view.children] == [f"wm:stalefire:{stale}", f"wm:stalekeep:{stale}"]
+    assert [i.custom_id for i in view.children] == [f"wm:stalekeep:{stale}"]
     await db.close()
 
 
 @pytest.mark.asyncio
 async def test_orders_apply_when_the_published_sale_ends_unsold(tmp_path):
-    """« Garder » ou « Brader » sur une vente déjà publiée : appliqué à sa fin ; une position close n'est jamais
+    """« Garder » sur une vente déjà publiée : appliqué à sa fin ; une position close n'est jamais
     remise en vente (carte gardée sur Discord pendant que sa vente était publiée)."""
     from src import orders
     from src.workers.inventory_manager import InventoryManager
@@ -236,34 +236,17 @@ async def test_orders_apply_when_the_published_sale_ends_unsold(tmp_path):
     assert (await db.get_bid(keep))["closed"] == 1 and await orders.take(db, keep) is None
     assert not await db._all("SELECT * FROM listings WHERE status = 'scheduled'")
 
-    fire = await held_position(db, hours_ago=61)
-    await orders.give(db, fire, orders.FIRE)
-    await inv._unsold(await unsold_listing(fire), await db.get_bid(fire), "Ada (L)")
-    row = await db._one("SELECT base_amount, reason FROM listings WHERE bid_id = ? AND status = 'scheduled'", (fire,))
-    assert row["base_amount"] == 1 and row["reason"].startswith("liquidation")
+    # Ordre « Brader » d'une ancienne version, resté en base : ignoré, remise ordinaire à -10 %, jamais 1 WB.
+    old = await held_position(db, hours_ago=61)
+    await orders.give(db, old, "fire")
+    await inv._unsold(await unsold_listing(old), await db.get_bid(old), "Ada (L)")
+    row = await db._one("SELECT base_amount FROM listings WHERE bid_id = ? AND status = 'scheduled'", (old,))
+    assert row["base_amount"] == 3600
 
     closed = await held_position(db, hours_ago=62)
     await db.close_position(closed, None)  # gardée pendant que sa vente était publiée
     await inv._unsold(await unsold_listing(closed), await db.get_bid(closed), "Ada (L)")
     assert not await db._all("SELECT * FROM listings WHERE bid_id = ? AND status = 'scheduled'", (closed,))
-    await db.close()
-
-
-@pytest.mark.asyncio
-async def test_buying_a_discord_sale_to_one_wb_picks_a_late_ending_for_at_least_three_hours(tmp_path):
-    from src.workers.inventory_manager import InventoryManager
-
-    client, notifier = make_client(tmp_path, trades)
-    ctx = await make_context(tmp_path, client, notifier)
-    db = ctx.db
-    now = datetime.now(UTC)
-    bid = await held_position(db, hours_ago=60)
-    lid = await db.schedule_listing(owned_card_id="o", card_id="c1", title="Ada", rarity="L", base_amount=4000,
-                                    duration_minutes=720, post_at=now, target_end=now + timedelta(hours=12),
-                                    reason="position", bid_id=bid)
-    await InventoryManager(ctx).liquidate(lid)
-    row = await db.get_listing(lid)
-    assert row["base_amount"] == 1 and row["duration_minutes"] >= 180 and row["reason"].startswith("liquidation")
     await db.close()
 
 

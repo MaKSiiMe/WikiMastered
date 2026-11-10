@@ -10,7 +10,7 @@
   pour les revendre.
 - /shiny : les shiny en vente vus par le sniper, sans requête au site ; 💰 et plafond si rentable, menu pour les demander au sniper.
 - /echange : un échange envisagé est-il équitable ? Valeur de chaque côté et contre-offre (src/trades.py).
-- Boutons des messages « Revente sans acheteur », « Revente à 1 WB », « Position invendue » : identifiant fixe
+- Boutons des messages « Revente sans acheteur », « Position invendue » : identifiant fixe
   (wm:<action>:<vente>), encore actifs après un redémarrage du bot.
 """
 
@@ -56,13 +56,9 @@ OPEN_STATUSES = ("scheduled", "waiting")  # vente pas encore publiée : prix mod
 # Boutons des messages de vente, par sorte de message : (action, libellé, style).
 MESSAGE_BUTTONS = {
     "relist": [("price", "✏️ Changer le prix", discord.ButtonStyle.primary),
-               ("cheap", "⚡ Brader à 1 WB", discord.ButtonStyle.secondary),
                ("keep", "🔒 Garder", discord.ButtonStyle.secondary)],
-    "fire_sale": [("price", "✏️ Changer le prix", discord.ButtonStyle.primary),
-                  ("keep", "🔒 Garder", discord.ButtonStyle.secondary)],
     "kept": [("resell", "💰 Remettre en vente…", discord.ButtonStyle.primary)],
-    "stale": [("stalefire", "⚡ Brader", discord.ButtonStyle.primary),
-              ("stalekeep", "🔒 Garder", discord.ButtonStyle.secondary)],
+    "stale": [("stalekeep", "🔒 Garder", discord.ButtonStyle.primary)],
 }
 
 Handler = Callable[[discord.Interaction, int], Awaitable[None]]
@@ -803,19 +799,6 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             await close_buttons(submit, f"✏️ Prix changé : {wb(current['base_amount'])} → **{wb(price)} WB**.")
         await interaction.response.send_modal(PriceModal("Nouveau prix de départ", priced, row["base_amount"]))
 
-    async def cheap(interaction: discord.Interaction, listing_id: int) -> None:
-        row = await listing_or_reply(interaction, listing_id)
-        if row is None:
-            return
-        if inventory is None:
-            await interaction.response.send_message("Ventes désactivées (ENABLE_INVENTORY).", ephemeral=True)
-            return
-        await inventory.liquidate(listing_id)
-        current = await ctx.db.get_listing(listing_id)
-        log.info("Discord : vente %d bradée à 1 WB", listing_id)
-        await close_buttons(interaction, f"⚡ Bradée : **1 WB**, publiée {paris(current['post_at'])} pour "
-                                         f"{current['duration_minutes'] // 60} h, fin {paris(current['target_end'])}.")
-
     async def position_state(interaction: discord.Interaction, bid_id: int):
         """(position, ventes pas encore publiées, ventes publiées) ; répond et renvoie None si elle est déjà close."""
         bid = await ctx.db.get_bid(bid_id)
@@ -825,22 +808,6 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         rows = await ctx.db.open_listings_for_bid(bid_id)
         scheduled = [r for r in rows if r["status"] in OPEN_STATUSES]
         return bid, scheduled, [r for r in rows if r not in scheduled]
-
-    async def stale_fire(interaction: discord.Interaction, bid_id: int) -> None:
-        state = await position_state(interaction, bid_id)
-        if state is None:
-            return
-        _, scheduled, _ = state
-        if scheduled and inventory is not None:
-            await inventory.liquidate(scheduled[0]["id"])
-            current = await ctx.db.get_listing(scheduled[0]["id"])
-            note = (f"⚡ Bradée à **1 WB**, publiée {paris(current['post_at'])} pour "
-                    f"{current['duration_minutes'] // 60} h, fin {paris(current['target_end'])}.")
-        else:
-            await orders.give(ctx.db, bid_id, orders.FIRE)
-            note = "⚡ Noté : si la vente en cours reste invendue, la carte part tout de suite à **1 WB**."
-        log.info("Discord : position %d bradée", bid_id)
-        await close_buttons(interaction, note)
 
     async def stale_keep(interaction: discord.Interaction, bid_id: int) -> None:
         state = await position_state(interaction, bid_id)
@@ -879,8 +846,13 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             await close_buttons(submit, f"{done.title}" + (f"\n{done.description}" if done.description else ""))
         await interaction.response.send_modal(PriceModal(f"Revendre {row['title']}", priced, row["base_amount"]))
 
-    handlers = {"price": change_price, "cheap": cheap, "keep": keep_from_listing, "resell": resell,
-                "recount": recount, "valuehist": value_history, "stalefire": stale_fire, "stalekeep": stale_keep}
+    async def no_fire_sale(interaction: discord.Interaction, _: int) -> None:
+        """Bouton « Brader » d'un ancien message : la revente à 1 WB n'existe plus."""
+        await close_buttons(interaction, "Le bot ne brade plus à 1 WB. Une carte qu'il renonce à vendre est gardée "
+                                         "avec une étiquette.")
+
+    handlers = {"price": change_price, "cheap": no_fire_sale, "keep": keep_from_listing, "resell": resell,
+                "recount": recount, "valuehist": value_history, "stalefire": no_fire_sale, "stalekeep": stale_keep}
     client.wm_handlers = handlers  # type: ignore[attr-defined]
     client.add_dynamic_items(MessageButton)
 
