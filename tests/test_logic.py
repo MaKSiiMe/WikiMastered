@@ -267,6 +267,10 @@ def test_observed_sales_cap_the_stale_site_average():
     assert combine([500, 480, 520], 3, 300.0) == Quote(300.0, 3)  # plafonné par prudence
     assert combine([], 0, 391.0) == Quote(391.0, 0)               # sans observation : pas fiable
     assert not combine([], 0, 391.0).reliable(2)
+    # Prix en hausse : la moyenne du site, en retard, plafonne avec une marge ; jamais au-dessus des ventes.
+    assert combine([500, 480, 520], 3, 300.0, site_margin=1.1).average == pytest.approx(330.0)
+    assert combine([500, 480, 520], 3, 480.0, site_margin=1.1) == Quote(500.0, 3)
+    assert combine([], 0, 391.0, site_margin=1.1) == Quote(391.0, 0)  # la moyenne seule reste telle quelle
 
 
 def test_sale_and_discard_selection_keeps_one_and_protects():

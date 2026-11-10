@@ -136,7 +136,8 @@ async def build_context(settings: Settings):
     await db.connect()
     notifier.store = db  # messages uniques des positions
     api = WikiMastersAPI(client)
-    ctx = Context(settings, client, api, db, notifier, PriceService(api, db, settings.price_cache_ttl_minutes, settings.price_recent_sales))
+    ctx = Context(settings, client, api, db, notifier, PriceService(api, db, settings.price_cache_ttl_minutes, settings.price_recent_sales,
+                                                                    settings.price_site_margin))
     try:
         yield ctx
     finally:
@@ -367,13 +368,19 @@ def hours_text(rows, rarities: list[str]) -> str:
 PRICES_SHOWN = 15  # ventes observées affichées par rareté
 
 
+def margin_text(site_margin: float) -> str:
+    """Marge du plafond à côté de la cote du site (« 7707 WB × 1,1 ») ; rien sans marge."""
+    return f" × {site_margin:g}".replace(".", ",") if site_margin != 1.0 else ""
+
+
 def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime,
                 md: bool = False, resale: dict[tuple[str, bool], Quote] | None = None, fee: float = 0.0,
-                shiny: bool = False) -> str:
+                shiny: bool = False, site_margin: float = 1.0) -> str:
     """Ventes observées d'une carte, estimation du bot, achats du bot et ventes en cours (commande prices).
     `md` : version Discord (/prix, voir prices_md). `resale` : revente estimée par
     (rareté, shiny) sur les ventes observées seules, d'où la mise conseillée pour l'acheter. `shiny` : les exemplaires
-    shiny seuls (ventes, estimation, achats, ventes en cours), sans la cote du site qui ne les distingue pas."""
+    shiny seuls (ventes, estimation, achats, ventes en cours), sans la cote du site qui ne les distingue pas. `site_margin` : marge du plafond
+    (PRICE_SITE_MARGIN), montrée à côté de la cote."""
     def paris(value) -> str:
         moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
         return f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
@@ -395,7 +402,7 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
     bought = [b for b in bought if bool(b["is_shiny"]) == shiny]
     selling = [a for a in selling if a.shiny == shiny]
     if md:
-        return prices_md(observed, bought, selling, quotes, site, me, now, resale or {}, fee, shiny)
+        return prices_md(observed, bought, selling, quotes, site, me, now, resale or {}, fee, shiny, site_margin)
     lines = [f"{title}{' ✨ shiny' if shiny else ''}",
              "Ventes observées par le bot : enchères finies avec au moins une mise, prix lu moins de 2 min avant la fin (une mise de dernière seconde peut manquer). Une vente sans mise n'est jamais "
              "comptée."]
@@ -407,7 +414,7 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
         quote = quotes.get(rarity)
         estimate = f"~{quote.average:.0f} WB" if quote and quote.average is not None else "aucune"
         average = site.get(rarity, (None, None))[0]
-        site_text = f"{average:.0f} WB" if average is not None else "inconnue"
+        site_text = f"{average:.0f} WB{margin_text(site_margin)}" if average is not None else "inconnue"
         if shiny:
             lines.append(f"\n{rarity} ✨ : {len(sales)} vente(s) observée(s) · estimation du bot {estimate} (médiane des "
                          f"5 dernières ventes shiny, sans la moyenne du site)")
@@ -452,7 +459,7 @@ PRICES_FOOTER = ("Ventes finies avec au moins une mise, vues par le bot (une mis
 
 
 def prices_md(observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime,
-              resale: dict[tuple[str, bool], Quote], fee: float, shiny: bool) -> str:
+              resale: dict[tuple[str, bool], Quote], fee: float, shiny: bool, site_margin: float = 1.0) -> str:
     """/prix : par rareté, l'estimation et la mise conseillée en tête, puis les dernières ventes ; ensuite les achats
     du bot et les ventes en cours. Ce qui explique les chiffres est dans le pied du message (PRICES_FOOTER)."""
     def when(value) -> str:
@@ -480,7 +487,7 @@ def prices_md(observed, bought, selling, quotes: dict, site: dict, me: str | Non
         average = site.get(rarity, (None, None))[0]
         how = "médiane des 5 dernières ventes shiny" if shiny else \
             "médiane des 5 dernières, plafonnée par la cote du site" + \
-            (f" ({wb(average)} WB)" if average is not None else " (inconnue)")
+            (f" ({wb(average)} WB{margin_text(site_margin)})" if average is not None else " (inconnue)")
         lines += ["" if lines else None, f"**{rarity}**{' ✨' if shiny else ''} · {plural(len(sales), 'vente')} · "
                   f"estimation {estimate}", f"*{how}*"]
         lines += [line for version in ((True,) if shiny else (False, True)) if (line := bid_line(rarity, version))]
@@ -528,7 +535,7 @@ async def prices_status(ctx: Context, title: str, md: bool = False, shiny: bool 
             resale.update({(r, version): q for r, q in (await ctx.prices.observed_quote(card_id, version)).items()})
     name = selling[0].title if selling else title
     return prices_text(name, observed, await ctx.db.bids_for_title(title), selling, quotes, site,
-                       ctx.client.user_id, now, md, resale, ctx.settings.sale_fee_pct, shiny)
+                       ctx.client.user_id, now, md, resale, ctx.settings.sale_fee_pct, shiny, ctx.prices.site_margin)
 
 
 async def roi_report(ctx: Context, days: int) -> Roi:

@@ -9,7 +9,8 @@ Sources, de la plus fiable à la moins fiable :
    aux comptes non PRO, donc rarement disponible.
 3. Moyenne ?scope=summary [KZ bridge/prices.js], sans nombre de ventes hors PRO.
 
-Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence), sauf pour un
+Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence ; × PRICE_SITE_MARGIN :
+la moyenne du site suit une hausse avec retard, voir `combine`), sauf pour un
 shiny : la moyenne du site ne les distingue pas (elle vaut ~10 % de leurs ventes), ventes shiny observées seules.
 Contre la manipulation des cotes (ventes factices entre comptes, relevé par la presse et JVFlux) :
 une vente plus de 3 fois au-dessus ou au-dessous de la médiane est écartée, et les ventes entre
@@ -100,12 +101,16 @@ def steadiness(observed: dict[str, tuple[list[tuple[int, bool]], int]]) -> dict[
 
 
 def combine(observed: list[int], n_observed: int, site_average: float | None,
-            contested: int | None = None, spread: float | None = None) -> Quote:
-    """Médiane des ventes observées, plafonnée par la moyenne du site ; sinon la moyenne seule."""
+            contested: int | None = None, spread: float | None = None, site_margin: float = 1.0) -> Quote:
+    """Médiane des ventes observées, plafonnée par la moyenne du site × `site_margin` ; sinon la moyenne seule.
+    La moyenne du site suit les prix avec retard : quand ils montent, elle plafonne trop bas. Du 05 au 10/11 (prix
+    des L +10 % en une semaine à carte égale, 40 % des estimations plafonnées), rejeu des ventes L : une marge de
+    1,1 donnait 34 % d'achats et 21 % de gain en plus pour autant de pertes (3 %) ; sans plafond, 10 % de pertes
+    (Ana de Armas L le 10/11 : vendue 11 000 à 20 000, moyenne du site 7707)."""
     if observed:
         estimate = robust_median(observed)
         if site_average is not None:
-            estimate = min(estimate, site_average)
+            estimate = min(estimate, site_average * site_margin)
         return Quote(estimate, n_observed, contested, spread)
     return Quote(site_average, 0)
 
@@ -130,11 +135,13 @@ def recent_estimates(rows: list[SaleRow], recent_n: int) -> dict[str, tuple[floa
 
 
 class PriceService:
-    def __init__(self, api: WikiMastersAPI, db: Database, default_ttl_minutes: float, recent_n: int = 5):
+    def __init__(self, api: WikiMastersAPI, db: Database, default_ttl_minutes: float, recent_n: int = 5,
+                 site_margin: float = 1.0):
         self.api = api
         self.db = db
         self.default_ttl = timedelta(minutes=default_ttl_minutes)
         self.recent_n = recent_n
+        self.site_margin = site_margin  # le plafond de l'estimation est la moyenne du site × cette marge
         self.pro = False  # compte PRO, d'après la dernière cote lue (isPro)
 
     async def _fetch(self, card_id: str, wait: bool,
@@ -198,7 +205,8 @@ class PriceService:
                     raise
                 market = {}
         keys = {r for r in market if r in RARITIES} | set(observed)
-        quotes = {r: combine(*observed.get(r, ([], 0)), market.get(r, (None, None))[0], *steady.get(r, (None, None)))
+        quotes = {r: combine(*observed.get(r, ([], 0)), market.get(r, (None, None))[0], *steady.get(r, (None, None)),
+                             site_margin=self.site_margin)
                   for r in keys}
         if not quotes and ANY in market:
             quotes[ANY] = combine([], 0, market[ANY][0])

@@ -168,6 +168,9 @@ class Settings(BaseSettings):
     # 7797 et 8000, revendue 5000). Seules ses propres ventes comptent, la cote du site n'entre pas dans l'estimation.
     sniper_shiny_min_sales: int = 8
     price_recent_sales: int = 7  # estimation = médiane des N dernières ventes observées
+    # L'estimation est plafonnée par la moyenne du site × cette marge. 1 : la moyenne elle-même. Elle suit les prix
+    # avec retard : quand ils montent, 1,1 laisse le sniper acheter les cartes en hausse (voir pricing.combine).
+    price_site_margin: float = Field(1.0, ge=1.0)
     # Achat d'une position : parmi ces N ventes, au moins tant de ventes disputées (plus d'une mise), et la plus
     # haute pas plus de X fois la plus basse (0 = sans limite). Le 18/10, l'éclipse XXIe était achetée 882 sur une
     # estimation de 1197 faite de 3 ventes au prix de départ et de 2 disputées (970 et 1774).
