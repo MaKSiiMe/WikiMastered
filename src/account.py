@@ -45,7 +45,7 @@ async def copy_values(ctx: Context, rows: list[OwnedCard]) -> list[tuple[OwnedCa
         if row.is_shiny and not sales:
             sales = trusted(observed.get((row.catalog_id, False), {})).get(rarity)
         average = site.get(row.catalog_id, {}).get(rarity)
-        value = combine(*(sales or ([], 0)), average).average
+        value = combine(*(sales or ([], 0)), average, site_margin=ctx.prices.site_margin).average
         out.append((row, value if value is not None else frozen.get(row.catalog_id, {}).get(rarity)))
     return out
 

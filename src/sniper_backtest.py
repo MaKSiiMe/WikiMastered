@@ -72,7 +72,7 @@ def cases_from(sales: Iterable, site: Iterable, since: datetime, s: Settings) ->
             estimate = robust_median(trusted_prices(last))
             when, values = averages.get(r["card_id"], ([], []))
             if i := bisect_right(when, end):  # type: ignore[arg-type]
-                estimate = min(estimate, values[i - 1])
+                estimate = min(estimate, values[i - 1] * s.price_site_margin)
             prices = [p for p, _ in last if p > 0]
             contested = sum(not single for _, single in last)
             spread = max(prices) / min(prices) if prices else None
