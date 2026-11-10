@@ -639,6 +639,47 @@ async def test_tagged_purchase_becomes_a_position_at_the_price_paid(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tag_on_an_older_card_is_found_in_the_whole_collection(tmp_path):
+    """10/11 : Katseye ✨ achetée le 05/11 et étiquetée « revente » cinq jours après n'était jamais reprise : elle
+    n'était plus parmi les 100 dernières cartes arrivées, et la collection entière n'était lue qu'avec la défausse."""
+    from tests.test_session import cookie_for
+
+    arrived = (datetime.now(UTC) - timedelta(days=5)).isoformat()
+    old = {**owned("kat", "ckat", "Katseye"), "obtained_at": arrived, "tags": [{"name": "revente"}]}
+    newer = [{**owned(f"n{i}", f"cn{i}", f"Carte {i}"), "obtained_at": arrived} for i in range(100)]
+    reads = {"pages": 0, "tags": 0}
+
+    def handler(request):
+        path = request.url.path
+        if request.url.host.endswith("supabase.co"):
+            reads["tags"] += 1
+            if path == "/rest/v1/tags":
+                return httpx.Response(200, json=[{"id": "t-rev", "name": "Revente"}])
+            assert path == "/rest/v1/user_card_tags" and request.url.params["tag_id"] == "eq.t-rev"
+            return httpx.Response(200, json=[{"user_card_id": "kat"}])
+        if path == "/api/my-collection":
+            reads["pages"] += 1
+            page = int(request.url.params["page"])
+            return httpx.Response(200, json={"collection": (newer + [old])[page * 50:page * 50 + 50]})
+        return httpx.Response(404, json={})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, supabase_anon_key="anon-key",
+                                   wm_cookie=cookie_for("a1", "r1", 3600))
+    ctx = await make_context(tmp_path, client, notifier)
+    await seed_observed(ctx.db, "ckat", [1400, 1500, 1450], rarity="L")
+    inv = InventoryManager(ctx)
+    recent = await inv._recent_copies()
+    assert len(recent) == 100 and await inv.adopt_manual(recent) == 0  # avant : jamais vue
+    found = await inv._older_tagged(recent)
+    assert [c.id for c in found] == ["kat"] and await inv.adopt_manual(recent + found) == 1
+    assert (await ctx.db.positions_to_list())[0]["auction_id"] == "paquet-kat"
+    # Reprise : plus aucune lecture de la collection, seulement la liste des cartes étiquetées.
+    pages = reads["pages"]
+    assert await inv._older_tagged(recent) == [] and reads["pages"] == pages
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
 async def test_freed_slot_goes_to_the_most_profitable_sale(tmp_path):
     """26/10 : Gabby Williams (L d'un paquet, 1407 WB) attendait derrière des reventes au prix d'achat. Une place
     libérée va au plus grand gain au prix demandé."""

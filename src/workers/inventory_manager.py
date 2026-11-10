@@ -86,6 +86,10 @@ MANUAL_BOUGHT_BEFORE = timedelta(days=2)
 MANUAL_BOUGHT_AFTER = timedelta(minutes=30)
 # Exemplaire arrivé depuis moins de N : sa vente n'est peut-être pas encore notée (HARVEST_DELAY du sniper), il attend.
 MANUAL_SETTLE = timedelta(minutes=10)
+# Étiquette posée sur une carte qui n'est plus parmi les dernières arrivées : toute la collection est relue pour la
+# retrouver, dès qu'une nouvelle carte étiquetée apparaît, sinon au plus à cet intervalle (carte qui attend la vente
+# d'un autre exemplaire, ou sans cote).
+MANUAL_FULL_RETRY = timedelta(hours=6)
 # Positions que le bot renonce à vendre, dont l'étiquette POSITION_UNSOLD_TAG reste à poser : position -> essais.
 # L'exemplaire invendu revient dans la collection sous un nouvel identifiant, parfois une minute après la fin.
 UNSOLD_TAG_KV = "unsold_to_tag"
@@ -431,6 +435,9 @@ class InventoryManager(Worker):
         self._copy_retry: dict[int, tuple[int, datetime]] = {}  # position -> (essais manqués, prochain essai)
         self._antibot_since: datetime | None = None  # mises en vente refusées : vérification anti-bot à faire
         self._antibot_retry_at = datetime.min.replace(tzinfo=UTC)  # prochain essai tant qu'elle attend
+        self._manual_sought: set[str] = set()  # exemplaires étiquetés déjà cherchés dans toute la collection
+        self._manual_full_at = datetime.min.replace(tzinfo=UTC)  # dernière lecture complète pour eux
+        self._manual_tags_warned = False
 
     async def setup(self) -> None:
         self._next_scan = utcnow() + timedelta(minutes=2)
@@ -472,7 +479,8 @@ class InventoryManager(Worker):
         now = utcnow()
         if s.manual_resale_tag.strip() and now >= self._next_manual:
             self._next_manual = now + MANUAL_CHECK
-            await self.adopt_manual(await self._recent_copies())
+            recent = await self._recent_copies()
+            await self.adopt_manual(recent + await self._older_tagged(recent))
         if now >= self._next_stale:
             self._next_stale = now + STALE_CHECK
             await self.warn_stale_positions()
@@ -704,6 +712,57 @@ class InventoryManager(Worker):
                 rows += (await self.api.collection_page(number, sort="added")).rows()
         except ApiError as exc:
             self.log.debug("derniers exemplaires illisibles (%s)", exc)
+        return rows
+
+    async def _tagged_ids(self) -> set[str] | None:
+        """Exemplaires qui portent MANUAL_RESALE_TAG, d'après les tables d'étiquettes du site (2 requêtes). None :
+        illisible (prévenu une fois dans les logs), ou étiquette pas encore créée."""
+        tag, problem = self.settings.manual_resale_tag.strip(), ""
+        try:
+            status, data = await self.ctx.client.supabase("GET", "tags", params={
+                "select": "id,name", "user_id": f"eq.{self.api.user_id}"})
+            ids = {tag_key(str(t.get("name", ""))): t["id"] for t in data or [] if isinstance(t, dict)} \
+                if status == 200 else {}
+            if status != 200:
+                problem = f"étiquettes illisibles (HTTP {status})"
+            elif tag_key(tag) not in ids:
+                return None
+            else:
+                status, data = await self.ctx.client.supabase("GET", "user_card_tags", params={
+                    "select": "user_card_id", "tag_id": f"eq.{ids[tag_key(tag)]}"})
+                if status == 200 and isinstance(data, list):
+                    return {str(r["user_card_id"]) for r in data if isinstance(r, dict) and r.get("user_card_id")}
+                problem = f"cartes étiquetées illisibles (HTTP {status})"
+        except ApiError as exc:
+            problem = str(exc)
+        if not self._manual_tags_warned:
+            self._manual_tags_warned = True
+            self.log.warning("étiquette « %s » : %s ; seules les 100 dernières cartes arrivées sont regardées",
+                             tag, problem)
+        return None
+
+    async def _older_tagged(self, recent: list[OwnedCard]) -> list[OwnedCard]:
+        """Cartes étiquetées MANUAL_RESALE_TAG absentes des dernières arrivées. Le 10/11, Katseye ✨ (achetée le 05/11),
+        Intraçables (08/11) et Lucas Hernandez ✨ étiquetées après coup n'étaient jamais reprises : seules les 100
+        dernières cartes étaient regardées, et la lecture complète ne se faisait qu'avec la défausse, coupée.
+        La liste des exemplaires étiquetés coûte 2 requêtes ; toute la collection n'est relue (requêtes de fond) que
+        pour un exemplaire étiqueté jamais cherché, ou tous les MANUAL_FULL_RETRY pour ceux qui attendent."""
+        tagged = await self._tagged_ids()
+        if not tagged:
+            return []
+        state = await self.db.kv_get(MANUAL_KV) or {}
+        unknown = tagged - set(state.get("adopted", [])) - {c.id for c in recent}
+        now = utcnow()
+        if not unknown or (unknown <= self._manual_sought and now - self._manual_full_at < MANUAL_FULL_RETRY):
+            return []
+        try:
+            rows = [c for c in await self.api.load_collection(background=True) if c.id in unknown]
+        except (RateLimited, ApiError) as exc:
+            self.log.debug("collection illisible pour les cartes étiquetées (%s) : au prochain passage", exc)
+            return []
+        self._manual_sought, self._manual_full_at = self._manual_sought | unknown, now
+        self.log.info("étiquette « %s » : %d carte(s) hors des dernières arrivées, %d retrouvée(s) dans la collection",
+                      self.settings.manual_resale_tag, len(unknown), len(rows))
         return rows
 
     async def adopt_manual(self, rows: list[OwnedCard]) -> int:
