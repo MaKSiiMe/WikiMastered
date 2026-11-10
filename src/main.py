@@ -45,6 +45,7 @@ from src.core.models import MarketPage
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService, Quote, advised_bid
 from src.core.stats import network_lines, workers_line
+from src.core.winmodel import thresholds_text
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
 from src.overrides import load as load_overrides
 from src.pauses import load as load_pauses
@@ -682,6 +683,17 @@ async def sniper_backtest(settings: Settings, days: float, capital: int, resale:
     print(backtest_text(cases, actual, settings, budget, days, resale))
 
 
+async def sniper_value(settings: Settings, days: float) -> None:
+    """Seuils de SNIPER_MIN_BID_VALUE rejoués sur les mises réelles : base seule, aucune requête au site."""
+    db = Database(settings.data_dir / "wikimastered.db")
+    await db.connect()
+    try:
+        rows = await db.bid_outcomes(utcnow() - timedelta(days=days))
+    finally:
+        await db.close()
+    print(thresholds_text(rows, days, settings.sale_fee_pct))
+
+
 async def collection_status(ctx: Context) -> None:
     """Relit la collection à compléter et affiche possédées / manquantes."""
     s = ctx.settings
@@ -826,6 +838,9 @@ def main(argv: list[str] | None = None) -> None:
     bt.add_argument("--capital", type=int, default=20000, help="WikiBidous + positions (budget d'une position)")
     bt.add_argument("--resale", type=float, default=1.0, help="revente = estimation × ce facteur (défaut 1)")
     bt.add_argument("--rarity", default="L")
+    sv = sub.add_parser("sniper-value", help="ce que rapporte une mise selon sa valeur, et le seuil "
+                                             "SNIPER_MIN_BID_VALUE à choisir (lecture seule, sans requête au site)")
+    sv.add_argument("--days", type=float, default=7)
     jr = sub.add_parser("journal", help="lignes JSON du journal détaillé (data/logs/journal.jsonl), lecture seule")
     jr.add_argument("--since", default="6h", help="période : 90m, 6h, 2j (défaut 6h)")
     jr.add_argument("--ev", default="", help="seulement ces événements : stats,enchere…")
@@ -857,6 +872,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if command == "sniper-backtest":  # base seule : aucune requête au site
         asyncio.run(sniper_backtest(settings, args.days, args.capital, args.resale, args.rarity.upper()))
+        return
+    if command == "sniper-value":  # base seule : aucune requête au site
+        asyncio.run(sniper_value(settings, max(0.5, args.days)))
         return
     commands: dict[str, Callable[[Context], Awaitable[object]]] = {
         "check": check_session,

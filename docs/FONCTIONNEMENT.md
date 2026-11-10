@@ -111,7 +111,19 @@ Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'
 | Solde | jamais sous 50 WB (`SNIPER_MIN_BALANCE_RESERVE`) |
 | Positions | 5 au plus (`PORTFOLIO_MAX_POSITIONS`, 0 = aucun plafond) |
 
-**Mise** : le minimum du site. `SNIPER_BID_PUSH` la pousse vers le plafond, et `SNIPER_ALLOW_REBID=true` remise au plafond, une seule fois, si elle est surenchérie. Le bot ignore toute carte sur laquelle tu mises toi-même.
+**Valeur d'une mise** (`SNIPER_MIN_BID_VALUE`, coupé par défaut) : la vérification anti-bot ne laisse passer qu'un petit nombre de mises, et le bénéfice attendu ne dit pas la chance de gagner. Une mise très sous l'estimation promet beaucoup et gagne rarement : les autres joueurs font monter l'enchère. Le bot calcule donc ce qu'une mise rapporte en moyenne :
+
+```
+valeur = chance de gagner × (revente attendue − mise)
+```
+
+- Chance de gagner : le taux de victoire de tes mises passées de même rapport mise / estimation, shiny à part.
+- Revente attendue : l'estimation × ce que tes reventes ont vraiment donné par rapport à leur estimation.
+- Le calcul se refait chaque heure sur les mises réelles des `SNIPER_BID_VALUE_DAYS` derniers jours. Sous 200 mises réglées, aucun seuil ne s'applique.
+
+Une première mise dont la valeur est sous le seuil est sautée (« valeur de la mise trop faible ») : le quota va aux meilleures, et le bot reste moins longtemps bloqué. `NIGHT_MIN_BID_VALUE` fixe un seuil plus haut pour les heures où tu ne peux pas faire la vérification. `python -m src.main sniper-value` montre, seuil par seuil, ce que tes occasions des derniers jours auraient rapporté.
+
+**Mise** : le minimum du site. `SNIPER_BID_PUSH` la pousse vers le plafond, et `SNIPER_ALLOW_REBID=true` remise au plafond, une seule fois, si elle est surenchérie. Le bot ignore toute carte sur laquelle tu mises toi-même. Pour savoir si pousser la mise rapporte plus qu'il ne coûte, `SNIPER_BID_PUSH_CONTROL_SHARE=0.3` laisse 30 % des mises au minimum : `python -m src.main sniper-report --breakdown` compare ensuite les deux groupes.
 
 ## Positions : revendre
 

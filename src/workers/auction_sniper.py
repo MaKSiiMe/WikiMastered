@@ -29,6 +29,7 @@ from __future__ import annotations
 import contextlib
 import math
 import random
+import zlib
 from collections import Counter, deque
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
@@ -42,6 +43,7 @@ from src.core.models import Auction, BidResult, Card, OwnedCard
 from src.core.notifier import Topic, auction_url, position_thread
 from src.core.pricing import Quote, combine, trusted
 from src.core.timeutils import in_window, local_dt, now_local, utcnow
+from src.core.winmodel import CONTROL_MARK, WinModel, fit
 from src.snipes import REASON as SNIPE_REASON
 from src.snipes import Snipe
 from src.snipes import load as load_snipes
@@ -99,6 +101,9 @@ HARVEST_DELAY = timedelta(seconds=120)
 # finies pas encore closes) s'arrête avant la fin de la fenêtre de mise et qu'au moins N cibles de la fenêtre restent
 # au-delà, la page suivante est lue au passage d'après, jusqu'à la page ENDED_MAX_PAGES.
 ENDED_MAX_PAGES = 3
+# Valeur d'une mise (core/winmodel.py) : modèle refait toutes les N, d'après les mises réglées depuis.
+VALUE_MODEL_REFRESH = timedelta(hours=1)
+LOW_VALUE = "valeur de la mise trop faible"
 ENDED_DEEPER_MIN_TARGETS = 2
 
 
@@ -128,6 +133,7 @@ class SnipeParams:
     min_contested: int = 0   # ventes disputées minimum parmi les dernières observées (position)
     max_spread: float = 0.0  # plus haute / plus basse des dernières ventes, au plus (0 = sans limite)
     min_bid_share: float = 0.0  # mise / estimation, au moins (0 = sans limite) : voir SNIPER_MIN_BID_SHARE
+    min_value: float = 0.0  # valeur d'une mise, au moins (0 = sans limite) : voir SNIPER_MIN_BID_VALUE
 
 
 def snipe_params(s: Settings, night: bool) -> SnipeParams:
@@ -140,6 +146,7 @@ def snipe_params(s: Settings, night: bool) -> SnipeParams:
         min_contested=s.sniper_min_contested_sales,
         max_spread=s.sniper_max_price_spread,
         min_bid_share=s.sniper_min_bid_share,
+        min_value=s.night_min_bid_value if night and s.night_min_bid_value > 0 else s.sniper_min_bid_value,
     )
 
 
@@ -251,6 +258,12 @@ class Decision:
     reason: str
     reference: float | None
     profit: float | None = None  # bénéfice attendu à la revente
+    value: float | None = None   # gain moyen attendu de la mise (core/winmodel.py) ; None : pas de modèle
+
+    @property
+    def control(self) -> bool:
+        """Mise laissée au minimum à dessein (SNIPER_BID_PUSH_CONTROL_SHARE)."""
+        return self.reason.endswith(CONTROL_MARK)
 
     @property
     def collection(self) -> bool:
@@ -347,6 +360,11 @@ def hopeless(auction: Auction, params: SnipeParams, quote: Quote | None, min_sal
     if auction.min_bid > math.floor(quote.average * (1 - fee) - min_profit):  # type: ignore[operator]
         return "bénéfice attendu trop faible"
     return None
+
+
+def in_control_group(auction_id: str, share: float) -> bool:
+    """Enchère du groupe témoin (mise laissée au minimum) : tirée de son identifiant, la même à chaque lecture."""
+    return share > 0 and zlib.crc32(auction_id.encode()) % 1000 < share * 1000
 
 
 def in_snipe_window(auction: Auction, me: str | None, window: int, now: datetime, min_left: int = 0) -> bool:
@@ -453,6 +471,9 @@ class AuctionSniper(Worker):
         self._collection_logged: dict[str, str | None] = {}
         self._vanished_retry: dict[int, datetime] = {}  # mise -> prochaine relecture de son enchère introuvable
         self._snipes: dict[str, Snipe] = {}  # cartes demandées sur Discord (/snipe), par clé de titre
+        self._win_model: WinModel | None = None  # valeur d'une mise, d'après les mises réglées
+        self._win_model_at = _EPOCH
+        await self._refresh_win_model()
         await self._load_collection()
         await self.reload_snipes()
         await self._recover_vanished()
@@ -531,6 +552,7 @@ class AuctionSniper(Worker):
             await self._refresh_engaged()
             await self._load_collection()
             await self.reload_snipes()
+            await self._refresh_win_model()
 
         # Une requête par passage, par priorité : carte de collection dans sa fenêtre de mise ou cible misée à
         # relire à sa fin ; repérage très en retard ; revente dans sa fenêtre ; cote à l'avance ; repérage.
@@ -583,6 +605,22 @@ class AuctionSniper(Worker):
             await self._settle()
             await self._reconcile()
         return self._delay(params, utcnow())
+
+    async def _refresh_win_model(self) -> None:
+        """Refait le modèle de la valeur d'une mise, si un seuil s'en sert et qu'il a vieilli."""
+        s = self.settings
+        wanted = max(s.sniper_min_bid_value, s.night_min_bid_value) > 0
+        if not wanted or utcnow() - self._win_model_at < VALUE_MODEL_REFRESH:
+            return
+        first = self._win_model_at == _EPOCH
+        self._win_model_at = utcnow()
+        had = self._win_model is not None
+        self._win_model = fit(await self.db.bid_outcomes(utcnow() - timedelta(days=s.sniper_bid_value_days)))
+        if self._win_model is None and (first or had):
+            self.log.warning("valeur d'une mise : pas assez de mises réelles réglées en %g j, SNIPER_MIN_BID_VALUE "
+                             "ne s'applique pas encore", s.sniper_bid_value_days)
+        elif self._win_model is not None and (first or not had):
+            self.log.info("valeur d'une mise : %s", self._win_model.describe())
 
     # ------------------------------------------------------------ repérage
     def _lateness(self, params: SnipeParams, now: datetime) -> list[tuple[float, float, tuple[str, str]]]:
@@ -1041,7 +1079,8 @@ class AuctionSniper(Worker):
                 continue
             if await self._bid(auction, decision, params):
                 self._outcome(auction, "misée (collection)" if decision.collection else "misée",
-                              mise=decision.amount, plafond=decision.ceiling, estimation=decision.reference)
+                              mise=decision.amount, plafond=decision.ceiling, estimation=decision.reference,
+                              **self._value_detail(decision))
                 if not rebid:
                     free -= 1
                     opened += 1
@@ -1049,7 +1088,12 @@ class AuctionSniper(Worker):
                         opened_profits.append(decision.profit or 0.0)
             else:
                 self._outcome(auction, "mise refusée : vérification anti-bot" if self._antibot_since
-                              else "mise refusée par le site")
+                              else "mise refusée par le site", mise=decision.amount,
+                              estimation=decision.reference, **self._value_detail(decision))
+
+    @staticmethod
+    def _value_detail(decision: Decision) -> dict:
+        return {} if decision.value is None else {"valeur": round(decision.value)}
 
     async def portfolio(self, now: datetime) -> Portfolio:
         held = await self.db.positions_summary()
@@ -1246,6 +1290,26 @@ class AuctionSniper(Worker):
             self._outcome(auction, "collection : trop chère" if collection_cap is not None else
                           refusal(auction, params, quote, min_sales(self.settings, auction.shiny), portfolio,
                                   self.settings.sale_fee_pct, resale, push), quote)
+        elif decision.profit is not None and decision.reference and not rebid:
+            decision = self._valued(auction, decision, params, quote)
+        return decision
+
+    def _valued(self, auction: Auction, decision: Decision, params: SnipeParams, quote: Quote) -> Decision | None:
+        """Première mise d'une position : écartée si sa valeur (core/winmodel.py) est sous SNIPER_MIN_BID_VALUE, pour
+        garder le quota anti-bot aux meilleures ; puis laissée au minimum si l'enchère est du groupe témoin. Le groupe
+        témoin est tiré après le seuil, sur la mise poussée : les deux groupes restent comparables."""
+        if self._win_model is not None:
+            value = self._win_model.value(decision.amount, decision.reference, auction.shiny,
+                                          self.settings.sale_fee_pct)
+            if 0 < params.min_value and value < params.min_value:
+                self._outcome(auction, LOW_VALUE, quote, mise=decision.amount, valeur=round(value))
+                return None
+            decision = replace(decision, value=value)
+        if decision.amount > auction.min_bid and in_control_group(auction.id,
+                                                                  self.settings.sniper_bid_push_control_share):
+            profit = (decision.profit or 0) + decision.amount - auction.min_bid
+            decision = replace(decision, amount=auction.min_bid, profit=profit, reason=(
+                f"revente ~{decision.reference:.0f} WB, bénéfice ~{profit:.0f}, {CONTROL_MARK}"))
         return decision
 
     async def _against_rivals(self, auction: Auction, quote: Quote) -> Quote:
@@ -1459,6 +1523,8 @@ class AuctionSniper(Worker):
             # Un rival a misé entre la lecture et la mise : une position repart au-dessus du nouveau minimum.
             if decision.profit is None:
                 retry = Decision(server_min, decision.ceiling, decision.reason, decision.reference)
+            elif decision.control:  # groupe témoin : toujours au minimum
+                retry = replace(decision, amount=server_min, profit=decision.profit - (server_min - decision.amount))
             else:
                 amount = pushed(server_min, decision.ceiling, self.settings.sniper_bid_push)
                 profit = decision.profit - (amount - decision.amount)
