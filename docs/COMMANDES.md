@@ -75,8 +75,7 @@ Le bot n'envoie jamais de message privé : tout arrive dans les salons des webho
 | Message | Boutons |
 |---|---|
 | Vérification anti-bot demandée (rappel toutes les heures) | **C'est fait** ; quand une mise repasse, le message devient « ✅ Vérification levée » |
-| Revente sans acheteur | **Changer le prix**, **Brader à 1 WB**, **Garder** (tant que la remise en vente n'est pas publiée) |
-| Revente à 1 WB | **Changer le prix**, **Garder** |
+| Revente sans acheteur | **Changer le prix**, **Garder** (tant que la remise en vente n'est pas publiée) |
 | Position invendue, Vente sans acheteur | **Remettre en vente…** |
 
 ## Console

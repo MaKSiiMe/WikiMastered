@@ -7,7 +7,8 @@
   attendu (POSITION_LIST_PROFIT_SHARE), au moins + POSITION_LIST_MARGIN ; les joueurs le font monter.
   Invendue, elle repart au même prix ; toutes les POSITION_STEP_MINUTES passées en vente sans acheteur (une étape),
   à −10 % (POSITION_MAX_RELISTS fois), puis au prix d'achat tant qu'une place de vente est libre ; jamais sous le
-  prix d'achat. Après POSITION_FIRE_SALE_AFTER étapes : à 1 WB, fin à 00-03 h ou 06-09 h.
+  prix d'achat. Après POSITION_GIVE_UP_AFTER étapes, ou quand toutes les places de vente sont prises : la carte
+  est gardée avec l'étiquette POSITION_UNSOLD_TAG, à vendre ailleurs. Le bot ne brade jamais une carte.
 - Places de vente : une place libérée va à la vente qui rapporte le plus (Database.due_listings), revente ou doublon.
   Le résultat (bénéfice ou perte) est enregistré. En DRY_RUN, la revente est simulée.
 - Tes cartes (MANUAL_RESALE_TAG) : un exemplaire portant cette étiquette devient une position, revendue comme celles
@@ -25,6 +26,7 @@ automatiques ne tournent que si AUTO_LIST / AUTO_DISCARD sont activés.
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import math
 import random
@@ -38,7 +40,7 @@ from src.account import store_collection
 from src.config import RARITY_RANK, Settings
 from src.core.api import COLLECTION_PAGE_SIZE
 from src.core.client import ApiError, RateLimited, UncertainMutation
-from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
+from src.core.database import MANUAL_SALE_REASON
 from src.core.models import Auction, DiscardResult, MyBids, OwnedCard, parse_items
 from src.core.notifier import Thread, Topic, auction_url, position_thread
 from src.core.pricing import ANY, Quote
@@ -84,8 +86,11 @@ MANUAL_BOUGHT_BEFORE = timedelta(days=2)
 MANUAL_BOUGHT_AFTER = timedelta(minutes=30)
 # Exemplaire arrivé depuis moins de N : sa vente n'est peut-être pas encore notée (HARVEST_DELAY du sniper), il attend.
 MANUAL_SETTLE = timedelta(minutes=10)
-# Revente à 1 WB : fin dans une de ces fenêtres (Paris), où les L parties de ≤ 10 WB se vendent le mieux.
-FIRE_SALE_ENDS = ((time(0, 0), time(3, 0)), (time(6, 0), time(9, 0)))
+# Positions que le bot renonce à vendre, dont l'étiquette POSITION_UNSOLD_TAG reste à poser : position -> essais.
+# L'exemplaire invendu revient dans la collection sous un nouvel identifiant, parfois une minute après la fin.
+UNSOLD_TAG_KV = "unsold_to_tag"
+UNSOLD_TAG_CHECK = timedelta(minutes=2)
+UNSOLD_TAG_TRIES = 30
 
 
 # ---------------------------------------------------------------- logique pure
@@ -111,7 +116,7 @@ def position_floor(cost: int, steps: int, s: Settings) -> int:
 def unsold_steps(durations: list[int], step: int) -> int:
     """Étapes de l'échelle de remises franchies après ces ventes sans acheteur (durées en minutes) : une toutes les
     `step` minutes en vente, une vente plus longue n'en comptant qu'une (12 h = 6 h, comme avant le 01/11) ; 0 : une
-    étape par vente. Le 01/11, reventes passées à 1 h : comptées en ventes, une carte serait partie à 1 WB en 3 h."""
+    étape par vente. Le 01/11, reventes passées à 1 h : comptées en ventes, le bot aurait renoncé en 3 h."""
     if step <= 0:
         return len(durations)
     return sum(min(minutes, step) for minutes in durations) // step
@@ -373,51 +378,30 @@ def plan_listing_time(now: datetime, start: time, end: time, durations: list[int
     raise ValueError("aucune durée de vente ne permet de finir dans la fenêtre demandée")
 
 
-def plan_fire_sale(now: datetime, durations: list[int], preferred: int,
-                   rng: random.Random | None = None, min_minutes: int = 0) -> tuple[datetime, int, datetime]:
-    """(publication, durée, fin) d'une revente à 1 WB : fin dans une fenêtre de FIRE_SALE_ENDS, la plus proche
-    possible, en vente au moins `min_minutes` (durée la plus proche de `preferred`). Aucune durée assez longue : la
-    fenêtre la plus proche, comme avant."""
-    plans = []
-    for day in range(3):
-        for start, end in FIRE_SALE_ENDS:
-            target = random_in_window(now.date() + timedelta(days=day), start, end, rng)
-            feasible = [(target - timedelta(minutes=d), d) for d in durations
-                        if d >= min_minutes and target - timedelta(minutes=d) >= now]
-            if feasible:
-                post_at, minutes = min(feasible, key=lambda f: (abs(f[1] - preferred), f[0]))
-                plans.append((post_at, minutes, target))
-    if plans:
-        return min(plans, key=lambda p: p[2])
-    plans = [plan_listing_time(now, start, end, durations, 10, rng, preferred) for start, end in FIRE_SALE_ENDS]
-    return min(plans, key=lambda p: (p[0], abs(p[1] - preferred)))
-
-
 def relist_limits(cost: int, s: Settings) -> tuple[int, int]:
-    """(remises à -10 % permises, étapes avant la revente à 1 WB) d'une position achetée `cost` WB : moins pour
-    une position chère (POSITION_EXPENSIVE_*)."""
+    """(remises à -10 % permises, étapes sans acheteur avant de renoncer à vendre) d'une position achetée `cost` WB :
+    moins pour une position chère (POSITION_EXPENSIVE_*). 0 étape : le bot ne renonce pas."""
     if s.position_expensive_from and cost >= s.position_expensive_from:
-        fire = s.position_expensive_fire_sale_after if s.position_fire_sale_after else 0
-        return min(s.position_max_relists, s.position_expensive_max_relists), fire
-    return s.position_max_relists, s.position_fire_sale_after
+        give_up = s.position_expensive_give_up_after if s.position_give_up_after else 0
+        return min(s.position_max_relists, s.position_expensive_max_relists), give_up
+    return s.position_max_relists, s.position_give_up_after
 
 
+def give_up_text(s: Settings) -> str:
+    """Fin de l'échelle de remises, pour les messages : quand le bot renonce, et l'étiquette qu'il pose."""
+    if s.position_give_up_after <= 0:
+        return ""
+    after = f"{s.position_give_up_after} vente(s)" if s.position_step_minutes <= 0 else \
+        f"{s.position_give_up_after * s.position_step_minutes / 60:g} h"
+    tag = f" avec l'étiquette « {s.position_unsold_tag} »" if s.position_unsold_tag.strip() else ""
+    return f", puis gardée{tag} après {after} sans acheteur"
 
-def fire_sale_delay(s: Settings) -> str:
-    """Temps sans acheteur avant la revente à 1 WB, pour les messages."""
-    if s.position_step_minutes <= 0:
-        return f"{s.position_fire_sale_after} vente(s)"
-    return f"{s.position_fire_sale_after * s.position_step_minutes / 60:g} h"
+
 
 def position_reason(cost: int) -> str:
     return f"position (achetée {cost})" if cost else "position (paquet)"
 
 
-def is_fire_sale(row) -> bool:
-    return (row["reason"] or "").startswith(FIRE_SALE_REASON)
-
-
-# ---------------------------------------------------------------------- worker
 def listing_bid(row) -> dict:
     """La position d'une vente (ligne listings), pour son message : identifiant, titre, rareté."""
     return {"id": row["bid_id"], "title": row["title"], "rarity": row["rarity"], "is_shiny": 0}
@@ -453,6 +437,12 @@ class InventoryManager(Worker):
         self._next_sale_check = utcnow() + timedelta(minutes=2)
         self._next_manual = utcnow() + timedelta(minutes=2)
         self._next_stale = utcnow() + timedelta(minutes=5)
+        self._next_unsold_tag = utcnow()
+        self._unsold_tag_warned = False
+        cancelled = await self.db.cancel_fire_sales()
+        if cancelled:
+            self.log.info("%d revente(s) à 1 WB annulée(s) : le bot ne brade plus, elles repartent à leur prix",
+                          cancelled)
         # Doublons à vendre, du mieux coté au moins coté : relus au plus toutes les INVENTORY_INTERVAL_MINUTES
         # (lire la collection coûte ~175 requêtes), consommés à chaque place libérée.
         self._sale_queue: list[SaleCandidate] = []
@@ -486,6 +476,9 @@ class InventoryManager(Worker):
         if now >= self._next_stale:
             self._next_stale = now + STALE_CHECK
             await self.warn_stale_positions()
+        if now >= self._next_unsold_tag:
+            self._next_unsold_tag = now + UNSOLD_TAG_CHECK
+            await self.tag_unsold()
         if s.auto_list and now >= self._next_sale_check:
             self._next_sale_check = now + timedelta(minutes=s.sell_check_minutes)
             await self.fill_free_slots()
@@ -696,11 +689,8 @@ class InventoryManager(Worker):
                                estimate=row["reference_price"],
                                share=s.position_list_profit_share if row["amount"] else 1.0)
             # Remise en vente refusée : reprise à son prix réduit (le 18/10, Liste des éclipses solaires remise à
-            # 936 repartait à 1040, son prix de départ) ; une revente à 1 WB le reste.
+            # 936 repartait à 1040, son prix de départ).
             relist = await self.db.last_failed_relist(row["id"])
-            if relist and is_fire_sale(relist):
-                await self._fire_sale(owned_id, row, relist["relist_count"])
-                continue
             await self._schedule(owned_id=owned_id, card_id=row["card_id"], title=row["title"], rarity=row["rarity"],
                                  price=relist["base_amount"] if relist else price,
                                  reason=position_reason(row["amount"]), bid_id=row["id"],
@@ -770,7 +760,7 @@ class InventoryManager(Worker):
                 link = f" · [page de l'achat]({page['page']})"
             self.notifier.success("Carte à revendre prise en charge",
                                   f"{label} : {origin}{target}. Le bot la revend comme ses positions (départ {start}, "
-                                  f"remises à -10 %, puis à 1 WB après {fire_sale_delay(s)} sans acheteur).",
+                                  f"remises à -10 %{give_up_text(s)}).",
                                   important=True, thread=position_thread(
                                       {"id": bid_id, "title": c.title, "rarity": c.rarity, "is_shiny": c.is_shiny},
                                       f"🏷️ prise en charge : {origin}{link}", ring=True,
@@ -841,7 +831,7 @@ class InventoryManager(Worker):
     async def warn_stale_positions(self) -> int:
         """Alerte une fois chaque position réelle détenue depuis plus de POSITION_STALE_HOURS (au-delà de l'échelle
         de remises, quelque chose bloque : pas de place de vente, exemplaire introuvable, favori…), avec l'état de sa
-        vente et, sur Discord, les boutons « Brader » et « Garder ». Renvoie le nombre d'alertes."""
+        vente et, sur Discord, le bouton « Garder ». Renvoie le nombre d'alertes."""
         hours = self.settings.position_stale_hours
         if hours <= 0:
             return 0
@@ -871,16 +861,6 @@ class InventoryManager(Worker):
             new += 1
         await self.db.kv_set(STALE_KV, sorted(alerted & {r["id"] for r in held}))
         return new
-
-    async def liquidate(self, listing_id: int) -> None:
-        """Vente pas encore publiée passée à 1 WB, sur la durée et la fin d'une revente à 1 WB (comme `_fire_sale`)."""
-        s = self.settings
-        post_at, minutes, end = plan_fire_sale(now_local(), s.listing_duration_options, s.position_fire_sale_minutes,
-                                               min_minutes=s.position_fire_sale_min_minutes)
-        await self.db.update_listing(listing_id, base_amount=1, reason=f"{FIRE_SALE_REASON} (Discord)",
-                                     post_at=post_at, duration_minutes=minutes, target_end=end)
-        self.log.info("vente %d passée à 1 WB (Discord) : publication %s, fin %s", listing_id,
-                      f"{post_at:%d/%m %H:%M}", f"{end:%d/%m %H:%M}")
 
     # ------------------------------------------------ demandes Discord (/vendre, /garder)
     async def sell_copy(self, copy: OwnedCard, price: int) -> int | None:
@@ -946,12 +926,12 @@ class InventoryManager(Worker):
                     continue
                 selling += 1
             price = row["base_amount"]
-            if row["bid_id"] and not simulated and not is_fire_sale(row):
+            if row["bid_id"] and not simulated:
                 price = await self._undercut(row)
                 if price != row["base_amount"]:
                     await self.db.update_listing(row["id"], base_amount=price)
             minutes = row["duration_minutes"]
-            if row["bid_id"] and not is_fire_sale(row) and self.settings.position_post_now \
+            if row["bid_id"] and self.settings.position_post_now \
                     and self.settings.listing_duration_options:
                 # Durée revue à la publication : une position qui a attendu une place (Bordeaux, gagnée à 18:05 le
                 # 26/10, programmée pour 12 h) ne finit plus à l'heure prévue à l'achat.
@@ -1109,13 +1089,13 @@ class InventoryManager(Worker):
                 self.notifier.info("Mise en vente vérifiée", f"{label} : pas créée.{again}")
 
     async def _postpone(self, row) -> None:
-        """Plus de place de vente. Revente d'une position publiée tout de suite (POSITION_POST_NOW) ou revente à 1 WB :
+        """Plus de place de vente. Revente d'une position publiée tout de suite (POSITION_POST_NOW) :
         nouvel essai au passage suivant (30 s), la place libérée allant à la plus rentable (Database.due_listings) ;
         reventes d'1 h depuis le 01/11 : 10 min d'attente laisseraient une place vide jusqu'à 1/6 du temps. Doublon
         vendu à toute heure (SELL_ANYTIME) : dans SELL_CHECK_MINUTES (le 16/10, Place publique était reportée de
         24 h). Sinon : même horaire, le jour suivant."""
         s = self.settings
-        if (row["bid_id"] is not None and s.position_post_now) or is_fire_sale(row):
+        if row["bid_id"] is not None and s.position_post_now:
             return  # reste due : heure de fin fixée à la publication
         if row["bid_id"] is None and s.sell_anytime:
             retry = utcnow() + timedelta(minutes=s.sell_check_minutes)
@@ -1211,15 +1191,16 @@ class InventoryManager(Worker):
                                "Discord).", important=True,
                                thread=position_thread(bid, "🔒 invendue, gardée comme demandé sur Discord"))
             return
-        max_relists, fire_after = relist_limits(bid["amount"], self.settings)
+        max_relists, give_up_after = relist_limits(bid["amount"], self.settings)
         durations = await self.db.unsold_durations(bid["id"])  # cette vente comprise
         earlier = list(durations)
         if row["duration_minutes"] in earlier:
             earlier.remove(row["duration_minutes"])
         step = self.settings.position_step_minutes
         before, after = unsold_steps(earlier, step), unsold_steps(durations, step)
-        if order == orders.FIRE or 0 < fire_after <= after:
-            await self._fire_sale(await self._returned_copy(row, bid), bid, unsold)
+        if 0 < give_up_after <= after:
+            hours = sum(durations) / 60
+            await self._give_up(row, bid, label, f"invendue {unsold} fois en {hours:g} h de vente")
             return
         # Plancher de la prochaine mise en vente : le prix d'achat, puis un peu dessous après POSITION_LOSS_AFTER
         # étapes (une carte qui ne part pas bloque une place de vente et son capital).
@@ -1232,13 +1213,8 @@ class InventoryManager(Worker):
         elif await self._slot_for_relist(bid["id"]):
             price = floor
         else:
-            await self.db.close_position(bid["id"], None)
-            self.notifier.warning("Position invendue", f"{label} : invendue après {row['relist_count'] + 1} "
-                                  "essai(s), carte gardée : toutes les places de vente sont prises.",
-                                  actions=None if bid["dry_run"] else {"kind": "kept", "listing": row["id"]},
-                                  thread=position_thread(bid, f"🔒 invendue après {row['relist_count'] + 1} essai(s), "
-                                                              "gardée : toutes les places de vente sont prises",
-                                                         ring=True))
+            await self._give_up(row, bid, label, f"invendue après {unsold} essai(s), toutes les places de vente "
+                                                 "sont prises")
             return
         self.log.info("%s invendue, remise en vente à %d WB", label, price)  # avant « vente programmée »
         listing_id = await self._schedule(owned_id=await self._returned_copy(row, bid), card_id=row["card_id"],
@@ -1247,34 +1223,83 @@ class InventoryManager(Worker):
                                           relist_count=row["relist_count"] + 1)
         if not bid["dry_run"]:
             # Même prix (reventes d'1 h, toutes les heures) ou déjà au prix d'achat : message discret, la carte peut
-            # tourner plusieurs fois. Boutons (bot Discord) : changer le prix, brader, garder.
+            # tourner plusieurs fois. Boutons (bot Discord) : changer le prix, garder.
             self.notifier.info("Revente sans acheteur", f"{label} : remise en vente à {price} WB "
                                f"(achetée {bid['amount']}).", important=price < row["base_amount"],
                                actions={"kind": "relist", "listing": listing_id} if listing_id else None,
                                thread=position_thread(bid, f"↩️ sans acheteur à {row['base_amount']} WB, remise "
                                                            f"à {price} WB"))
 
-    async def _fire_sale(self, owned_id: str, bid, unsold: int) -> None:
-        """Invendue `unsold` fois : revente à 1 WB, fin à 00-03 h ou 06-09 h (POSITION_FIRE_SALE_*). Publiée avant
-        toute autre vente quand vient son heure."""
-        s = self.settings
-        post_at, minutes, end = plan_fire_sale(now_local(), s.listing_duration_options, s.position_fire_sale_minutes,
-                                               min_minutes=s.position_fire_sale_min_minutes)
-        listing_id = await self.db.schedule_listing(
-            owned_card_id=owned_id, card_id=bid["card_id"], title=bid["title"], rarity=bid["rarity"], base_amount=1,
-            duration_minutes=minutes, post_at=post_at, target_end=end,
-            reason=f"{FIRE_SALE_REASON} (achetée {bid['amount']})", bid_id=bid["id"], relist_count=unsold)
-        label = f"{bid['title']} ({bid['rarity']}{' ✨' if bid['is_shiny'] else ''})"
-        self.log.info("%s invendue %d fois : revente à 1 WB, publication %s, fin %s", label, unsold,
-                      f"{post_at:%d/%m %H:%M}", f"{end:%d/%m %H:%M}")
-        if not bid["dry_run"]:
-            self.notifier.info("Revente à 1 WB", f"{label} : invendue {unsold} fois, remise en vente à 1 WB le "
-                               f"{post_at:%d/%m à %H:%M} pour {minutes // 60} h, fin le {end:%d/%m à %H:%M} "
-                               f"(achetée {bid['amount']}).", important=True,
-                               actions={"kind": "fire_sale", "listing": listing_id} if listing_id else None,
-                               thread=position_thread(bid, f"⚡ invendue {unsold} fois : à 1 WB le "
-                                                           f"{post_at:%d/%m à %H:%M}, fin le {end:%d/%m à %H:%M}",
-                                                      ring=True))
+    async def _give_up(self, row, bid, label: str, why: str) -> None:
+        """Le bot renonce à vendre cette position : la carte reste dans la collection, la position est close, et
+        l'exemplaire reçoit l'étiquette POSITION_UNSOLD_TAG (posée par `tag_unsold`, dès qu'il est revenu). Le bot ne
+        brade jamais une carte : jusqu'au 10/11, elle repartait à 1 WB."""
+        await self.db.close_position(bid["id"], None)
+        tag = self.settings.position_unsold_tag.strip()
+        tagged = bool(tag) and not bid["dry_run"]
+        if tagged:
+            pending = await self.db.kv_get(UNSOLD_TAG_KV, {})
+            pending[str(bid["id"])] = 0
+            await self.db.kv_set(UNSOLD_TAG_KV, pending)
+            self._next_unsold_tag = utcnow()
+        kept = f"carte gardée avec l'étiquette « {tag} »" if tagged else "carte gardée"
+        self.log.info("%s : %s, %s (achetée %d)", label, why, kept, bid["amount"])
+        self.notifier.warning("Position invendue", f"{label} : {why}, {kept} (achetée {bid['amount']} WB).",
+                              actions=None if bid["dry_run"] else {"kind": "kept", "listing": row["id"]},
+                              thread=position_thread(bid, f"🔒 {why} : {kept}", ring=True))
+
+    async def tag_unsold(self) -> int:
+        """Pose POSITION_UNSOLD_TAG sur l'exemplaire de chaque position que le bot a renoncé à vendre. Renvoie le
+        nombre d'étiquettes posées. Exemplaire pas encore revenu, ou étiquette pas créée sur le site : nouvel essai au
+        passage suivant, UNSOLD_TAG_TRIES fois."""
+        pending: dict[str, int] = await self.db.kv_get(UNSOLD_TAG_KV, {})
+        tag = self.settings.position_unsold_tag.strip()
+        if not pending or not tag:
+            return 0
+        if not self.settings.is_live("tag_card"):
+            self.log.info("[DRY RUN] étiquette « %s » sur %d carte(s) invendue(s)", tag, len(pending))
+            await self.db.kv_set(UNSOLD_TAG_KV, {})
+            return 0
+        tag_id, problem = None, ""
+        try:
+            status, data = await self.ctx.client.supabase("GET", "tags", params={
+                "select": "id,name", "user_id": f"eq.{self.api.user_id}"})
+            ids = {tag_key(str(t.get("name", ""))): t["id"] for t in data or [] if isinstance(t, dict)} \
+                if status == 200 else {}
+            tag_id = ids.get(tag_key(tag))
+            if tag_id is None:
+                problem = f"étiquette « {tag} » introuvable (HTTP {status}) : crée-la une fois sur le site"
+        except ApiError as exc:
+            problem = str(exc)
+        done = 0
+        for key in list(pending):
+            bid = await self.db.get_bid(int(key))
+            copy = None
+            if bid is not None and tag_id is not None:
+                with contextlib.suppress(ApiError):
+                    copy = newest_sellable(same_copies(await self._owned_copies(bid["card_id"], bid["title"]),
+                                                       bid["rarity"], bool(bid["is_shiny"])), set())
+            posted = False
+            if copy:
+                with contextlib.suppress(ApiError):
+                    status, _ = await self.ctx.client.supabase(
+                        "POST", "user_card_tags", prefer="return=minimal",
+                        json_body={"user_card_id": copy, "tag_id": tag_id})
+                    posted = status in (200, 201, 204, 409)  # 409 : déjà étiquetée
+            if posted or bid is None:
+                del pending[key]
+                done += posted
+                continue
+            pending[key] += 1
+            if pending[key] >= UNSOLD_TAG_TRIES:
+                del pending[key]
+                self.notifier.warning("Étiquette pas posée", f"{bid['title']} ({bid['rarity']}) : gardée invendue, "
+                                      f"mais sans l'étiquette « {tag} » ({problem or 'exemplaire introuvable'}).")
+        if problem and not self._unsold_tag_warned:
+            self._unsold_tag_warned = True
+            self.log.warning("cartes invendues : %s", problem)
+        await self.db.kv_set(UNSOLD_TAG_KV, pending)
+        return done
 
     async def _returned_copy(self, row, bid) -> str:
         """Exemplaire d'une revente invendue : le site le rend sous un nouvel identifiant (les 25-26/10, chaque remise

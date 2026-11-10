@@ -137,8 +137,8 @@ HELD = "status IN ('won', 'sim_won') AND closed = 0"
 # hors des chiffres du sniper (mises, gagnées, dépenses du jour).
 MANUAL_REASON = "achat manuel"
 NOT_MANUAL = f"reason NOT LIKE '{MANUAL_REASON}%'"
-# Revente à 1 WB d'une position invendue POSITION_FIRE_SALE_AFTER fois (motif de la vente).
-FIRE_SALE_REASON = "liquidation"
+# Motif des reventes à 1 WB, retirées le 10/11 : celles qui restaient programmées sont annulées au démarrage.
+OLD_FIRE_SALE_REASON = "liquidation"
 # Vente demandée sur Discord (/vendre) : publiée à la première place libre, avant les autres.
 MANUAL_SALE_REASON = "vente manuelle"
 # Vente observée suspecte : vendeur = acheteur, ou paire vendeur -> acheteur déjà vue (alias o).
@@ -550,17 +550,22 @@ class Database:
         )
 
     async def due_listings(self, now: datetime) -> list[aiosqlite.Row]:
-        """Ventes à publier, la plus rentable d'abord : une place libérée va à la revente à 1 WB (heure de fin choisie),
-        puis au plus grand gain au prix demandé (prix de départ − prix d'achat ; tout le prix pour un doublon ou une
+        """Ventes à publier, la plus rentable d'abord : une place libérée va à la vente demandée sur Discord, puis au
+        plus grand gain au prix demandé (prix de départ − prix d'achat ; tout le prix pour un doublon ou une
         carte de paquet), puis à la plus ancienne. Le 26/10, les 5 places prises par les reventes du sniper,
         Gabby Williams (L d'un paquet, 1407 WB) attendait depuis 2 jours derrière des reventes au prix d'achat."""
         return await self._all(
             "SELECT l.* FROM listings l LEFT JOIN bids b ON b.id = l.bid_id "
             "WHERE l.status IN ('scheduled', 'waiting') AND l.post_at <= ? "
-            f"ORDER BY l.reason LIKE '{FIRE_SALE_REASON}%' DESC, l.reason LIKE '{MANUAL_SALE_REASON}%' DESC, "
+            f"ORDER BY l.reason LIKE '{MANUAL_SALE_REASON}%' DESC, "
             "l.base_amount - COALESCE(b.amount, 0) DESC, "
             "l.post_at", (iso(now),)
         )
+
+    async def cancel_fire_sales(self) -> int:
+        """Annule les reventes à 1 WB encore programmées par une ancienne version : la position repart à son prix."""
+        return await self._exec("UPDATE listings SET status = 'cancelled' WHERE status IN ('scheduled', 'waiting') "
+                                f"AND reason LIKE '{OLD_FIRE_SALE_REASON}%'")
 
     async def listings_to_settle(self, before: datetime) -> list[aiosqlite.Row]:
         return await self._all(

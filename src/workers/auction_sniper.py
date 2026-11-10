@@ -38,7 +38,7 @@ from src.config import RARITY_RANK, Settings
 from src.core import timeutils
 from src.core import journal
 from src.core.client import ApiError, RateLimited, UncertainMutation
-from src.core.database import FIRE_SALE_REASON, MANUAL_SALE_REASON
+from src.core.database import MANUAL_SALE_REASON
 from src.core.models import Auction, BidResult, Card, OwnedCard
 from src.core.notifier import Topic, auction_url, position_thread
 from src.core.pricing import Quote, combine, trusted
@@ -199,7 +199,7 @@ class Portfolio:
         ahead = sorted((*self.waiting, *opened), reverse=True)
         if len(ahead) < self.sale_room:
             return self.min_profit
-        beat = ahead[self.sale_room - 1]  # infinie : liquidation ou vente demandée, toujours servie d'abord
+        beat = ahead[self.sale_room - 1]  # infinie : vente demandée sur Discord, toujours servie d'abord
         return queued if beat >= queued else max(self.min_profit, math.floor(beat) + 1)
 
 
@@ -237,12 +237,12 @@ def portfolio_state(s: Settings, *, balance: int, held_count: int, held_real_cos
 
 def waiting_profits(rows, fee: float) -> tuple[float, ...]:
     """Bénéfice attendu de chaque vente qui attend une place (Database.waiting_sales) : estimation à l'achat moins
-    la mise pour une position, tout son prix pour un doublon (coût nul). Revente à 1 WB ou vente demandée sur
-    Discord : toujours servies d'abord."""
+    la mise pour une position, tout son prix pour un doublon (coût nul). Vente demandée sur Discord : toujours
+    servie d'abord."""
     out = []
     for r in rows:
         reason = r["reason"] or ""
-        if reason.startswith((FIRE_SALE_REASON, MANUAL_SALE_REASON)):
+        if reason.startswith(MANUAL_SALE_REASON):
             out.append(math.inf)
         elif r["amount"] is None:
             out.append((r["base_amount"] or 0) * (1 - fee))

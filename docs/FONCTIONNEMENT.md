@@ -147,9 +147,9 @@ stateDiagram-v2
     V3 --> [*]: vendue
 ```
 
-- **Liquidation** (coupée par défaut, `POSITION_FIRE_SALE_AFTER`) : après N étapes, la carte repart à 1 WB, avec une fin à 00-03 h ou 06-09 h.
+- **Carte invendue** : le bot ne brade jamais. Quand il renonce (après `POSITION_GIVE_UP_AFTER` étapes, coupé par défaut, ou quand toutes les places de vente sont prises), la carte reste dans ta collection, la position est close, et l'exemplaire reçoit l'étiquette `POSITION_UNSOLD_TAG` (« Invendue », à créer une fois sur le site) : tu la retrouves d'un clic pour la vendre autrement. Ajoute cette étiquette à `PROTECTED_TAGS` pour que la vente des doublons ne la reprenne pas.
 - **Perte permise** (coupée par défaut, `POSITION_MAX_LOSS`) : après `POSITION_LOSS_AFTER` étapes, le prix peut passer sous le prix d'achat.
-- **Position chère** (coupée par défaut, `POSITION_EXPENSIVE_*`) : moins de baisses et une liquidation plus tôt pour une carte achetée à partir de ce prix.
+- **Position chère** (coupée par défaut, `POSITION_EXPENSIVE_*`) : moins de baisses, et le bot renonce plus tôt, pour une carte achetée à partir de ce prix.
 - **Position qui traîne** : détenue depuis plus de 48 h (`POSITION_STALE_HOURS`), elle déclenche une alerte avec des boutons.
 - **Reventes plus longues** : avec `POSITION_LIST_LONG_BELOW=N`, une revente dure `POSITION_LIST_LONG_MINUTES` tant que moins de N positions sont détenues, sauf si elle finirait à une heure de `POSITION_AVOID_END_HOURS`.
 
@@ -161,10 +161,9 @@ Toutes les 30 s, le bot publie ce qui attend s'il reste une place de vente (tes 
 
 ```mermaid
 flowchart LR
-    P["Place libre"] --> A["1. Liquidation à 1 WB<br/>dont l'heure est venue, si activée"]
-    A --> V["2. Vente demandée<br/>par /vendre"]
-    V --> B["3. Plus grand gain<br/>revente ou doublon"]
-    B --> C["4. La plus ancienne"]
+    P["Place libre"] --> V["1. Vente demandée<br/>par /vendre"]
+    V --> B["2. Plus grand gain<br/>revente ou doublon"]
+    B --> C["3. La plus ancienne"]
 ```
 
 **Doublons** (`AUTO_LIST`) : toutes les 10 min, les doublons les mieux cotés, à partir de 15 WB (`SELL_MIN_VALUE`), rejoignent cette file, 5 en attente au plus.
@@ -264,7 +263,7 @@ Avec `DISCORD_WEBHOOK_SNIPER`, `_VENTES`, `_COLLECTION`, `_BILAN` et `_SYSTEME`,
 
 **Code couleur**, le même pour tous les messages (salons, commandes, graphiques ; `src/core/colors.py`) : 🔵 information, 🟢 tout va bien, gain ou réglage activé, 🟠 à surveiller, 🔴 problème ou perte, ⚪ réglage coupé, annulé ou rien à faire.
 
-Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, prix, revente visée), modifié à chaque étape (en vente, sans acheteur et remise en vente, à 1 WB…), et republié en bas du salon quand elle est vendue ou qu'un problème demande ton attention (Discord ne signale pas une modification). Les boutons (changer le prix, brader, garder) sont ceux de la dernière étape. Les mises du sniper n'ont pas de message propre : le récap des enchères de 08:00 et `/sniper` en donnent le détail (`NOTIFY_EACH_BID=true` : un message par mise).
+Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, prix, revente visée), modifié à chaque étape (en vente, sans acheteur et remise en vente, gardée…), et republié en bas du salon quand elle est vendue ou qu'un problème demande ton attention (Discord ne signale pas une modification). Les boutons (changer le prix, brader, garder) sont ceux de la dernière étape. Les mises du sniper n'ont pas de message propre : le récap des enchères de 08:00 et `/sniper` en donnent le détail (`NOTIFY_EACH_BID=true` : un message par mise).
 
 | Message | Quand | Contenu |
 |---|---|---|

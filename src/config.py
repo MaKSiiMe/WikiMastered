@@ -261,8 +261,8 @@ class Settings(BaseSettings):
     # ×0,8 pour une fin à 18-22 h, ×0,93-0,95 à 11 h et 13 h, contre ×1,04-1,09 à 00-01 h et 07-09 h. Vide = jamais.
     position_avoid_end_hours: IntList = Field(default_factory=lambda: [11, 12, 13, 18, 19, 20, 21, 22])
     # Échelle des remises en temps passé en vente sans acheteur : une étape toutes les N minutes (une vente plus longue
-    # n'en compte qu'une). POSITION_MAX_RELISTS, POSITION_LOSS_AFTER et POSITION_FIRE_SALE_AFTER comptent en étapes :
-    # avec des reventes d'1 h, compter les ventes enverrait une carte à 1 WB en 3 h. Même prix entre deux étapes.
+    # n'en compte qu'une). POSITION_MAX_RELISTS, POSITION_LOSS_AFTER et POSITION_GIVE_UP_AFTER comptent en étapes :
+    # avec des reventes d'1 h, compter les ventes ferait renoncer en 3 h. Même prix entre deux étapes.
     # 0 = une étape par vente sans acheteur ; vide = 360.
     position_step_minutes: int = 360
     position_relist_discount: float = 0.95 # étape franchie : remise en vente à prix × cette valeur
@@ -272,25 +272,21 @@ class Settings(BaseSettings):
     # capital (Mark Wahlberg ✨, achetée 6119, invendue à 7037 puis à 6333 le 25/10). 0 = jamais sous le prix d'achat.
     position_max_loss: float = 0.0
     position_loss_after: int = 2
-    # Après POSITION_FIRE_SALE_AFTER étapes sans acheteur, la revente part à 1 WB pour environ
-    # POSITION_FIRE_SALE_MINUTES, fin entre 00 h et 03 h ou entre 06 h et 09 h (Paris). Du 15 au 26/10, les L parties
-    # de ≤ 10 WB se sont vendues ×0,94 leur prix habituel (médiane) : ×1,08-1,11 et 3-4 % sous la moitié pour une fin
-    # à 00-03 h ou 06-09 h, contre ×0,81 et 22 % sous la moitié à 18-21 h. 0 = jamais.
-    position_fire_sale_after: int = 0
-    position_fire_sale_minutes: int = 360
-    # Durée minimale d'une revente à 1 WB : le 26/10, Mark Wahlberg ✨ (achetée 6119) n'est restée qu'1 h en vente
-    # (seule durée qui finissait dans la fenêtre 00-03 h), vendue 5000. Plus courte, elle vise la fenêtre suivante.
-    position_fire_sale_min_minutes: int = 180
-    # Positions chères (achetées ≥ POSITION_EXPENSIVE_FROM WB) : moins de remises avant la revente à 1 WB, le capital
-    # et la place de vente ne restent pas bloqués 2 jours (Mark Wahlberg : 7037, 6333, 5700, 5508 en 48 h, toutes
-    # invendues, puis 5000 à 1 WB). 0 = mêmes règles pour toutes.
-    # Position détenue depuis plus de N heures : alerte « Position qui traîne » avec boutons (une fois). Au-delà de
+    # Après POSITION_GIVE_UP_AFTER étapes sans acheteur, le bot renonce : la carte reste dans la collection, la position
+    # est close, et l'exemplaire reçoit l'étiquette POSITION_UNSOLD_TAG (à créer une fois sur le site ; "" = aucune),
+    # pour la retrouver et la vendre autrement. Même étiquette quand une carte est gardée faute de place de vente.
+    # Le bot ne brade jamais une carte. 0 = il ne renonce pas tant qu'une place de vente est libre.
+    position_give_up_after: int = 0
+    position_unsold_tag: str = "Invendue"
+    # Position détenue depuis plus de N heures : alerte « Position qui traîne » avec un bouton (une fois). Au-delà de
     # l'échelle de remises (≈ 24-40 h), quelque chose bloque : pas de place de vente, exemplaire introuvable, favori.
     # 0 = jamais.
     position_stale_hours: float = 48.0
+    # Positions chères (achetées ≥ POSITION_EXPENSIVE_FROM WB) : moins de remises, et le bot renonce plus tôt, le
+    # capital et la place de vente ne restent pas bloqués 2 jours. 0 = mêmes règles pour toutes.
     position_expensive_from: int = 0
     position_expensive_max_relists: int = 1
-    position_expensive_fire_sale_after: int = 2
+    position_expensive_give_up_after: int = 2
 
     # --- Module C : inventaire --------------------------------------------------
     inventory_interval_minutes: float = 360.0

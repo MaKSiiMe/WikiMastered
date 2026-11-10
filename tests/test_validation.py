@@ -59,22 +59,20 @@ async def test_simulated_resale_follows_the_observed_market(tmp_path):
     await inv.settle_listings()
     await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = 3",
                    ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
-    await inv.settle_listings()  # 3 invendus (POSITION_FIRE_SALE_AFTER) : revente à 1 WB, fin à 00-03 h ou 06-09 h
-    row = await db._one("SELECT status, base_amount, relist_count, reason, target_end FROM listings "
-                        "ORDER BY id DESC LIMIT 1")
-    assert (row["status"], row["base_amount"], row["relist_count"]) == ("scheduled", 1, 3)
-    assert row["reason"] == "liquidation (achetée 100)"
-    end = datetime.fromisoformat(row["target_end"]).astimezone(PARIS)
-    assert 0 <= end.hour < 3 or 6 <= end.hour < 9
-    assert (await db.get_bid(bid))["closed"] == 0
+    await inv.settle_listings()  # 3 invendus (POSITION_GIVE_UP_AFTER) : le bot renonce, jamais de revente à 1 WB
+    assert not await db._all("SELECT id FROM listings WHERE status = 'scheduled'")
+    assert (await db._one("SELECT MIN(base_amount) AS low FROM listings"))["low"] == 324
+    closed = await db.get_bid(bid)
+    assert closed["closed"] == 1 and closed["sale_price"] is None
+    assert ("WARNING", "Position invendue") in notifier.sent
     await db.close()
 
 
 @pytest.mark.asyncio
-async def test_floor_after_relists_without_fire_sale(tmp_path):
-    """POSITION_FIRE_SALE_AFTER=0 : après 2 remises à -10 %, revente au plancher, jusqu'à POSITION_MAX_LOSS (10 %)
+async def test_floor_after_relists_when_the_bot_never_gives_up(tmp_path):
+    """POSITION_GIVE_UP_AFTER=0 : après 2 remises à -10 %, revente au plancher, jusqu'à POSITION_MAX_LOSS (10 %)
     sous le prix d'achat (101 commission comprise)."""
-    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_fire_sale_after=0)
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_give_up_after=0)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
@@ -91,22 +89,24 @@ async def test_floor_after_relists_without_fire_sale(tmp_path):
 @pytest.mark.asyncio
 async def test_hourly_resales_step_down_every_six_hours(tmp_path):
     """01/11 : reventes d'1 h. Les remises suivent le temps passé en vente (POSITION_STEP_MINUTES=360), pas le nombre
-    de ventes : même prix 5 h durant, −10 % à 6 h et 12 h, 1 WB à 18 h (comme 3 ventes de 6 h sans acheteur)."""
+    de ventes : même prix 5 h durant, −10 % à 6 h et 12 h, gardée à 18 h (comme 3 ventes de 6 h sans acheteur)."""
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(500))
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
-    await simulated_position(db, 400, minutes=60)
+    bid = await simulated_position(db, 400, minutes=60)
     await seed_observed(db, "c1", [300, 310, 290])
     prices = []
-    for _ in range(18):
+    for _ in range(17):
         await inv.settle_listings()
         row = await db._one("SELECT id, base_amount, duration_minutes FROM listings ORDER BY id DESC LIMIT 1")
         prices.append(row["base_amount"])
         await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = ?",
                        ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(), row["id"]))
     assert prices[:5] == [400] * 5 and prices[5:11] == [360] * 6 and prices[11:17] == [324] * 6
-    assert prices[17] == 1
+    await inv.settle_listings()  # 18e heure sans acheteur : le bot renonce, aucune vente de plus
+    assert not await db._all("SELECT id FROM listings WHERE status = 'scheduled'")
+    assert (await db.get_bid(bid))["closed"] == 1
     await db.close()
 
 
@@ -127,7 +127,7 @@ async def test_unsold_position_kept_only_when_every_slot_is_taken(tmp_path):
     def handler(request):
         return httpx.Response(200, json={"sellingCount": selling["n"], "maxConcurrentAuctions": 5})
 
-    client, notifier = make_client(tmp_path, handler, position_fire_sale_after=0)
+    client, notifier = make_client(tmp_path, handler, position_give_up_after=0)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
@@ -641,7 +641,7 @@ async def test_tagged_purchase_becomes_a_position_at_the_price_paid(tmp_path):
 @pytest.mark.asyncio
 async def test_freed_slot_goes_to_the_most_profitable_sale(tmp_path):
     """26/10 : Gabby Williams (L d'un paquet, 1407 WB) attendait derrière des reventes au prix d'achat. Une place
-    libérée va à la revente à 1 WB dont l'heure est venue, puis au plus grand gain au prix demandé."""
+    libérée va au plus grand gain au prix demandé."""
     posted = []
 
     def handler(request):
@@ -657,7 +657,7 @@ async def test_freed_slot_goes_to_the_most_profitable_sale(tmp_path):
     db = ctx.db
     now = datetime.now(UTC)
     sales = [("josiane", 3837, 3836, "position"), ("gabby", 1407, None, "cote 1407"),
-             ("shoah", 5110, 4433, "position"), ("wahlberg", 1, 6119, "liquidation (achetée 6119)")]
+             ("shoah", 5110, 4433, "position")]
     for oid, price, cost, reason in sales:
         bid = None
         if cost is not None:
@@ -668,8 +668,8 @@ async def test_freed_slot_goes_to_the_most_profitable_sale(tmp_path):
                                   duration_minutes=360, post_at=now - timedelta(minutes=1),
                                   target_end=now + timedelta(hours=6), reason=reason, bid_id=bid)
     await InventoryManager(ctx).post_due_listings()  # 2 places libres sur 5
-    # La revente à 1 WB passe d'abord (sans être relevée au plancher), puis le doublon (+1407) avant Shoah (+677).
-    assert [(p["card_id"], p["base_amount"]) for p in posted] == [("wahlberg", 1), ("gabby", 1407)]
+    # Le doublon (+1407) passe avant Shoah (+677) ; Josiane (+1) attend.
+    assert [p["base_amount"] for p in posted] == [1407, 5110]
     await db.close()
 
 
@@ -740,48 +740,34 @@ async def test_waiting_position_duration_chosen_when_posted(tmp_path, monkeypatc
     await db.close()
 
 
-def test_fire_sale_lasts_at_least_three_hours():
-    """26/10 à 23:23 (Paris), Mark Wahlberg ✨ n'avait qu'1 h (seule durée finissant à 00-03 h) : au moins 3 h, quitte
-    à viser la fenêtre de 06-09 h."""
-    from src.workers.inventory_manager import plan_fire_sale
-
-    now = datetime(2026, 10, 26, 23, 23, tzinfo=PARIS)
-    options = [10, 30, 60, 180, 360, 720, 1440]
-    post_at, minutes, end = plan_fire_sale(now, options, 360, random.Random(1), min_minutes=180)
-    assert minutes >= 180 and post_at >= now
-    assert 0 <= end.hour < 3 or 6 <= end.hour < 9
-    _, short, _ = plan_fire_sale(now, options, 360, random.Random(1))
-    assert short <= 60  # sans durée minimale : comme avant
-
-
-def test_expensive_positions_reach_the_fire_sale_sooner():
+def test_expensive_positions_are_given_up_sooner():
     from src.config import Settings
     from src.workers.inventory_manager import relist_limits
 
     s = Settings(_env_file=None)
-    assert relist_limits(6119, s) == (1, 2)  # une remise à -10 %, puis 1 WB au 2e invendu
+    assert relist_limits(6119, s) == (1, 2)  # une remise à -10 %, puis gardée au 2e invendu
     assert relist_limits(400, s) == (2, 3)
-    assert relist_limits(6119, Settings(_env_file=None, position_fire_sale_after=0)) == (1, 0)
+    assert relist_limits(6119, Settings(_env_file=None, position_give_up_after=0)) == (1, 0)
     assert relist_limits(6119, Settings(_env_file=None, position_expensive_from=0)) == (2, 3)
 
 
 @pytest.mark.asyncio
-async def test_expensive_position_fire_sale_after_two_unsold(tmp_path):
+async def test_expensive_position_given_up_after_two_unsold(tmp_path):
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_expensive_from=100,
                                    position_list_duration_minutes=360)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
-    await simulated_position(db, 400)  # achetée 100 : « chère » avec POSITION_EXPENSIVE_FROM=100
+    bid = await simulated_position(db, 400)  # achetée 100 : « chère » avec POSITION_EXPENSIVE_FROM=100
     await seed_observed(db, "c1", [300, 310, 290])
     await inv.settle_listings()  # 1er invendu : une remise à -10 %
     row = await db._one("SELECT base_amount, relist_count FROM listings ORDER BY id DESC LIMIT 1")
     assert (row["base_amount"], row["relist_count"]) == (360, 1)
     await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = 2",
                    ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
-    await inv.settle_listings()  # 2e invendu : revente à 1 WB, au moins 3 h
-    row = await db._one("SELECT base_amount, duration_minutes, reason FROM listings ORDER BY id DESC LIMIT 1")
-    assert row["base_amount"] == 1 and row["duration_minutes"] >= 180 and row["reason"].startswith("liquidation")
+    await inv.settle_listings()  # 2e invendu : le bot renonce, la carte est gardée
+    assert not await db._all("SELECT id FROM listings WHERE status = 'scheduled'")
+    assert (await db.get_bid(bid))["closed"] == 1
     await db.close()
 
 
@@ -811,4 +797,72 @@ async def test_shiny_sale_notes_its_page(tmp_path, shiny):
     page = "https://www.wiki-masters.com/marketplace/vente-1"
     assert fields.get("page") == (page if shiny else None)
     assert (f"[page de la vente]({page})" in fields["thread"].line) is shiny
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_given_up_card_is_kept_and_tagged_never_sold_for_one_wb(tmp_path):
+    """Le bot ne brade jamais : après POSITION_GIVE_UP_AFTER étapes, la carte reste dans la collection, la position
+    est close et l'exemplaire revenu (nouvel identifiant) reçoit l'étiquette POSITION_UNSOLD_TAG."""
+    from tests.test_session import cookie_for
+
+    tagged, tags = [], [{"id": 3, "name": "Doublon"}]
+
+    def handler(request):
+        if request.url.host.endswith("supabase.co"):
+            if request.method == "GET":
+                return httpx.Response(200, json=tags)
+            tagged.append(json.loads(request.content))
+            return httpx.Response(201)
+        if request.url.path == "/api/marketplace/a1":
+            return httpx.Response(200, json={"auction": {
+                "id": "a1", "status": "settled_unsold", "end_at": datetime.now(UTC).isoformat(), "base_amount": 400,
+                "card": {"id": "c1", "wikipedia_title": "Mème", "rarity": "L"}}})
+        if request.url.path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": [{
+                "id": "revenu", "card_id": "c1", "card": {"id": "c1", "wikipedia_title": "Mème", "rarity": "L"},
+                "obtained_at": datetime.now(UTC).isoformat(), "tags": []}]})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, supabase_anon_key="anon-key",
+                                   wm_cookie=cookie_for("a1", "r1", 3600))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    now = datetime.now(UTC)
+    bid = await db.record_bid(auction_id="achat", card_id="c1", title="Mème", rarity="L", is_shiny=False, amount=300,
+                              reference_price=500, reason="revente ~500 WB", night=False, dry_run=False,
+                              status="won", end_at=now)
+    await past_unsold(db, bid, 2)
+    lid = await db.schedule_listing(owned_card_id="parti", card_id="c1", title="Mème", rarity="L", base_amount=400,
+                                    duration_minutes=360, post_at=now, target_end=now - timedelta(minutes=5),
+                                    reason="position", bid_id=bid)
+    await db.update_listing(lid, status="posted", auction_id="a1")
+    inv = InventoryManager(ctx)
+    await inv.setup()
+    await inv.settle_listings()  # 3e étape sans acheteur
+    assert (await db.get_bid(bid))["closed"] == 1
+    assert not await db._all("SELECT id FROM listings WHERE status = 'scheduled'")
+    assert ("WARNING", "Position invendue") in notifier.sent
+
+    assert await inv.tag_unsold() == 0 and not tagged  # étiquette pas encore créée sur le site : nouvel essai
+    tags.append({"id": 9, "name": "📦 Invendue"})
+    assert await inv.tag_unsold() == 1 and tagged == [{"user_card_id": "revenu", "tag_id": 9}]
+    assert await inv.tag_unsold() == 0 and len(tagged) == 1  # une seule fois
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_old_one_wb_sales_are_cancelled_at_startup(tmp_path):
+    """Revente à 1 WB programmée par une ancienne version : annulée, jamais publiée ; la position reste à revendre."""
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    bid = await simulated_position(db, 400)
+    now = datetime.now(UTC)
+    lid = await db.schedule_listing(owned_card_id="sim-x", card_id="c1", title="Mème", rarity="C", base_amount=1,
+                                    duration_minutes=360, post_at=now, target_end=now + timedelta(hours=6),
+                                    reason="liquidation (achetée 100)", bid_id=bid)
+    await InventoryManager(ctx).setup()
+    assert (await db.get_listing(lid))["status"] == "cancelled"
+    assert (await db.get_bid(bid))["closed"] == 0
     await db.close()
