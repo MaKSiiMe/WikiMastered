@@ -31,8 +31,10 @@ def trade(tid: str, initiator: str, recipient: str, items: list[dict], status: s
             "recipient_wikibidous": 0, "items": items}
 
 
-async def context(tmp_path, active: list[dict]):
+async def context(tmp_path, active: list[dict], finished: list[dict] | None = None):
     def handler(request):
+        if request.url.path == "/api/trades" and "active" not in request.url.params:
+            return httpx.Response(200, json={"trades": active + (finished or [])})
         if request.url.path == "/api/trades":
             return httpx.Response(200, json={"trades": active})
         raise AssertionError(f"route inattendue {request.url}")
@@ -66,7 +68,7 @@ async def test_unfair_offer_is_announced_once_with_a_counter_offer(tmp_path):
     worker.notifier = sent = Sent()  # type: ignore[assignment]
     await worker.setup()
     await worker.step()
-    assert len(sent.messages) == 1  # le mien (t0) n'est pas évalué
+    assert len(sent.messages) == 1  # le mien (t0) n'est pas annoncé
     level, title, headline, kwargs = sent.messages[0]
     text = "\n".join([headline, *(f"{n}\n{v}" for n, v in kwargs["columns"] + kwargs["sections"])])
     text = text.replace("\u202f", " ")  # wb() : espace fine entre les milliers
@@ -147,5 +149,39 @@ async def test_trade_items_with_ids_only_are_named_and_priced(tmp_path):
     assert (e.given[0].label, e.given[0].value) == ("L · Emma Watson", 5500)
     assert (e.received[0].label, e.received[0].value) == ("? · Zendaya", None)
     assert e.verdict == "incomplet"
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_every_trade_is_kept_with_both_sides_values_and_its_final_status(tmp_path):
+    """12/11 : rendement des échanges. Chaque échange en attente, reçu ou proposé par toi, est gardé une fois avec la
+    valeur de chaque côté ; quand il n'est plus en cours, son statut final est relu sur le site."""
+    from src.workers.trade_watch import LOG_KEY
+
+    offer = trade("t1", AUTRE, ME, [item("emma", AUTRE), item("jeffrey", ME)])
+    mine = {**trade("t0", ME, AUTRE, [item("jeffrey", ME), item("emma", AUTRE), item("zendaya", AUTRE)]),
+            "recipient": {"username": "Camille"}, "initiator_wikibidous": 500}
+    active, finished = [offer, mine], []
+    ctx = await context(tmp_path, active, finished)
+    worker = TradeWatch(ctx)
+    worker.notifier = Sent()  # type: ignore[assignment]
+    await worker.setup()
+    await worker.step()
+    await worker.step()
+    kept = await ctx.db.kv_get(LOG_KEY)
+    assert list(kept) == ["t1", "t0"] and all(t["status"] == "pending" for t in kept.values())
+    assert (kept["t1"]["with"], kept["t1"]["mine"], kept["t1"]["given_total"]) == ("Camille", False, 12150)
+    assert [c["title"] for c in kept["t0"]["received"]] == ["Emma Watson", "Zendaya"]
+    assert kept["t0"]["mine"] and kept["t0"]["wb_given"] == 500 and kept["t0"]["given_total"] == 12650
+    assert kept["t0"]["received_total"] == kept["t1"]["received_total"] + 5675
+
+    # t0 accepté, t1 disparu sans trace : statuts finaux.
+    active.clear()
+    finished.append({**mine, "status": "accepted"})
+    await worker.step()
+    kept = await ctx.db.kv_get(LOG_KEY)
+    assert (kept["t0"]["status"], kept["t1"]["status"]) == ("accepted", "ended") and kept["t0"]["ended"]
+    await worker.step()  # plus rien à relire
+    assert await ctx.db.kv_get(KV_KEY) == []
     await ctx.db.close()
 

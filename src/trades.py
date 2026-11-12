@@ -210,9 +210,10 @@ async def counter_offers(ctx: Context, e: Evaluation) -> list[str]:
 
 
 async def evaluate(ctx: Context, given: list[Priced], received: list[Priced], wb_given: int = 0,
-                   wb_received: int = 0) -> Evaluation:
+                   wb_received: int = 0, offers: bool = True) -> Evaluation:
     e = Evaluation(given, received, wb_given, wb_received, ctx.settings.trade_fair_margin)
-    e.offers = await counter_offers(ctx, e)
+    if offers:
+        e.offers = await counter_offers(ctx, e)
     return e
 
 
@@ -234,8 +235,9 @@ async def item_details(ctx: Context, item: TradeItem, me: str) -> tuple[str, str
     return title, rarity, shiny
 
 
-async def evaluate_trade(ctx: Context, trade: Trade, me: str) -> Evaluation:
-    """Échange du site, vu de ton côté : tes cartes (offered_by = toi) et tes WB contre les siens."""
+async def evaluate_trade(ctx: Context, trade: Trade, me: str, offers: bool = True) -> Evaluation:
+    """Échange du site, vu de ton côté : tes cartes (offered_by = toi) et tes WB contre les siens. `offers=False` :
+    sans chercher de contre-offre (échange que tu proposes toi-même)."""
     given, received = [], []
     for item in trade.items:
         title, rarity, shiny = await item_details(ctx, item, me)
@@ -244,4 +246,19 @@ async def evaluate_trade(ctx: Context, trade: Trade, me: str) -> Evaluation:
     mine_first = (trade.initiator_id or "").lower() == me
     wb_initiator, wb_recipient = trade.initiator_wikibidous or 0, trade.recipient_wikibidous or 0
     return await evaluate(ctx, given, received, *((wb_initiator, wb_recipient) if mine_first
-                                                  else (wb_recipient, wb_initiator)))
+                                                  else (wb_recipient, wb_initiator)), offers=offers)
+
+
+def snapshot(trade: Trade, e: Evaluation, me: str, at: str) -> dict:
+    """Un échange tel qu'il a été vu, pour le rendement des échanges (kv « trades_log ») : cartes et WB de chaque
+    côté, à leur valeur du moment."""
+    mine_first = (trade.initiator_id or "").lower() == me
+    other = (trade.recipient if mine_first else trade.initiator) or {}
+
+    def cards(side: list[Priced]) -> list[dict]:
+        return [{"title": c.title, "rarity": c.rarity, "shiny": c.shiny, "value": c.value} for c in side]
+
+    return {"id": trade.id, "seen": at, "with": other.get("username") or "?", "mine": mine_first,
+            "given": cards(e.given), "received": cards(e.received), "wb_given": e.wb_given,
+            "wb_received": e.wb_received, "given_total": round(e.given_total),
+            "received_total": round(e.received_total), "unknown": len(e.unknown), "status": "pending"}
