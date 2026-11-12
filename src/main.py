@@ -199,33 +199,32 @@ def report_sections(stats: dict, *, live_bids: bool) -> tuple[str, list[tuple[st
     # Positions simulées et mises de collection réelles (SIMULATE=sniper) : les deux comptes, sinon les cartes
     # gagnées (toujours réelles) semblaient venir des mises simulées.
     rejected = stats.get("bids_rejected", 0)
+    bought = [f"**{plural(stats['auctions_won'], 'achat')}** ({wb(stats['spent_won'])} WB)"
+              if stats["auctions_won"] else "",
+              f"{plural(stats.get('won_collection', 0), 'carte de collection', 'cartes de collection')} "
+              f"({wb(stats.get('spent_collection', 0))} WB)" if stats.get("won_collection") else ""]
     bids = [plural(stats["bids_placed"], "mise placée", "mises placées")
             if live_bids or stats["bids_placed"] else "",
             plural(rejected, "refusée", "refusées") + " par le site" if rejected else "",
             plural(stats["bids_simulated"], "mise simulée", "mises simulées")
             if not live_bids or stats["bids_simulated"] else ""]
-    won = [f"{plural(stats['auctions_won'], 'position gagnée', 'positions gagnées')} ({wb(stats['spent_won'])} WB)"
-           if stats["auctions_won"] else "",
-           f"{plural(stats.get('won_collection', 0), 'carte de collection', 'cartes de collection')} "
-           f"({wb(stats.get('spent_collection', 0))} WB)" if stats.get("won_collection") else ""]
-    sniper = " · ".join(b for b in bids if b) + ("\n" + " · ".join(w for w in won if w) if any(won) else "")
-    positions = [f"{plural(stats['positions_held'], 'détenue', 'détenues')} · "
-                 f"{wb(stats['capital_in_positions'])} WB immobilisés"]
+    buying = [" · ".join(b for b in bought if b), " · ".join(b for b in bids if b)]
+    resale = [f"**{plural(stats['positions_sold'], 'revendue')}** · bénéfice **{wb(stats['profit'], True)} WB**"
+              if stats["positions_sold"] else "",
+              f"{plural(stats['positions_held'], 'position')} en stock · "
+              f"{wb(stats['capital_in_positions'])} WB immobilisés"]
     if stats.get("positions_held_sim"):
-        positions.append(f"{plural(stats['positions_held_sim'], 'simulée', 'simulées')} "
-                         f"({wb(stats.get('capital_simulated', 0))} WB fictifs)")
-    if stats["positions_sold"]:
-        positions.append(f"{plural(stats['positions_sold'], 'revendue', 'revendues')} · "
-                         f"bénéfice **{wb(stats['profit'], True)} WB**")
+        resale.append(f"{plural(stats['positions_held_sim'], 'simulée', 'simulées')} "
+                      f"({wb(stats.get('capital_simulated', 0))} WB fictifs)")
     if stats["profit_simulated"]:
-        positions.append(f"Bénéfice simulé : {wb(stats['profit_simulated'], True)} WB")
-    sales = [plural(stats["listings_posted"], "en vente", "en vente") if stats["listings_posted"] else "",
-             plural(stats["listings_scheduled"], "programmée", "programmées") if stats["listings_scheduled"] else "",
-             f"{plural(stats['doublons_vendus'], 'doublon vendu', 'doublons vendus')} "
+        resale.append(f"Bénéfice simulé : {wb(stats['profit_simulated'], True)} WB")
+    extra = [f"{plural(stats['doublons_vendus'], 'doublon vendu', 'doublons vendus')} "
              f"({wb(stats['doublons_recette'])} WB)" if stats["doublons_vendus"] else "",
              plural(stats["discarded"], "carte défaussée", "cartes défaussées") if stats["discarded"] else ""]
-    return description, [(Topic.SNIPER.value, sniper), ("💼 Positions", "\n".join(positions)),
-                         (Topic.SALES.value, " · ".join(x for x in sales if x) or "rien aujourd'hui")]
+    if any(extra):
+        resale.append(" · ".join(x for x in extra if x))
+    return description, [("🎯 Achats", "\n".join(x for x in buying if x)),
+                         ("💰 Reventes", "\n".join(x for x in resale if x))]
 
 
 CALIBRATION_MIN = 10  # enchères ou reventes du jour en dessous desquelles la médiane ne dit rien
@@ -233,18 +232,16 @@ CALIBRATION_LOW = 1.05  # enchères perdues finies au-dessus de l'estimation × 
 
 
 def calibration_text(ratios: dict[str, list[float]]) -> str:
-    """Bloc « Estimations » du bilan : les estimations du jour étaient-elles justes ? Vide sans assez de mises."""
-    lines = []
+    """Bloc « Estimations » du bilan, seulement quand elles sont trop basses : les enchères perdues du jour ont fini
+    au-dessus de l'estimation × CALIBRATION_LOW. Sinon vide : rien à faire. Les deux rapports vont dans les logs."""
     lost, sold = ratios.get("lost") or [], ratios.get("sold") or []
-    if len(lost) >= CALIBRATION_MIN:
-        ratio = st.median(lost)
-        lines.append(f"Enchères perdues : finies à ×{ratio:.2f} de l'estimation ({len(lost)})".replace(".", ","))
-        if ratio >= CALIBRATION_LOW:
-            lines.append("⚠️ Estimations trop basses : les prix montent, `PRICE_SITE_MARGIN` est à relever.")
-    if len(sold) >= CALIBRATION_MIN:
-        lines.append(f"Reventes : vendues à ×{st.median(sold):.2f} de l'estimation ({len(sold)})"
-                     .replace(".", ","))
-    return "\n".join(lines)
+    if lost or sold:
+        log.info("estimations du jour : enchères perdues ×%.2f (%d), reventes ×%.2f (%d)",
+                 st.median(lost) if lost else 0, len(lost), st.median(sold) if sold else 0, len(sold))
+    if len(lost) < CALIBRATION_MIN or (ratio := st.median(lost)) < CALIBRATION_LOW:
+        return ""
+    return (f"⚠️ Trop basses : les enchères perdues ont fini à ×{ratio:.2f} de l'estimation ({len(lost)}). "
+            "Les prix montent, `PRICE_SITE_MARGIN` est à relever.").replace("×1.", "×1,")
 
 
 def as_section(text: str) -> tuple[str, str]:
@@ -657,7 +654,7 @@ async def run_bot(settings: Settings) -> None:
             jobs.append(("stats", lambda: stats_loop(ctx, workers)))
         if settings.enable_sniper and settings.sniper_report_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
-        if settings.enable_backup and settings.backup_keep > 0:
+        if (settings.enable_backup and settings.backup_keep > 0) or settings.observed_keep_days > 0:
             jobs.append(("sauvegarde", lambda: backup_loop(ctx)))
         if settings.discord_bot_token and settings.discord_owner_id <= 0:
             ctx.notifier.warning("Commandes Discord inactives", "DISCORD_OWNER_ID manquant ou pas un nombre : il faut "

@@ -12,6 +12,7 @@ puis son statut final quand il n'est plus en cours : c'est la base du rendement 
 from __future__ import annotations
 
 import random
+from datetime import datetime
 
 from src import trades
 from src.core.client import ApiError, RateLimited
@@ -23,6 +24,8 @@ from src.workers.base import Worker
 KV_KEY = "trades_seen"  # échanges déjà annoncés (seulement ceux encore actifs)
 LOG_KEY = "trades_log"  # tes échanges, proposés ou reçus, avec la valeur de chaque côté : id -> src.trades.snapshot
 LOG_MAX = 300
+BACKFILL_KEY = "trades_backfilled"  # anciens échanges repris une fois
+BACKFILL_MAX = 40  # échanges terminés repris au plus (chaque carte coûte une ou deux requêtes de fond)
 
 
 class TradeWatch(Worker):
@@ -67,6 +70,8 @@ class TradeWatch(Worker):
                                url=f"{self.ctx.client.endpoints.base_url}/trades", important=True,
                                alert=True)  # à accepter ou refuser sur le site
         await self._close_ended(history, active)
+        if me and not await self.db.kv_get(BACKFILL_KEY):
+            await self._backfill(history, me)
         await self.db.kv_set(KV_KEY, sorted(seen & active))
         await self.db.kv_set(LOG_KEY, dict(sorted(history.items(), key=lambda kv: kv[1]["seen"])[-LOG_MAX:]))
         minutes = self.settings.trade_check_minutes
@@ -96,3 +101,35 @@ class TradeWatch(Worker):
                 self._ended_logged = True
                 self.log.info("échange terminé, champs : %s", str({k: v for k, v in found.items()
                                                                   if k != "items"})[:1500])
+
+    async def _backfill(self, history: dict[str, dict], me: str) -> None:
+        """Une seule fois : tes échanges terminés avant le suivi (12/11), si le site les donne encore. Chaque carte
+        est comptée à sa valeur de la date de l'échange quand ses ventes de l'époque sont encore en base, sinon à
+        l'estimation d'aujourd'hui ; la rareté d'une carte qui a quitté ta collection sans passer par le bot reste
+        inconnue. Route illisible : nouvel essai au passage suivant."""
+        try:
+            raw = await self.ctx.client.get("trades", background=True)
+        except (ApiError, RateLimited) as exc:
+            self.log.info("anciens échanges illisibles (%s) : nouvel essai au prochain passage", exc)
+            return
+        rows = [t for t in (raw.get("trades") or [] if isinstance(raw, dict) else []) if isinstance(t, dict)]
+        old = [t for t in rows if t.get("id") and t["id"] not in history and str(t.get("status") or "") != "pending"
+               and me in (str(t.get("initiator_id") or "").lower(), str(t.get("recipient_id") or "").lower())]
+        old.sort(key=lambda t: str(t.get("updated_at") or t.get("created_at") or ""), reverse=True)
+        done = 0
+        for row in old[:BACKFILL_MAX]:
+            when = str(row.get("updated_at") or row.get("created_at") or "")
+            try:
+                at = datetime.fromisoformat(when.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            trade = TradesList.model_validate({"trades": [row]}).trades[0]
+            e = await trades.evaluate_trade(self.ctx, trade, me, offers=False, at=at)
+            kept = trades.snapshot(trade, e, me, at.isoformat(), status=str(row.get("status") or "ended"))
+            history[trade.id] = {**kept, "ended": at.isoformat(), "retro": True}
+            done += 1
+        await self.db.kv_set(BACKFILL_KEY, True)
+        statuses = sorted({str(t.get("status")) for t in rows})
+        self.log.info("anciens échanges : %d repris sur %d donnés par le site (statuts vus : %s)", done, len(rows),
+                      ", ".join(statuses) or "aucun")
+

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -899,11 +900,39 @@ class Database:
             "ORDER BY placed_at DESC", (title,))
 
     async def observed_prices_since(self, card_id: str, since: datetime, limit: int, rarity: str | None = None,
-                                    shiny: bool | None = None) -> list[int]:
+                                    shiny: bool | None = None, until: datetime | None = None) -> list[int]:
         where, params = _observed_filter(card_id, rarity, shiny)
+        if until is not None:
+            where += " AND ended_at <= ?"
+            params += (iso(until),)
         rows = await self._all(f"SELECT price FROM observed_sales o WHERE {where} AND ended_at >= ? "
                                "ORDER BY ended_at DESC LIMIT ?", (*params, iso(since), limit))
         return [r["price"] for r in rows]
+
+    async def purge_observed(self, before: datetime, keep_min: int, batch: int = 5000) -> int:
+        """Efface les ventes observées non shiny finies avant `before`, pour les cartes (et raretés) vendues au moins
+        `keep_min` fois depuis : une carte rarement vendue garde tout son historique. Par lots, pour ne pas bloquer
+        les écritures du sniper. Renvoie le nombre de ventes effacées."""
+        cutoff, total = iso(before), 0
+        while True:
+            cursor = await self.db.execute(
+                "DELETE FROM observed_sales WHERE auction_id IN (SELECT o.auction_id FROM observed_sales o JOIN "
+                "(SELECT card_id, rarity FROM observed_sales WHERE is_shiny = 0 AND ended_at >= ? "
+                "GROUP BY card_id, rarity HAVING COUNT(*) >= ?) k ON k.card_id = o.card_id AND k.rarity IS o.rarity "
+                "WHERE o.is_shiny = 0 AND o.ended_at < ? LIMIT ?)", (cutoff, keep_min, cutoff, batch))
+            await self.db.commit()
+            total += cursor.rowcount
+            if cursor.rowcount < batch:
+                return total
+            await asyncio.sleep(0.5)
+
+    async def known_copy(self, owned_card_id: str) -> tuple[str | None, bool] | None:
+        """(rareté, shiny) d'un exemplaire que le bot a déjà mis en vente, même s'il n'est plus dans la collection
+        (carte d'un ancien échange)."""
+        row = await self._one("SELECT l.rarity, COALESCE(b.is_shiny, 0) AS shiny FROM listings l LEFT JOIN bids b "
+                              "ON b.id = l.bid_id WHERE l.owned_card_id = ? AND l.rarity IS NOT NULL "
+                              "ORDER BY l.id DESC LIMIT 1", (owned_card_id,))
+        return (row["rarity"], bool(row["shiny"])) if row else None
 
     async def validation_stats(self, since: datetime, min_sales: int) -> dict[str, int]:
         """Chiffres pour juger la simulation : marché observé et résultat des positions depuis le début."""
@@ -951,6 +980,12 @@ class Database:
                              f"AND {sniper}"),
             "won_collection": await one("SELECT COUNT(*) FROM bids WHERE settled_at >= ? "
                                         "AND status IN ('won', 'sim_won') AND reason LIKE 'collection%'"),
+            "bids_rejected": await one("SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 0 "
+                                       f"AND status = 'rejected' AND {sniper}"),
+            "won_wb": await one("SELECT COALESCE(SUM(amount), 0) FROM bids WHERE settled_at >= ? AND status = 'won' "
+                                f"AND {sniper}"),
+            "sold_profit": await one("SELECT COALESCE(SUM(sale_price - amount), 0) FROM bids WHERE sold_at >= ? "
+                                     f"AND dry_run = 0 AND sale_price IS NOT NULL AND {position}"),
             "held": await one(f"SELECT COUNT(*) FROM bids WHERE {HELD} AND {position}", ()),
             "held_real": await one(f"SELECT COUNT(*) FROM bids WHERE {HELD} AND {position} AND dry_run = 0", ()),
             "posted": await one("SELECT COUNT(*) FROM listings WHERE posted_at >= ? AND status <> 'simulated' "

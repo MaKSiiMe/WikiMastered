@@ -15,7 +15,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from itertools import combinations
 
 from src.config import RARITIES
@@ -144,12 +144,15 @@ class Evaluation:
         return "\n\n".join([*(f"**{name}**\n{value}" for name, value in self.columns), self.notes]).strip()
 
 
-async def card_value(ctx: Context, card_id: str | None, title: str, rarity: str | None, shiny: bool) -> Priced:
+async def card_value(ctx: Context, card_id: str | None, title: str, rarity: str | None, shiny: bool,
+                     at: datetime | None = None) -> Priced:
     """Médiane des ventes observées des TRADE_DAYS derniers jours ; trop peu de ventes : l'estimation du bot.
-    Sans rareté : valeur inconnue, plutôt qu'une médiane de toutes ses raretés."""
+    Sans rareté : valeur inconnue, plutôt qu'une médiane de toutes ses raretés. `at` : valeur à cette date (ancien
+    échange), d'après les ventes des TRADE_DAYS jours d'avant ; sinon l'estimation d'aujourd'hui."""
     if not card_id or not rarity:
         return Priced(title, rarity, shiny)
-    prices = await ctx.db.observed_prices_since(card_id, utcnow() - timedelta(days=TRADE_DAYS), 1000, rarity, shiny)
+    prices = await ctx.db.observed_prices_since(card_id, (at or utcnow()) - timedelta(days=TRADE_DAYS), 1000, rarity,
+                                                shiny, until=at)
     if len(prices) >= TRADE_MIN_SALES:
         return Priced(title, rarity, shiny, robust_median(prices), len(prices))
     quote = await ctx.prices.quote(card_id, rarity, shiny=shiny, fetch=False)
@@ -217,16 +220,21 @@ async def evaluate(ctx: Context, given: list[Priced], received: list[Priced], wb
     return e
 
 
-async def item_details(ctx: Context, item: TradeItem, me: str) -> tuple[str, str | None, bool]:
+async def item_details(ctx: Context, item: TradeItem, me: str, owned: bool = False) -> tuple[str, str | None, bool]:
     """(titre, rareté, shiny) d'une carte d'échange. Le 01/11, le site n'en donnait que les identifiants (« ? · ? » pour
     les 7 cartes demandées par Lpancho) : titre lu sur la route des ventes de la carte, rareté de ton exemplaire lue
     dans ta collection. Rareté d'une carte de l'autre joueur : inconnue."""
     title, rarity, shiny = item.title or "?", item.rarity, item.shiny
     if item.card or not item.card_id:
         return title, rarity, shiny
+    # Exemplaire que le bot a déjà mis en vente : sa rareté est connue, même s'il a quitté la collection.
+    known = await ctx.db.known_copy(item.user_card_id) if item.user_card_id else None
     try:
         title = (await ctx.api.sales_summary(item.card_id, background=True)).wikipedia_title or "?"
-        if title != "?" and (item.offered_by or "").lower() == me:
+        if known:
+            return title, known[0], known[1]
+        # Le tien, ou celui que tu as reçu d'un échange terminé : cherché dans ta collection.
+        if title != "?" and ((item.offered_by or "").lower() == me or owned):
             async for copy in ctx.api.iter_collection(q=title, background=True):
                 if copy.id == item.user_card_id:
                     return title, copy.rarity, copy.is_shiny
@@ -235,13 +243,16 @@ async def item_details(ctx: Context, item: TradeItem, me: str) -> tuple[str, str
     return title, rarity, shiny
 
 
-async def evaluate_trade(ctx: Context, trade: Trade, me: str, offers: bool = True) -> Evaluation:
+async def evaluate_trade(ctx: Context, trade: Trade, me: str, offers: bool = True,
+                         at: datetime | None = None) -> Evaluation:
     """Échange du site, vu de ton côté : tes cartes (offered_by = toi) et tes WB contre les siens. `offers=False` :
-    sans chercher de contre-offre (échange que tu proposes toi-même)."""
+    sans chercher de contre-offre (échange que tu proposes toi-même). `at` : ancien échange, cartes à leur valeur
+    de cette date."""
     given, received = [], []
     for item in trade.items:
-        title, rarity, shiny = await item_details(ctx, item, me)
-        priced = await card_value(ctx, item.card_id or (item.card.id if item.card else None), title, rarity, shiny)
+        title, rarity, shiny = await item_details(ctx, item, me, owned=at is not None)
+        priced = await card_value(ctx, item.card_id or (item.card.id if item.card else None), title, rarity, shiny,
+                                  at)
         (given if (item.offered_by or "").lower() == me else received).append(priced)
     mine_first = (trade.initiator_id or "").lower() == me
     wb_initiator, wb_recipient = trade.initiator_wikibidous or 0, trade.recipient_wikibidous or 0
@@ -249,7 +260,7 @@ async def evaluate_trade(ctx: Context, trade: Trade, me: str, offers: bool = Tru
                                                   else (wb_recipient, wb_initiator)), offers=offers)
 
 
-def snapshot(trade: Trade, e: Evaluation, me: str, at: str) -> dict:
+def snapshot(trade: Trade, e: Evaluation, me: str, at: str, status: str = "pending") -> dict:
     """Un échange tel qu'il a été vu, pour le rendement des échanges (kv « trades_log ») : cartes et WB de chaque
     côté, à leur valeur du moment."""
     mine_first = (trade.initiator_id or "").lower() == me
@@ -261,7 +272,7 @@ def snapshot(trade: Trade, e: Evaluation, me: str, at: str) -> dict:
     return {"id": trade.id, "seen": at, "with": other.get("username") or "?", "mine": mine_first,
             "given": cards(e.given), "received": cards(e.received), "wb_given": e.wb_given,
             "wb_received": e.wb_received, "given_total": round(e.given_total),
-            "received_total": round(e.received_total), "unknown": len(e.unknown), "status": "pending"}
+            "received_total": round(e.received_total), "unknown": len(e.unknown), "status": status}
 
 
 CONCLUDED = ("accept", "complet", "done", "conclu")  # statuts d'un échange fait (champs réels à confirmer)
@@ -305,6 +316,7 @@ def history_text(history: dict[str, dict], since: str) -> tuple[str, list[str]]:
     for t in rows[:HISTORY_SHOWN]:
         state = "✅ conclu" if concluded(t["status"]) else marks.get(t["status"], f"✖️ {t['status']}")
         unknown = " · ⚠️ carte sans valeur connue" if t.get("unknown") else ""
+        unknown += " · ↩︎" if t.get("retro") else ""
         lines.append(f"**{t['seen'][8:10]}/{t['seen'][5:7]} · {t['with']}** · {state} · "
                      f"**{wb(t['received_total'] - t['given_total'], True)} WB**{unknown}\n"
                      f"donné : {cards(t, 'given', t['wb_given'])} (~{wb(t['given_total'])})\n"

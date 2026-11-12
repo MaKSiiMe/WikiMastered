@@ -19,7 +19,7 @@ import logging
 import shutil
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.core.timeutils import next_local, now_local, sleep_until, utcnow
@@ -117,11 +117,32 @@ def describe(info: dict | None) -> str:
     return f"{when:%d/%m %H:%M} · {info['size'] >> 20} Mo (base {info['db_size'] >> 20} Mo)"
 
 
+async def purge_observed(ctx: Context) -> int:
+    """Efface les ventes observées de plus de OBSERVED_KEEP_DAYS jours (voir Database.purge_observed). La place est
+    reprise par les ventes suivantes : le fichier ne grossit plus, la sauvegarde rétrécit tout de suite."""
+    days = ctx.settings.observed_keep_days
+    if days <= 0:
+        return 0
+    try:
+        purged = await ctx.db.purge_observed(utcnow() - timedelta(days=days), ctx.settings.price_recent_sales)
+    except Exception:  # noqa: BLE001 - une purge ratée ne doit pas empêcher la sauvegarde
+        log.exception("Purge des ventes observées impossible")
+        return 0
+    if purged:
+        log.info("ventes observées : %d effacée(s), de plus de %d jours (shiny et cartes rarement vendues gardées)",
+                 purged, days)
+    return purged
+
+
 async def backup_loop(ctx: Context) -> None:
-    """Une sauvegarde par jour à BACKUP_TIME ; un échec prévient une fois par jour, jamais le bot."""
+    """Chaque jour à BACKUP_TIME : purge des vieilles ventes observées, puis sauvegarde ; un échec prévient une fois
+    par jour, jamais le bot."""
     ctx.last_backup = await ctx.db.kv_get(KV_KEY, {})
     while True:
         await sleep_until(next_local(ctx.settings.backup_time))
+        await purge_observed(ctx)
+        if not (ctx.settings.enable_backup and ctx.settings.backup_keep > 0):
+            continue
         try:
             result = await run_backup(ctx)
             ctx.notifier.info("Sauvegarde faite", f"{result.path.name} : {result.size >> 20} Mo en "
