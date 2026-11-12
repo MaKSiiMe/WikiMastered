@@ -980,6 +980,12 @@ class Database:
                              f"AND {sniper}"),
             "won_collection": await one("SELECT COUNT(*) FROM bids WHERE settled_at >= ? "
                                         "AND status IN ('won', 'sim_won') AND reason LIKE 'collection%'"),
+            "bids_rejected": await one("SELECT COUNT(*) FROM bids WHERE placed_at >= ? AND dry_run = 0 "
+                                       f"AND status = 'rejected' AND {sniper}"),
+            "won_wb": await one("SELECT COALESCE(SUM(amount), 0) FROM bids WHERE settled_at >= ? AND status = 'won' "
+                                f"AND {sniper}"),
+            "sold_profit": await one("SELECT COALESCE(SUM(sale_price - amount), 0) FROM bids WHERE sold_at >= ? "
+                                     f"AND dry_run = 0 AND sale_price IS NOT NULL AND {position}"),
             "held": await one(f"SELECT COUNT(*) FROM bids WHERE {HELD} AND {position}", ()),
             "held_real": await one(f"SELECT COUNT(*) FROM bids WHERE {HELD} AND {position} AND dry_run = 0", ()),
             "posted": await one("SELECT COUNT(*) FROM listings WHERE posted_at >= ? AND status <> 'simulated' "

@@ -1,7 +1,8 @@
-"""Récap périodique (RECAP_INTERVAL_HOURS) : ce que chaque worker a fait, et ce qui cloche.
+"""Récap périodique (RECAP_INTERVAL_HOURS) : ce qui cloche, puis les achats et les ventes de la période.
 
-Il sert à repérer vite un problème (worker arrêté, erreurs, plafond dépassé, sniper qui
-ne trouve rien) sans attendre le bilan du soir.
+Il sert à repérer vite un problème (worker arrêté, erreurs, plafond dépassé, sniper qui ne trouve rien) sans attendre
+le bilan du soir. Sur Discord : seulement ce qui s'est passé. Le détail de chaque worker (repérage, issues des
+enchères, requêtes au site) est écrit dans les logs, lignes « détail · … ».
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from datetime import datetime, timedelta
 from src.core import timeutils
 from src.core.notifier import Level, Topic
 from src.core.timeutils import now_local, sleep_until, utcnow
+from src.roi import plural, wb
 from src.workers.base import Context, Worker
 from src.workers.collection import progress_lines, targets
 
@@ -30,6 +32,10 @@ BLOCKS: list[tuple[str, tuple[str, ...]]] = [
     (Topic.TRADES.value, ("echanges",)),
     ("🛡️ Garde", ("garde",)),
 ]
+
+
+# Workers dont les lignes d'activité vont sur Discord quand ils ont fait quelque chose (succès réclamés).
+SHOWN = {"succes"}
 
 
 def health(worker: Worker, now: datetime, session_ok: bool) -> tuple[str, str | None]:
@@ -53,16 +59,28 @@ def health(worker: Worker, now: datetime, session_ok: bool) -> tuple[str, str | 
 
 
 def activity(name: str, stats: dict[str, int]) -> list[str]:
-    """Ce que montre la base pour ce worker depuis le dernier récap."""
+    """Ce que montre la base pour ce worker depuis le dernier récap : le résultat d'abord, sans les compteurs à
+    zéro. Rien à dire : liste vide, le bloc n'est pas affiché."""
     if name == "sniper":
-        return [f"Mises : {stats['bids_real']} réelle(s), {stats['bids_sim']} simulée(s) · "
-                 f"collection {stats['bids_collection']}",
-                 f"Gagnées : {stats['won']} position(s), {stats['won_collection']} carte(s) de collection · "
-                 f"{stats['held']} position(s) détenue(s)" +
-                 (f" (dont {stats['held_real']} réelle(s))" if stats["held_real"] != stats["held"] else "")]
+        rejected = stats.get("bids_rejected", 0)
+        bought = f"**{plural(stats['won'], 'achat')}**" + (f" ({wb(stats.get('won_wb', 0))} WB)" if stats["won"] else "")
+        parts = [bought, plural(stats["bids_real"] - rejected, "mise")]
+        if rejected:
+            parts.append(plural(rejected, "refusée", "refusées") + " par le site")
+        if stats["bids_sim"]:
+            parts.append(plural(stats["bids_sim"], "mise simulée", "mises simulées"))
+        held = f"{plural(stats['held'], 'position')} en stock"
+        if stats["held_real"] != stats["held"]:
+            held += f" (dont {plural(stats['held_real'], 'réelle')})"
+        return [" · ".join(parts), held]
     if name == "inventory":
-        lines = [f"Mises en vente : {stats['posted']} · vendues {stats['sold']} ({stats['sold_wb']} WB) · "
-                 f"sans acheteur {stats['unsold']}"]
+        lines = []
+        if stats["posted"] or stats["sold"] or stats["unsold"]:
+            sold = f"**{plural(stats['sold'], 'vendue')}**"
+            if stats["sold"]:
+                sold += f" ({wb(stats['sold_wb'])} WB, bénéfice {wb(stats.get('sold_profit', 0), True)})"
+            lines.append(f"{sold} · {plural(stats['posted'], 'mise en vente', 'mises en vente')} · "
+                         f"{stats['unsold']} sans acheteur")
         if stats["sim_sold"] or stats["sim_unsold"]:
             # « Sans acheteur » : une vente terminée sans mise, remise en vente ou carte gardée (le bilan ne compte
             # que les cartes gardées, d'où « 8 invendue(s) » au récap et « 0 gardées invendues » au bilan, le 16/10).
@@ -70,8 +88,10 @@ def activity(name: str, stats: dict[str, int]) -> list[str]:
                          "acheteur (remise en vente ou carte gardée)")
         return lines
     if name == "collection":
-        return [*stats["collection_progress"],
-                f"Sniper : {stats['won_collection']} gagnée(s) · mises {stats['bids_collection']}"]
+        if not (stats["won_collection"] or stats["bids_collection"]):
+            return []
+        return [f"**{plural(stats['won_collection'], 'carte gagnée', 'cartes gagnées')}** sur "
+                f"{plural(stats['bids_collection'], 'mise')}", *stats["collection_progress"][:1]]
     return []
 
 
@@ -117,7 +137,7 @@ async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
         problems.append(f"bot arrêté (sanction) : {ctx.client.halted} ; `rm data/HALT` pour reprendre")
     if not ctx.client.session_ok:
         problems.append("session en pause : les workers attendent un nouveau cookie")
-    sections = []
+    sections, running, paused = [], 0, []
     for title, names in BLOCKS:
         present = [by_name[n] for n in names if n in by_name]
         if not present:
@@ -125,21 +145,32 @@ async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
         lines = activity(names[0], stats)
         for worker in present:
             try:
-                lines += worker.recap()
+                detail = worker.recap()
             except Exception:  # noqa: BLE001 - pas encore initialisé, ou bogue : le récap des autres part quand même
                 log.exception("récap de %s impossible", worker.name)
-                lines.append(f"{worker.name} : activité indisponible")
+                detail = []
+            # Le détail (repérage, issues des enchères, pity…) reste dans les logs : il sert aux revues, pas à Discord.
+            for line in detail:
+                log.info("détail · %s : %s", worker.name, line)
+            lines += [line for line in detail if worker.name in SHOWN and not line.startswith("Aucun")]
             state, problem = health(worker, now, ctx.client.session_ok)
-            lines.append(state if len(present) == 1 else f"{worker.name} : {state}")
             if problem:
                 problems.append(problem)
-        sections.append((title, "\n".join(lines)))
+            if state.startswith("✅"):
+                running += 1
+            elif getattr(worker, "paused", None):
+                paused.append(worker.name)
+            else:
+                lines.append(state if len(present) == 1 else f"{worker.name} : {state}")
+        if lines:
+            sections.append((title, "\n".join(lines)))
     if take_traffic := getattr(ctx.client, "take_traffic", None):
-        sections.append(("🌐 Réseau", traffic_line(*take_traffic(), (now - since).total_seconds())))
+        log.info("détail · réseau : %s", traffic_line(*take_traffic(), (now - since).total_seconds())
+                 .replace("\n", " · "))
     if problems:
         sections.insert(0, ("À vérifier", "\n".join(f"• {p}" for p in problems)))
-    description = (f"Depuis {since.astimezone(timeutils.PARIS):%H:%M} · bot démarré le "
-                   f"{started_at.astimezone(timeutils.PARIS):%d/%m à %H:%M}")
+    description = (f"Depuis {since.astimezone(timeutils.PARIS):%H:%M} · ✅ {plural(running, 'worker actif', 'workers actifs')}"
+                   + (f" · ⏸️ en pause : {', '.join(paused)}" if paused else ""))
     return bool(problems), description, sections
 
 

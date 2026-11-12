@@ -68,28 +68,31 @@ def test_report_sections():
     description, sections = report_sections(stats, live_bids=False)
     assert description == "Solde : **3 120 WB**"
     blocks = {name.split(" ", 1)[1]: body for name, body in sections}
-    assert blocks["Sniper"] == "42 mises simulées"
-    assert blocks["Ventes"] == "2 en vente · 1 programmée · 4 doublons vendus (96 WB)"
-    assert "Bénéfice simulé : +310 WB" in blocks["Positions"]
+    assert blocks["Achats"] == "42 mises simulées"
+    assert blocks["Reventes"].replace("\u202f", " ") == (
+        "3 positions en stock · 820 WB immobilisés\nBénéfice simulé : +310 WB\n4 doublons vendus (96 WB)")
     assert report_sections({**stats, "balance": "?"}, live_bids=True)[0] == "Solde : inconnu"
 
     def block(values: dict, name: str, live: bool = False) -> str:
-        return {n.split(" ", 1)[1]: b for n, b in report_sections(values, live_bids=live)[1]}[name]
+        found = {n.split(" ", 1)[1]: b for n, b in report_sections(values, live_bids=live)[1]}[name]
+        return found.replace("\u202f", " ")
 
     # Positions simulées, collection réelle (SIMULATE=sniper) : les deux comptes, les cartes gagnées sont réelles.
     mixed = {**stats, "bids_placed": 14, "bids_simulated": 76, "won_collection": 12, "spent_collection": 164}
-    assert block(mixed, "Sniper") == "14 mises placées · 76 mises simulées\n12 cartes de collection (164 WB)"
+    assert block(mixed, "Achats") == "12 cartes de collection (164 WB)\n14 mises placées · 76 mises simulées"
     # Bilan du 16/10 : refus comptés à part, positions et collection séparées, positions simulées comptées.
+    # 12/11 : le résultat d'abord (achats, reventes), les ventes en cours ne sont plus répétées.
     live = {**stats, "bids_placed": 120, "bids_rejected": 465, "bids_simulated": 19, "auctions_won": 2,
             "spent_won": 474, "won_collection": 23, "spent_collection": 1091, "positions_held": 5,
             "capital_in_positions": 1338, "positions_held_sim": 5, "capital_simulated": 1273}
-    assert block(live, "Sniper", True) == ("120 mises placées · 465 refusées par le site · 19 mises simulées\n"
-                                           "2 positions gagnées (474 WB) · 23 cartes de collection (1 091 WB)")
-    assert block(live, "Positions", True).startswith("5 détenues · 1 338 WB immobilisés\n"
-                                                     "5 simulées (1 273 WB fictifs)")
-    assert block({**stats, "bids_simulated": 0}, "Sniper", True) == "0 mise placée"
-    assert block({**stats, "listings_posted": 0, "listings_scheduled": 0, "doublons_vendus": 0}, "Ventes") == \
-        "rien aujourd'hui"
+    assert block(live, "Achats", True) == ("**2 achats** (474 WB) · 23 cartes de collection (1 091 WB)\n"
+                                           "120 mises placées · 465 refusées par le site · 19 mises simulées")
+    assert block(live, "Reventes", True).startswith("5 positions en stock · 1 338 WB immobilisés\n"
+                                                    "5 simulées (1 273 WB fictifs)")
+    assert block({**stats, "bids_simulated": 0}, "Achats", True) == "0 mise placée"
+    sold = {**stats, "positions_sold": 23, "profit": 13155, "profit_simulated": 0, "doublons_vendus": 0}
+    assert block(sold, "Reventes") == ("**23 revendues** · bénéfice **+13 155 WB**\n"
+                                       "3 positions en stock · 820 WB immobilisés")
 
     assert as_section("**Collection** : 33/366 — il manque : 2 janvier") == ("Collection", "33/366 — il manque : 2 janvier")
     assert as_section("**Validation de la simulation**\nMarché observé : 3") == ("Validation de la simulation",

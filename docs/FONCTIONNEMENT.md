@@ -54,7 +54,7 @@ Chaque worker peut en plus avoir son propre écart entre deux de ses lectures (`
 
 Les écritures (mises, ventes, étiquettes…) ont leur propre file, une toutes les `HTTP_WRITE_SPACING_SECONDS` (1 s), et ne passent jamais derrière les lectures.
 
-Le récap affiche le bloc « 🌐 Réseau » : lectures par worker, débit moyen, écritures et limitations du site depuis le récap précédent.
+Toutes les 4 h, à l'heure du récap, les logs reçoivent une ligne « détail · réseau » : lectures par worker, débit moyen, écritures et limitations du site depuis le récap précédent.
 
 ```mermaid
 flowchart TD
@@ -269,9 +269,9 @@ Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, 
 
 | Message | Quand | Contenu |
 |---|---|---|
-| 🩺 Récap | toutes les 4 h | ce que chaque worker a fait ; orange avec « À vérifier » en cas d'anomalie |
+| 🩺 Récap | toutes les 4 h | achats et ventes de la période, workers actifs ou en pause ; orange avec « À vérifier » en cas d'anomalie. Le détail de chaque worker (repérage, issues des enchères, réseau) est dans les logs, lignes « détail · … » |
 | Récap des enchères | 08:00 | toutes les mises sur 24 h, gain réalisé et manqué |
-| Bilan | 23:00 | solde, puis sniper, ventes, positions, collection |
+| Bilan | 23:00 | compte, puis achats, reventes, collection ; un bloc « Estimations » seulement quand elles sont trop basses |
 
 ## Logs et journal
 

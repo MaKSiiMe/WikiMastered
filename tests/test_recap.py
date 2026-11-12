@@ -52,13 +52,13 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     assert "sniper : 17 positions ouvertes, plafond 15" in blocks["À vérifier"]
     assert "succes : aucun passage depuis" in blocks["À vérifier"]
     assert "inventory : 2 erreur(s), dernière : HTTP 500" in blocks["À vérifier"]
-    assert "pas assez vue vendue 30" in blocks["🎯 Sniper"] and "✅" in blocks["🎯 Sniper"]
+    # 12/11 : le récap ne garde que le résultat ; le détail de chaque worker va dans les logs.
+    assert blocks["🎯 Sniper"] == "**0 achat** · 0 mise · 17 mises simulées\n17 positions en stock (dont 0 réelle)"
     assert "❌ arrêté" in blocks["🏆 Succès"]
-    assert "⚠️ 2 erreur(s)" in blocks["💰 Ventes"]
-    assert blocks["📅 Collection"].startswith("Collection : 37/366 (10,1 %)\nAucune nouvelle carte en 7 jours\n"
-                                             "Sniper : 0 gagnée(s) · mises 0")
+    assert blocks["💰 Ventes"].startswith("⚠️ 2 erreur(s)")
+    assert "📅 Collection" not in blocks  # ni mise ni carte gagnée : pas de bloc
     assert "💎 Valeur" not in blocks  # worker absent : pas de bloc
-    assert description.startswith("Depuis ")
+    assert description.startswith("Depuis ") and description.endswith("✅ 2 workers actifs")
     assert workers[2].recent_errors == 0  # erreurs remises à zéro après le récap
     await db.close()
 
@@ -91,7 +91,7 @@ def test_inventory_lines_say_what_unsold_means():
 
     stats = {"posted": 0, "sold": 0, "sold_wb": 0, "unsold": 1, "sim_sold": 5, "sim_unsold": 8}
     assert activity("inventory", stats) == [
-        "Mises en vente : 0 · vendues 0 (0 WB) · sans acheteur 1",
+        "**0 vendue** · 0 mise en vente · 1 sans acheteur",
         "Reventes simulées : 5 vendue(s), 8 vente(s) sans acheteur (remise en vente ou carte gardée)"]
 
 
@@ -122,3 +122,21 @@ async def test_recap_live_counts_only_real_positions_against_the_cap(tmp_path):
     stats = await db.recap_stats(now - timedelta(hours=4))
     assert "sniper : 6 positions réelles ouvertes, plafond 5" in anomalies(live, stats, pending)
     await db.close()
+
+
+def test_recap_leads_with_results_and_drops_empty_counters():
+    """12/11 : « trop d'infos pas si utiles ». Achats et ventes d'abord, rien pour une activité sans résultat."""
+    from src.recap import activity
+
+    stats = {"won": 8, "won_wb": 12345, "bids_real": 222, "bids_rejected": 53, "bids_sim": 0, "held": 9,
+             "held_real": 9, "posted": 5, "sold": 1, "sold_wb": 5233, "sold_profit": 637, "unsold": 0, "sim_sold": 0,
+             "sim_unsold": 0, "won_collection": 0, "bids_collection": 0, "collection_progress": ["Jours : 365/366"]}
+    assert [line.replace("\u202f", " ") for line in activity("sniper", stats)] == [
+        "**8 achats** (12 345 WB) · 169 mises · 53 refusées par le site", "9 positions en stock"]
+    assert [line.replace("\u202f", " ") for line in activity("inventory", stats)] == [
+        "**1 vendue** (5 233 WB, bénéfice +637) · 5 mises en vente · 0 sans acheteur"]
+    assert activity("collection", stats) == []
+    assert activity("inventory", {**stats, "posted": 0, "sold": 0}) == []
+    assert activity("collection", {**stats, "won_collection": 1, "bids_collection": 3}) == [
+        "**1 carte gagnée** sur 3 mises", "Jours : 365/366"]
+
