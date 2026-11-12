@@ -616,17 +616,6 @@ class Database:
                               (iso(now),))
         return int(row["n"]) if row else 0
 
-    async def reopen_favorite_positions(self) -> int:
-        """Positions closes faute de revente parce que la carte était en favori (16/10 : Place publique) : rouvertes,
-        et leurs refus « en favori » ne comptent plus comme des échecs. Renvoie leur nombre."""
-        favorite = "status = 'failed' AND error LIKE '%favori%'"
-        rows = await self._all(f"SELECT id FROM bids WHERE closed = 1 AND sale_price IS NULL AND id IN "
-                               f"(SELECT bid_id FROM listings WHERE {favorite})")
-        for r in rows:
-            await self.update_bid(r["id"], closed=0, sold_at=None)
-        await self._exec(f"UPDATE listings SET status = 'favorite' WHERE {favorite}")
-        return len(rows)
-
     async def reopen_antibot_positions(self) -> int:
         """Positions closes après des refus « Vérification anti-bot requise » (01/11 : 16 cartes, 17 162 WB, abandonnées
         de 07:04 à 07:59) : rouvertes, et ces refus ne comptent plus comme des échecs. Renvoie leur nombre."""

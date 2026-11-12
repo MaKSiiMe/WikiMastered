@@ -259,7 +259,7 @@ flowchart LR
 
 Avec `DISCORD_WEBHOOK_SNIPER`, `_VENTES`, `_COLLECTION`, `_BILAN` et `_SYSTEME`, chaque catégorie a son salon (sauf les alertes critiques, toujours dans le salon d'alertes) ; une catégorie sans salon suit le schéma ci-dessus.
 
-**#alertes, le seul salon à laisser sonner** : il reçoit les alertes critiques en entier (avec la mention), et une copie courte, sans mention, de chaque avertissement qui demande une action (position qui traîne, revente abandonnée, carte en favori, sauvegarde impossible, erreurs répétées…) et de chaque échange reçu, avec un lien vers le salon du message complet et de ses boutons. Ce qui se règle seul (serveurs instables, route limitée) et l'arrêt du bot au redéploiement n'y vont pas.
+**#alertes, le seul salon à laisser sonner** : il reçoit les alertes critiques en entier (avec la mention), et une copie courte, sans mention, de chaque avertissement qui demande une action (position qui traîne, revente abandonnée, sauvegarde impossible, erreurs répétées…) et de chaque échange reçu, avec un lien vers le salon du message complet et de ses boutons. Ce qui se règle seul (serveurs instables, route limitée) et l'arrêt du bot au redéploiement n'y vont pas.
 
 **Code couleur**, le même pour tous les messages (salons, commandes, graphiques ; `src/core/colors.py`) : 🔵 information, 🟢 tout va bien, gain ou réglage activé, 🟠 à surveiller, 🔴 problème ou perte, ⚪ réglage coupé, annulé ou rien à faire.
 

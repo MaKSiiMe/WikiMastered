@@ -51,6 +51,7 @@ from src.workers.base import Context, Worker
 INVENTORY_PRICE_MAX_AGE = timedelta(days=3)  # la cote d'un doublon bouge peu
 # Refus du site : « Cette carte est en favori : retirez-la des favoris pour la mettre en vente » (relevé du 16/10).
 FAVORITE_HINT = "favori"
+STARRED = "⭐"  # `_find_copy` : l'exemplaire acheté est en favori, la carte est gardée
 # Remise en vente juste après une vente sans acheteur : « Vous ne possédez pas cette carte » tant que le site ne l'a
 # pas rendue (16/10 à 23:11, Cyril Féraud). Un nouvel essai part N min plus tard, au même prix.
 NOT_OWNED_HINT = "ne possédez pas"
@@ -431,7 +432,6 @@ class InventoryManager(Worker):
 
     def __init__(self, ctx: Context):
         super().__init__(ctx)
-        self._starred_warned: set[int] = set()  # positions dont l'exemplaire est en favori (prévenu une fois)
         self._copy_retry: dict[int, tuple[int, datetime]] = {}  # position -> (essais manqués, prochain essai)
         self._antibot_since: datetime | None = None  # mises en vente refusées : vérification anti-bot à faire
         self._antibot_retry_at = datetime.min.replace(tzinfo=UTC)  # prochain essai tant qu'elle attend
@@ -457,9 +457,6 @@ class InventoryManager(Worker):
         reopened = await self.db.reopen_antibot_positions()
         if reopened:
             self.log.info("%d revente(s) abandonnée(s) à cause de la vérification anti-bot : reprise(s)", reopened)
-        reopened = await self.db.reopen_favorite_positions()
-        if reopened:
-            self.log.info("%d revente(s) abandonnée(s) pour une carte en favori : reprise(s)", reopened)
         reopened = await self.db.reopen_same_card_positions(utcnow() - timedelta(days=7))
         if reopened:
             self.log.info("%d revente(s) abandonnée(s) pendant la vente d'un autre exemplaire : reprise(s)", reopened)
@@ -680,10 +677,14 @@ class InventoryManager(Worker):
                                                                   f"{failures} fois, carte gardée", ring=True))
                 continue
             owned_id = f"sim-{row['id']}" if row["dry_run"] else await self._find_copy(row)
+            if owned_id == STARRED:
+                self._copy_retry.pop(row["id"], None)
+                await self._keep_starred(row)
+                continue
             if not owned_id:
                 misses = self._copy_retry.get(row["id"], (0, now))[0] + 1
                 self._copy_retry[row["id"]] = (misses, now + POSITION_COPY_RETRY)
-                if misses >= POSITION_MAX_COPY_MISSES and row["id"] not in self._starred_warned:
+                if misses >= POSITION_MAX_COPY_MISSES:
                     await self.db.close_position(row["id"], None)
                     self._copy_retry.pop(row["id"], None)
                     self.notifier.warning("Revente abandonnée", f"{row['title']} ({row['rarity']}) : introuvable dans "
@@ -846,26 +847,35 @@ class InventoryManager(Worker):
 
     async def _find_copy(self, row) -> str | None:
         """Exemplaire acheté : le plus récent de cette carte dans la collection, jamais un favori (le site refuse
-        de le vendre : le 16/10, Place publique refusée 3 fois « en favori », puis revente abandonnée)."""
+        de le vendre : le 16/10, Place publique refusée 3 fois « en favori »). STARRED : tu as mis l'exemplaire
+        acheté en favori, tu le gardes. Un favori plus ancien que l'achat ne dit rien : l'exemplaire acheté n'est
+        pas encore arrivé, il est recherché de nouveau."""
         copies = same_copies(await self._owned_copies(row["card_id"], row["title"]), row["rarity"],
                              bool(row["is_shiny"]))
+        since = datetime.fromisoformat(row["placed_at"]) - timedelta(minutes=1)
+        if copies and all(c.starred for c in copies):
+            if any(c.obtained_at and c.obtained_at >= since for c in copies):
+                return STARRED
+            copies = []
         if not copies:
             log = self.log.warning if row["id"] not in self._copy_retry else self.log.debug  # une fois par série
             log("position %s : exemplaire introuvable dans la collection (nouvel essai toutes les %d min)",
                 row["title"], POSITION_COPY_RETRY.seconds // 60)
             return None
-        if all(c.starred for c in copies):
-            if row["id"] not in self._starred_warned:
-                self._starred_warned.add(row["id"])
-                self.notifier.warning("Revente en attente : carte en favori",
-                                      f"{row['title']} ({row['rarity']}) est en favori, le site refuse de la vendre. "
-                                      "Retire l'étoile pour que le bot la revende (il réessaie toutes les 10 min).",
-                                      thread=position_thread(row, "⭐ en favori : le site refuse de la vendre, retire "
-                                                                  "l'étoile (nouvel essai toutes les 10 min)", ring=True))
-            self.log.debug("position %s : seul exemplaire en favori (réessai)", row["title"])
-            return None
-        return newest_sellable(copies, self._protected_tags(),
-                               datetime.fromisoformat(row["placed_at"]) - timedelta(minutes=1))
+        return newest_sellable(copies, self._protected_tags(), since)
+
+    async def _keep_starred(self, row) -> None:
+        """Exemplaire acheté mis en favori : tu le gardes. La position est close, sans nouvel essai ni étiquette
+        POSITION_UNSOLD_TAG ; pour la revendre plus tard, MANUAL_RESALE_TAG la fait reprendre (12/11 : Rapport sexuel
+        ✨, achetée 18 769, retentée toutes les 10 min pour rien)."""
+        await self.db.close_position(row["id"], None)
+        label = f"{row['title']} ({row['rarity']}{' ✨' if row['is_shiny'] else ''})"
+        tag = self.settings.manual_resale_tag.strip()
+        later = f" Pour la revendre plus tard : retire l'étoile et pose l'étiquette « {tag} »." if tag else ""
+        self.log.info("%s en favori : carte gardée, position close (achetée %d)", label, row["amount"])
+        self.notifier.info("Carte gardée : en favori",
+                           f"{label} est en favori : je ne la revends pas (achetée {row['amount']} WB).{later}",
+                           important=True, thread=position_thread(row, "⭐ en favori : carte gardée, position close"))
 
     def _protected_tags(self) -> set[str]:
         return self.settings.protected_tag_keys
@@ -1064,9 +1074,13 @@ class InventoryManager(Worker):
                         await self.db.update_listing(row["id"], owned_card_id=copy, error=str(error)[:300],
                                                      post_at=retry, target_end=retry + timedelta(minutes=minutes))
                         continue
-                # Carte en favori : pas un échec (ne mène pas à l'abandon) ; l'exemplaire est recherché de nouveau.
-                status = "favorite" if FAVORITE_HINT in str(error).lower() else "failed"
-                await self.db.update_listing(row["id"], status=status, error=str(error)[:300])
+                # Carte en favori : pas un échec. Au passage suivant, l'exemplaire est recherché de nouveau : un autre
+                # est vendu à sa place, ou la carte est gardée (`_keep_starred`).
+                if FAVORITE_HINT in str(error).lower():
+                    await self.db.update_listing(row["id"], status="favorite", error=str(error)[:300])
+                    self.log.info("%s : en favori, le site refuse de la vendre", label)
+                    continue
+                await self.db.update_listing(row["id"], status="failed", error=str(error)[:300])
                 self.notifier.warning("Mise en vente refusée", f"{label} : {error}", thread=position_thread(
                     listing_bid(row), f"⚠️ mise en vente refusée : {error}", ring=True) if row["bid_id"] else None)
 
