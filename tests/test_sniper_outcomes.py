@@ -112,7 +112,9 @@ async def test_antibot_refusal_alerts_once_until_a_bid_passes(tmp_path):
     sniper._antibot_retry_at = datetime.now(UTC)
     market["d"] = sale("d", "15 octobre", 15)
     await sniper.step()
-    assert ("SUCCESS", "Sniper : vérification levée") in notifier.sent and sniper.blocked is None
+    # 12/11 : plus de message « vérification levée » : l'alerte est supprimée sur Discord (bot), rien d'autre.
+    assert sniper.blocked is None and sniper.antibot_since is None
+    assert not [title for _, title in notifier.sent if "levée" in title]
     await db.close()
 
 
@@ -128,7 +130,7 @@ async def test_antibot_retry_zero_tries_every_bid_while_pending(tmp_path):
 
     market["b"] = sale("b", "15 octobre", 15)
     await sniper.step()  # tentée sans attendre, et elle passe
-    assert not replies and ("SUCCESS", "Sniper : vérification levée") in notifier.sent
+    assert not replies and sniper.antibot_since is None
     assert "pas tentée" not in sniper.recap()[1]
     await db.close()
 
