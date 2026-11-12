@@ -67,6 +67,7 @@ from src.workers.inventory_manager import cli as inventory_cli
 from src.workers.profile_guard import ProfileGuard
 from src.workers.trade_watch import TradeWatch
 from src.workers.value_scan import ValueScan
+from src.workers.wishes import WishWatch
 
 log = logging.getLogger("wikimastered")
 
@@ -607,6 +608,8 @@ async def run_bot(settings: Settings) -> None:
             workers.append(AccountValue(ctx))
         if settings.enable_trade_watch:
             workers.append(TradeWatch(ctx))
+        if settings.enable_sniper and settings.wish_max_price > 0:
+            workers.append(WishWatch(ctx))
         if settings.enable_profile_guard and settings.supabase_anon_key:
             workers.insert(0, ProfileGuard(ctx))  # en premier : une sanction arrête le bot avant les autres
         elif settings.enable_profile_guard:

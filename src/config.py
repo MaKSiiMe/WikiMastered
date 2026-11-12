@@ -157,6 +157,12 @@ class Settings(BaseSettings):
     # Échanges proposés relus toutes les N min : chacun est évalué une fois (src/trades.py), avec une contre-offre à
     # envoyer s'il est défavorable. Équitable : chaque côté vaut au moins (1 - TRADE_FAIR_MARGIN) fois l'autre.
     enable_trade_watch: bool = True
+    # Cartes souhaitées (worker « souhaits ») : une carte que tu ajoutes toi-même à ta liste de souhaits du site est
+    # misée par le sniper jusqu'à sa cote dans la rareté en vente, au plus WISH_MAX_PRICE (0 = désactivé), dans toute
+    # rareté plus haute que celle que tu possèdes. Gagnée, elle est gardée et reçoit WISH_TAG (vide = aucune).
+    wish_max_price: int = 0
+    wish_tag: str = "Souhait"
+    wish_check_minutes: float = 10.0
     trade_check_minutes: float = 10.0
     trade_fair_margin: float = 0.1
     achievements_time: time = time(22, 50)  # succès réclamés une fois par jour, avant le bilan de 23:00

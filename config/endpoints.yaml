@@ -89,6 +89,10 @@ endpoints:
     path: /api/trades
     params: {active: "1"}
 
+  trades:                       # tous tes échanges, terminés compris (supposé : la même route sans `active`) ;
+    method: GET                 #   lue une fois par échange terminé, pour relever son statut final
+    path: /api/trades
+
   # --- Écriture (bloquées tant que DRY_RUN=true, jamais rejouées) -------------------
   place_bid:                    # [WR market-api.js] -> { current_bid, bidder_balance }
     method: POST                #   erreur possible : { error, min }

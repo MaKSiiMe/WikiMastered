@@ -25,7 +25,7 @@ STALE_AFTER = timedelta(minutes=15)
 BLOCKS: list[tuple[str, tuple[str, ...]]] = [
     (Topic.SNIPER.value, ("sniper",)),
     (Topic.SALES.value, ("inventory", "cotes", "valeur")),
-    (Topic.COLLECTION.value, ("collection",)),
+    (Topic.COLLECTION.value, ("collection", "souhaits")),
     (Topic.ACHIEVEMENTS.value, ("succes",)),
     (Topic.TRADES.value, ("echanges",)),
     ("🛡️ Garde", ("garde",)),

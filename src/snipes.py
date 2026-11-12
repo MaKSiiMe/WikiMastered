@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from src.config import RARITY_RANK
 from src.core.database import Database
 from src.core.models import Auction
 from src.core.timeutils import utcnow
@@ -27,6 +28,10 @@ class Snipe:
     rarity: str = ""  # "" = toutes raretés
     added_at: str = ""
     shiny: bool = False  # shiny seulement (sinon shiny ou non : un shiny vaut ~6 fois la carte normale en L)
+    # Carte souhaitée (src/workers/wishes.py), jamais gardée dans le kv « snipes » : `max_price` est WISH_MAX_PRICE,
+    # la cote de la carte le baisse à chaque vente ; `above` : rang de la plus haute rareté déjà possédée.
+    wish: bool = False
+    above: int = -1
 
     @property
     def key(self) -> str:
@@ -34,7 +39,8 @@ class Snipe:
 
     def matches(self, auction: Auction) -> bool:
         return (collection_key(auction.title) == self.key and (not self.rarity or auction.rarity == self.rarity)
-                and (auction.shiny or not self.shiny))
+                and (auction.shiny or not self.shiny)
+                and (not self.wish or RARITY_RANK.get(auction.rarity or "", -1) > self.above))
 
     @property
     def label(self) -> str:
@@ -44,11 +50,13 @@ class Snipe:
 
 async def load(db: Database) -> dict[str, Snipe]:
     """Demandes en cours, par clé de titre."""
-    return {s.key: s for s in (Snipe(**row) for row in await db.kv_get(KV_KEY, []))}
+    return {s.key: s for s in (Snipe(**{k: v for k, v in row.items() if k not in ("wish", "above")})
+                               for row in await db.kv_get(KV_KEY, []))}
 
 
 async def _save(db: Database, snipes: dict[str, Snipe]) -> None:
-    await db.kv_set(KV_KEY, [asdict(s) for s in sorted(snipes.values(), key=lambda s: s.added_at)])
+    await db.kv_set(KV_KEY, [{k: v for k, v in asdict(s).items() if k not in ("wish", "above")}
+                             for s in sorted(snipes.values(), key=lambda s: s.added_at)])
 
 
 async def add(db: Database, title: str, max_price: int, rarity: str = "", shiny: bool = False) -> Snipe:

@@ -57,7 +57,7 @@ async def _resolve(ctx: Context, titles: dict[str, str], ids: dict[str, str | No
         ids.update({k: found.get(k) for k in keys})
 
 
-async def _current(ctx: Context) -> set[str]:
+async def current(ctx: Context) -> set[str]:
     """Cartes déjà dans la liste de souhaits du joueur."""
     out: set[str] = set()
     while True:
@@ -81,7 +81,7 @@ async def sync(ctx: Context, missing: list[str], titles: dict[str, str]) -> dict
     wanted = {k: titles.get(k, k) for k in missing}
     try:
         await _resolve(ctx, wanted, ids)
-        have = await _current(ctx)
+        have = await current(ctx)
         targets = {k: ids[k] for k in wanted if ids.get(k)}
         for rows in _chunks([(k, c) for k, c in targets.items() if c not in have], WRITE_BATCH):
             if not live:
@@ -176,9 +176,11 @@ async def covered(ctx: Context) -> set[str]:
     return set((await ctx.db.kv_get(KV_KEY) or {}).get("covered") or [])
 
 
-async def new_listings(ctx: Context, wanted: set[str], now: datetime | None = None) -> list[str]:
+async def new_listings(ctx: Context, wanted: set[str], now: datetime | None = None,
+                       extra: dict[str, str] | None = None) -> list[str]:
     """Ventes annoncées depuis la dernière lecture, pour les cartes de `wanted`. Le curseur est gardé en base : un
-    redémarrage ne perd pas les annonces arrivées entre-temps."""
+    redémarrage ne perd pas les annonces arrivées entre-temps. `extra` : id de carte -> clé de titre des cartes
+    souhaitées (src/workers/wishes.py), que l'état des collections ne connaît pas."""
     known = await ctx.db.kv_get(CURSOR_KEY)
     cursor = known or (now or utcnow()).isoformat()
     status, rows = await ctx.client.supabase("GET", "notifications", params={
@@ -187,6 +189,7 @@ async def new_listings(ctx: Context, wanted: set[str], now: datetime | None = No
     if status != 200 or not isinstance(rows, list):
         raise ApiError(status, rows, "supabase:notifications")
     by_id = {c: k for k, c in ((await ctx.db.kv_get(KV_KEY) or {}).get("ids") or {}).items() if c}
+    by_id.update(extra or {})
     auctions: list[str] = []
     for row in rows:
         data = row.get("data") if isinstance(row.get("data"), dict) else {}

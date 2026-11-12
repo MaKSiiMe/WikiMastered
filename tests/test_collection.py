@@ -35,6 +35,7 @@ async def test_duplicates_priced_within_quota(tmp_path):
     """Pas plus de SELL_PRICE_LOOKUPS_PER_RUN cotes demandées ; les autres cartes : ventes observées."""
     from src.workers.inventory_manager import InventoryManager, select_for_sale
     from tests.test_integration import seed_observed
+    from tests.test_session import cookie_for
 
     rows = [copy("a1", "A"), copy("a2", "A"), copy("a3", "A"), copy("b1", "B"), copy("b2", "B"),
             copy("c1", "C"), copy("c2", "C")]
@@ -613,3 +614,106 @@ async def test_sniper_follows_an_announced_sale_without_searching_its_title(tmp_
     await sniper._read_wishlist(snipe_params(ctx.settings, False), now)
     assert "a1" in sniper._targets
     await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_a_card_you_wishlist_yourself_is_bought_up_to_its_quote_and_tagged(tmp_path):
+    """12/11 : une carte ajoutée à la main à la liste de souhaits est achetée par le sniper, sans /snipe : toute
+    rareté au-dessus de celle possédée, jusqu'à sa cote et au plus WISH_MAX_PRICE ; gagnée, elle est étiquetée et
+    reste souhaitée pour une rareté plus haute. Les cartes mises dans la liste par le bot ne comptent pas."""
+    import json
+
+    from datetime import datetime, timedelta
+
+    from src.core.models import Auction
+    from src.workers import wishes
+    from src.workers.auction_sniper import AuctionSniper, Target
+    from tests.test_integration import seed_observed
+    from tests.test_session import cookie_for
+    from tests.test_sniper_discovery import sale
+
+    market = {"w1": sale("w1", "Ada Lovelace", "SR", 300, base=40), "w0": sale("w0", "Ada Lovelace", "R", 300, base=5),
+              "w2": sale("w2", "Ada Lovelace", "UR", 300, base=300)}
+    for aid in market:
+        market[aid]["card"]["id"] = "c-ada"
+    owned = [{"id": "o-r", "card_id": "c-ada", "obtained_at": "2026-10-01T10:00:00+00:00",
+              "card": {"id": "c-ada", "wikipedia_title": "Ada Lovelace", "rarity": "R"}}]
+    tagged = []
+
+    def handler(request):
+        path, params = request.url.path, request.url.params
+        if path == "/rest/v1/wishlist_items":
+            return httpx.Response(200, json=[{"card_id": "c-ada"}, {"card_id": "c-14"}])
+        if path == "/rest/v1/cards":
+            assert params["id"] == "in.(c-ada)"  # c-14 : mise par le bot pour une collection
+            return httpx.Response(200, json=[{"id": "c-ada", "wikipedia_title": "Ada Lovelace"}])
+        if path == "/rest/v1/notifications":
+            return httpx.Response(200, json=[])
+        if path == "/rest/v1/tags":
+            return httpx.Response(200, json=[{"id": "t-wish", "name": "souhait"}])
+        if path == "/rest/v1/user_card_tags":
+            tagged.append(json.loads(request.content))
+            return httpx.Response(201)
+        if path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": owned})
+        if path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 5000})
+        if "mine" in params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        if path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        if path.endswith("/bid"):
+            return httpx.Response(200, json={"current_bid": 40, "bidder_balance": 4960})
+        if path.startswith("/api/marketplace/"):
+            return httpx.Response(200, json={"auction": market[path.rsplit("/", 1)[1]]})
+        if path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": list(market.values()) if params.get("q") else [],
+                                             "hasMore": False})
+        raise AssertionError(f"route inattendue {request.method} {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, sniper_resale_rarities=["L"], wish_max_price=200,
+                                   dry_run=False, supabase_anon_key="k", wm_cookie=cookie_for("a1", "r1", 3600))
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    await db.kv_set("collection_wishlist", {"added": {"14 octobre": "c-14"}})
+    await seed_observed(db, "c-ada", [60, 64, 62], rarity="SR")
+    await db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at) VALUES (?, 'c-ada', 't', "
+        "'UR', ?, ?)", [(f"ur-{i}", p, (datetime.now(UTC) - timedelta(hours=i + 1)).isoformat())
+                        for i, p in enumerate([900, 950, 920])])
+    await db.db.commit()
+    watch = wishes.WishWatch(ctx)
+    await watch.setup()
+    await watch.step()
+    wanted = await wishes.load(db, 200)
+    assert [(s.title, s.above, s.max_price) for s in wanted.values()] == [("Ada Lovelace", 2, 200)]  # possédée en R
+    assert ("INFO", "Cartes souhaitées suivies") in notifier.sent
+
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    for _ in range(6):
+        await sniper.step()
+    assert "w1" in sniper._targets and "w0" not in sniper._targets  # R : déjà possédée
+    now = datetime.now(UTC)
+    for aid in ("w1", "w2"):
+        market[aid]["end_at"] = (now + timedelta(seconds=16)).isoformat()
+        sniper._targets[aid] = Target(Auction.model_validate(market[aid]), now - timedelta(seconds=30))
+    for _ in range(4):
+        await sniper.step()
+    bids = await db._all("SELECT * FROM bids")
+    # SR : cote ~62, sous WISH_MAX_PRICE. UR : cote ~920 ramenée à 200, sous la mise minimale de 300.
+    assert {(b["auction_id"], b["amount"]) for b in bids} == {("w1", 40)}
+    assert bids[0]["reason"].startswith(f"{wishes.REASON} ≤ 6")
+
+    await sniper._close_bid(bids[0], won=True, simulated=False)
+    assert (await db.get_bid(bids[0]["id"]))["closed"] == 1  # gardée, pas une position à revendre
+    assert ("SUCCESS", "Carte souhaitée obtenue !") in notifier.sent
+    assert [s.above for s in sniper._wishes.values()] == [3]  # reste souhaitée, au-dessus de la SR
+    owned.append({"id": "o-sr", "card_id": "c-ada", "obtained_at": datetime.now(UTC).isoformat(),
+                  "card": {"id": "c-ada", "wikipedia_title": "Ada Lovelace", "rarity": "SR"}})
+    await watch.step()
+    assert tagged == [{"user_card_id": "o-sr", "tag_id": "t-wish"}]
+    assert (await db.kv_get(wishes.KV_KEY))["to_tag"] == []
+    await db.close()
