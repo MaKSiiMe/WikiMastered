@@ -296,6 +296,10 @@ class Settings(BaseSettings):
     position_expensive_from: int = 0
     position_expensive_max_relists: int = 1
     position_expensive_give_up_after: int = 2
+    # Position achetée ≥ N WB, invendue alors que toutes les places de vente sont prises : elle attend une place au prix
+    # plancher au lieu d'être gardée (11/11 : une L achetée 8 110, close après 4 essais en 13 h, capital immobilisé).
+    # POSITION_GIVE_UP_AFTER s'applique toujours. 0 = jamais : la carte est gardée faute de place.
+    position_wait_slot_from: int = 0
 
     # --- Module C : inventaire --------------------------------------------------
     inventory_interval_minutes: float = 360.0

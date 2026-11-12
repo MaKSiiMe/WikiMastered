@@ -179,6 +179,8 @@ async def daily_report_parts(ctx: Context) -> Report:
                                                                                  ctx.settings.price_min_sales))))
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         sections.append((Topic.COLLECTION.value, summary_line(await ctx.db.kv_get("collection"), targets(ctx))))
+    if text := calibration_text(await ctx.db.calibration(since)):
+        sections.append(("📏 Estimations", text))
     columns: list[tuple[str, str]] = []
     try:
         value = await account_bilan(ctx, stats["balance"] if isinstance(stats["balance"], int) else None)
@@ -224,6 +226,25 @@ def report_sections(stats: dict, *, live_bids: bool) -> tuple[str, list[tuple[st
              plural(stats["discarded"], "carte défaussée", "cartes défaussées") if stats["discarded"] else ""]
     return description, [(Topic.SNIPER.value, sniper), ("💼 Positions", "\n".join(positions)),
                          (Topic.SALES.value, " · ".join(x for x in sales if x) or "rien aujourd'hui")]
+
+
+CALIBRATION_MIN = 10  # enchères ou reventes du jour en dessous desquelles la médiane ne dit rien
+CALIBRATION_LOW = 1.05  # enchères perdues finies au-dessus de l'estimation × N : estimations trop basses
+
+
+def calibration_text(ratios: dict[str, list[float]]) -> str:
+    """Bloc « Estimations » du bilan : les estimations du jour étaient-elles justes ? Vide sans assez de mises."""
+    lines = []
+    lost, sold = ratios.get("lost") or [], ratios.get("sold") or []
+    if len(lost) >= CALIBRATION_MIN:
+        ratio = st.median(lost)
+        lines.append(f"Enchères perdues : finies à ×{ratio:.2f} de l'estimation ({len(lost)})".replace(".", ","))
+        if ratio >= CALIBRATION_LOW:
+            lines.append("⚠️ Estimations trop basses : les prix montent, `PRICE_SITE_MARGIN` est à relever.")
+    if len(sold) >= CALIBRATION_MIN:
+        lines.append(f"Reventes : vendues à ×{st.median(sold):.2f} de l'estimation ({len(sold)})"
+                     .replace(".", ","))
+    return "\n".join(lines)
 
 
 def as_section(text: str) -> tuple[str, str]:

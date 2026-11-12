@@ -173,6 +173,35 @@ async def tag_won(ctx: Context) -> tuple[int, str]:
     return done, ""
 
 
+async def overview_text(ctx: Context) -> str:
+    """Commande /souhaits : chaque carte souhaitée, la rareté déjà possédée et le plafond de chaque rareté encore à
+    prendre (sa cote, au plus WISH_MAX_PRICE ; sans requête : ventes observées et cote du site en cache)."""
+    cap = ctx.settings.wish_max_price
+    if cap <= 0:
+        return "Cartes souhaitées coupées : renseigne `WISH_MAX_PRICE` (plafond en WB) pour que le sniper les achète."
+    cards = (await _state(ctx.db))["cards"]
+    if not cards:
+        return ("Aucune carte souhaitée. Ajoute une carte à ta liste de souhaits sur le site : elle apparaît ici en "
+                f"{ctx.settings.wish_check_minutes:g} min au plus.")
+    lines = [f"Plafond : la cote de la carte, au plus **{cap} WB**.\n"]
+    for cid, card in sorted(cards.items(), key=lambda kv: kv[1].get("title", "")):
+        best = int(card.get("best", -1))
+        have = f"tu as la {RARITIES[best]}" if best >= 0 else "pas encore possédée"
+        try:
+            quotes = await ctx.prices.quotes(cid, fetch=False)
+        except Exception:  # noqa: BLE001 - la liste s'affiche sans les cotes
+            quotes = {}
+        caps = []
+        for rarity in RARITIES[best + 1:]:
+            quote = quotes.get(rarity)
+            if quote is not None and quote.average is not None:
+                caps.append(f"{rarity} ≤ {min(int(quote.average), cap)}")
+        detail = " · ".join(caps) if caps else ("déjà en L : plus rien à acheter" if best >= len(RARITIES) - 1
+                                                else "aucune cote connue pour l'instant : pas de mise")
+        lines.append(f"• **{card.get('title', cid)}** ({have})\n{detail}")
+    return "\n".join(lines)
+
+
 class WishWatch(Worker):
     name = "souhaits"
     topic = Topic.COLLECTION

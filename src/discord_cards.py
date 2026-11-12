@@ -773,6 +773,19 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                               f"part). Équitable : écart de {s.trade_fair_margin:.0%} au plus.")
         await interaction.followup.send(embed=embed)
 
+    @tree.command(name="echanges", description="Rendement de tes échanges : valeur donnée et reçue, échange par échange")
+    @app_commands.describe(jours="période, en jours (30 par défaut)")
+    async def echanges(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 365] = 30) -> None:
+        from src.workers.trade_watch import LOG_KEY
+
+        since = (utcnow() - timedelta(days=jours)).isoformat()
+        head, lines = trades.history_text(await ctx.db.kv_get(LOG_KEY) or {}, since)
+        embed = discord.Embed(title=f"🔁 Échanges des {jours} derniers jours",
+                              description="\n\n".join([head, *lines])[:4000], color=COLOR)
+        embed.set_footer(text="Valeurs au moment où l'échange a été vu (médiane des ventes observées). Suivi depuis "
+                              "le 12/11/2026 ; les échanges faits avant n'y sont pas.")
+        await interaction.response.send_message(embed=embed)
+
     # ------------------------------------------------------------ boutons des messages de vente
     async def listing_or_reply(interaction: discord.Interaction, listing_id: int):
         row = await ctx.db.get_listing(listing_id)

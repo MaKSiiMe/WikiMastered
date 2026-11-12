@@ -1019,6 +1019,20 @@ class Database:
         return removed
 
     # -------------------------------------------------------------- bilan
+    async def calibration(self, since: datetime) -> dict[str, list[float]]:
+        """Justesse des estimations depuis `since`, sur les mises réelles de revente : prix final ÷ estimation des
+        enchères perdues (« lost ») et prix de vente ÷ estimation des positions revendues (« sold »)."""
+        s = iso(since)
+        lost = await self._all(
+            "SELECT 1.0 * final_price / reference_price AS r FROM bids WHERE placed_at >= ? AND dry_run = 0 "
+            "AND status IN ('lost', 'outbid') AND final_price > 0 AND reference_price > 0 AND reason LIKE 'revente%' "
+            "GROUP BY auction_id", (s,))
+        sold = await self._all(
+            "SELECT 1.0 * sale_price / reference_price AS r FROM bids WHERE sold_at >= ? AND dry_run = 0 "
+            "AND status = 'won' AND sale_price > 0 AND amount > 0 AND reference_price > 0 AND reason LIKE 'revente%'",
+            (s,))
+        return {"lost": [row["r"] for row in lost], "sold": [row["r"] for row in sold]}
+
     async def report(self, since: datetime) -> dict[str, Any]:
         s = iso(since)
         bids = await self._all(

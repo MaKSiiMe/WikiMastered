@@ -915,3 +915,43 @@ async def test_old_one_wb_sales_are_cancelled_at_startup(tmp_path):
     assert (await db.get_listing(lid))["status"] == "cancelled"
     assert (await db.get_bid(bid))["closed"] == 0
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_expensive_unsold_position_waits_for_a_slot_instead_of_being_kept(tmp_path):
+    """11/11 : Coupe du monde de football 1994 (achetée 8 110), invendue 4 fois en 13 h, gardée « Invendue » parce
+    que toutes les places de vente étaient prises. Avec POSITION_WAIT_SLOT_FROM, une carte chère attend sa place."""
+    def handler(request):
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 5, "maxConcurrentAuctions": 5})
+        return httpx.Response(200, json={"collection": []})
+
+    outcomes = {}
+    for cost, wait_from in ((8110, 0), (8110, 5000), (900, 5000)):
+        folder = tmp_path / f"{cost}-{wait_from}"
+        folder.mkdir()
+        client, notifier = make_client(folder, handler, dry_run=False, position_wait_slot_from=wait_from,
+                                       position_step_minutes=0, position_max_relists=1, position_give_up_after=0,
+                                       position_max_loss=0.0)
+        db = Database(folder / "t.db")
+        await db.connect()
+        now = datetime.now(UTC)
+        bid = await db.record_bid(auction_id="a", card_id="c", title="Coupe du monde", rarity="L", is_shiny=False,
+                                  amount=cost, reference_price=cost * 1.3, reason="revente", night=False,
+                                  dry_run=False, status="won", end_at=now)
+        lid = None
+        for i in range(2):  # déjà invendue une fois : la remise à -5 % est faite
+            lid = await db.schedule_listing(owned_card_id="o", card_id="c", title="Coupe du monde", rarity="L",
+                                            base_amount=cost + 300, duration_minutes=180, post_at=now, target_end=now,
+                                            reason="position", bid_id=bid, relist_count=i)
+            await db.update_listing(lid, status="unsold")
+        api = WikiMastersAPI(client)
+        inv = InventoryManager(Context(client.settings, client, api, db, notifier, PriceService(api, db, 30)))
+        await inv._unsold(await db.get_listing(lid), await db.get_bid(bid), "Coupe du monde (L)")
+        waiting = await db._all("SELECT base_amount FROM listings WHERE status = 'scheduled'")
+        outcomes[(cost, wait_from)] = ((await db.get_bid(bid))["closed"], [r["base_amount"] for r in waiting])
+        await db.close()
+    assert outcomes[(8110, 0)] == (1, [])        # réglage coupé : gardée faute de place
+    assert outcomes[(8110, 5000)] == (0, [8111])  # chère : attend une place, au plancher (prix d'achat + 1)
+    assert outcomes[(900, 5000)] == (1, [])       # sous le seuil : gardée
+

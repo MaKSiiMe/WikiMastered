@@ -262,3 +262,52 @@ def snapshot(trade: Trade, e: Evaluation, me: str, at: str) -> dict:
             "given": cards(e.given), "received": cards(e.received), "wb_given": e.wb_given,
             "wb_received": e.wb_received, "given_total": round(e.given_total),
             "received_total": round(e.received_total), "unknown": len(e.unknown), "status": "pending"}
+
+
+CONCLUDED = ("accept", "complet", "done", "conclu")  # statuts d'un échange fait (champs réels à confirmer)
+HISTORY_SHOWN = 15
+
+
+def concluded(status: str) -> bool:
+    return any(word in status.lower() for word in CONCLUDED)
+
+
+def history_text(history: dict[str, dict], since: str) -> tuple[str, list[str]]:
+    """Rendement des échanges vus depuis `since` (kv « trades_log ») : (résumé, une ligne par échange, les plus
+    récents d'abord). Seuls les échanges conclus comptent dans le résultat ; un échange terminé sans statut lu sur le
+    site est donné à part : il a pu être refusé."""
+    rows = sorted((t for t in history.values() if t["seen"] >= since), key=lambda t: t["seen"], reverse=True)
+    if not rows:
+        return "Aucun échange vu sur la période.", []
+    done = [t for t in rows if concluded(t["status"])]
+    unsure = [t for t in rows if t["status"] == "ended"]
+    pending = [t for t in rows if t["status"] == "pending"]
+
+    def gap(group: list[dict]) -> int:
+        return sum(t["received_total"] - t["given_total"] for t in group)
+
+    head = [f"**{plural(len(done), 'échange conclu', 'échanges conclus')}** : "
+            f"donné ~{wb(sum(t['given_total'] for t in done))} WB, "
+            f"reçu ~{wb(sum(t['received_total'] for t in done))} WB, soit **{wb(gap(done), True)} WB**"
+            if done else "Aucun échange conclu sur la période."]
+    if unsure:
+        head.append(f"{plural(len(unsure), 'terminé', 'terminés')} sans issue connue : {wb(gap(unsure), True)} WB "
+                    "s'ils ont été acceptés")
+    if pending:
+        head.append(f"{len(pending)} en attente")
+    marks = {"pending": "⏳ en attente", "ended": "❔ terminé, issue inconnue"}
+
+    def cards(t: dict, side: str, extra: int) -> str:
+        names = [f"{c.get('rarity') or '?'} · {c['title']}{' ✨' if c.get('shiny') else ''}" for c in t[side]]
+        return " + ".join(names + ([f"{wb(extra)} WB"] if extra else [])) or "rien"
+
+    lines = []
+    for t in rows[:HISTORY_SHOWN]:
+        state = "✅ conclu" if concluded(t["status"]) else marks.get(t["status"], f"✖️ {t['status']}")
+        unknown = " · ⚠️ carte sans valeur connue" if t.get("unknown") else ""
+        lines.append(f"**{t['seen'][8:10]}/{t['seen'][5:7]} · {t['with']}** · {state} · "
+                     f"**{wb(t['received_total'] - t['given_total'], True)} WB**{unknown}\n"
+                     f"donné : {cards(t, 'given', t['wb_given'])} (~{wb(t['given_total'])})\n"
+                     f"reçu : {cards(t, 'received', t['wb_received'])} (~{wb(t['received_total'])})")
+    return "\n".join(head), lines
+
