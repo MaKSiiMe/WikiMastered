@@ -32,6 +32,7 @@ Les ventes observées, les prix et le marché suivi demandent une revente active
 | `/top [nombre] [shiny]` | Les 10, 25 ou 50 cartes les plus chères en moyenne sur les ventes observées des 7 derniers jours (au moins 3 ventes), avec la mise conseillée |
 | `/opportunites` | Les ventes que le sniper surveille et son plafond pour chacune |
 | `/shiny [tri] [prix_max] [nombre] [rentables]` | Les shiny en vente vus par le sniper, avec mise minimale, cote et fin, sans requête au site. 💰 : revente rentable d'après la cote, avec son plafond. Un menu sous le message demande ces cartes au sniper, plafond modifiable |
+| `/echanges [jours]` | Rendement de tes échanges vus par le bot : valeur donnée et reçue, échange par échange, et total des échanges conclus (30 jours par défaut) |
 | `/echange <je_donne> <je_recois> […]` | Un échange envisagé est-il équitable ? Jusqu'à 3 cartes et des WB de chaque côté (« Titre », « Titre (L) », « Titre ✨ »). Valeur de chaque carte, ventes par semaine, verdict et, s'il est défavorable, la contre-offre à envoyer |
 
 ### Agir
@@ -40,6 +41,7 @@ Les ventes observées, les prix et le marché suivi demandent une revente active
 |---|---|
 | `/snipe <titre> <prix_max> [rarete] [shiny]` | Demander une carte au sniper : mise au minimum jusqu'à `prix_max`, gardée, pas revendue. `shiny` : seulement un exemplaire shiny. Confirmée par un bouton |
 | `/snipes` | Voir les cartes demandées |
+| `/souhaits` | Cartes de ta liste de souhaits suivies par le sniper (`WISH_MAX_PRICE`), la rareté que tu possèdes et le plafond de chaque rareté encore à prendre |
 | `/annuler <titre>` | Ne plus demander une carte |
 | `/vendre <carte> <prix> [rarete]` | Vendre ton exemplaire le plus récent (hors favori, shiny, gardé) à ce prix, à la première place libre, avant les autres ventes. Confirmée par un bouton |
 | `/garder <carte> [rarete]` | Ne jamais vendre ni défausser cette carte ; arrête sa revente si le bot la revendait |

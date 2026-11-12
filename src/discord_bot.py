@@ -38,6 +38,7 @@ from src.roi import plural, roi_discord, wb
 from src.workers.auction_sniper import AuctionSniper
 from src.workers.inventory_manager import InventoryManager
 from src.workers.base import Context, Worker
+from src.workers import wishes
 from src.workers.collection import progress_text, recent_cards, targets
 
 log = logging.getLogger("wikimastered.discord")
@@ -792,6 +793,16 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                               color=COLOR if found else GREY)
         embed.set_footer(text="/snipe pour en ajouter une · /annuler pour en retirer une")
         await interaction.response.send_message(embed=embed)
+
+    @tree.command(name="souhaits", description="Cartes de ta liste de souhaits suivies par le sniper, et leur plafond")
+    async def souhaits(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        text = await wishes.overview_text(ctx)
+        embed = discord.Embed(title="💫 Cartes souhaitées", description=text[:4000],
+                              color=COLOR if s.wish_max_price > 0 else GREY)
+        embed.set_footer(text="Ajoute ou retire une carte dans ta liste de souhaits du site. /snipe pour un prix "
+                              "choisi par toi.")
+        await interaction.followup.send(embed=embed)
 
     async def snipe_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         return [app_commands.Choice(name=sn.label[:100], value=sn.title[:100])

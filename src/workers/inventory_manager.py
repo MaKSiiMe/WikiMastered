@@ -1283,8 +1283,8 @@ class InventoryManager(Worker):
         elif before < max_relists:
             discounts = min(after, max_relists) - before
             price = max(floor, round(row["base_amount"] * self.settings.position_relist_discount ** discounts))
-        elif await self._slot_for_relist(bid["id"]):
-            price = floor
+        elif await self._slot_for_relist(bid["id"]) or 0 < self.settings.position_wait_slot_from <= bid["amount"]:
+            price = floor  # place libre, ou carte chère : elle attend sa place dans la file
         else:
             await self._give_up(row, bid, label, f"invendue après {unsold} essai(s), toutes les places de vente "
                                                  "sont prises")

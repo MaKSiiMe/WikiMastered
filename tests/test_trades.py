@@ -185,3 +185,26 @@ async def test_every_trade_is_kept_with_both_sides_values_and_its_final_status(t
     assert await ctx.db.kv_get(KV_KEY) == []
     await ctx.db.close()
 
+
+def test_trade_history_counts_only_concluded_trades():
+    """/echanges : seuls les échanges conclus font le résultat ; un échange terminé sans issue connue est à part."""
+    def kept(tid, seen, status, given, received):
+        return {"id": tid, "seen": seen, "with": "Camille", "mine": True, "status": status, "wb_given": 500,
+                "wb_received": 0, "given_total": given, "received_total": received, "unknown": 0,
+                "given": [{"title": "Lucas Hernandez", "rarity": "L", "shiny": True, "value": given - 500}],
+                "received": [{"title": "Philippe Lacheau", "rarity": "L", "shiny": True, "value": received}]}
+
+    history = {t["id"]: t for t in (kept("a", "2026-11-10T22:00:00+00:00", "accepted", 9000, 6600),
+                                    kept("b", "2026-11-11T08:00:00+00:00", "ended", 1000, 1500),
+                                    kept("c", "2026-11-12T08:00:00+00:00", "declined", 1000, 5000),
+                                    kept("d", "2026-11-12T09:00:00+00:00", "pending", 1000, 1200),
+                                    kept("old", "2026-09-01T09:00:00+00:00", "accepted", 1, 99999))}
+    head, lines = trades.history_text(history, "2026-11-01T00:00:00+00:00")
+    head = head.replace("\u202f", " ")
+    assert "**1 échange conclu** : donné ~9 000 WB, reçu ~6 600 WB, soit **-2 400 WB**" in head
+    assert "1 terminé sans issue connue : +500 WB s'ils ont été acceptés" in head and "1 en attente" in head
+    assert len(lines) == 4 and lines[0].startswith("**12/11 · Camille** · ⏳ en attente")
+    assert "✖️ declined" in lines[1] and "✅ conclu" in lines[3]
+    assert "donné : L · Lucas Hernandez ✨ + 500 WB (~9 000)" in lines[3].replace("\u202f", " ")
+    assert trades.history_text({}, "2026-11-01")[0] == "Aucun échange vu sur la période."
+

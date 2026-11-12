@@ -149,6 +149,7 @@ stateDiagram-v2
 
 - **Carte invendue** : le bot ne brade jamais. Quand il renonce (après `POSITION_GIVE_UP_AFTER` étapes, coupé par défaut, ou quand toutes les places de vente sont prises), la carte reste dans ta collection, la position est close, et l'exemplaire reçoit l'étiquette `POSITION_UNSOLD_TAG` (« Invendue », à créer une fois sur le site) : tu la retrouves d'un clic pour la vendre autrement. Ajoute cette étiquette à `PROTECTED_TAGS` pour que la vente des doublons ne la reprenne pas.
 - **Perte permise** (coupée par défaut, `POSITION_MAX_LOSS`) : après `POSITION_LOSS_AFTER` étapes, le prix peut passer sous le prix d'achat.
+- **Carte chère sans place de vente** (`POSITION_WAIT_SLOT_FROM`, coupé par défaut) : une position achetée à partir de ce prix n'est pas gardée quand toutes les places sont prises ; elle attend une place, au prix plancher.
 - **Position chère** (coupée par défaut, `POSITION_EXPENSIVE_*`) : moins de baisses, et le bot renonce plus tôt, pour une carte achetée à partir de ce prix.
 - **Position qui traîne** : détenue depuis plus de 48 h (`POSITION_STALE_HOURS`), elle déclenche une alerte avec des boutons.
 - **Reventes plus longues** : avec `POSITION_LIST_LONG_BELOW=N`, une revente dure `POSITION_LIST_LONG_MINUTES` tant que moins de N positions sont détenues, sauf si elle finirait à une heure de `POSITION_AVOID_END_HOURS`.
