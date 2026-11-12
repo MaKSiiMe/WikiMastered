@@ -782,8 +782,8 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         head, lines = trades.history_text(await ctx.db.kv_get(LOG_KEY) or {}, since)
         embed = discord.Embed(title=f"🔁 Échanges des {jours} derniers jours",
                               description="\n\n".join([head, *lines])[:4000], color=COLOR)
-        embed.set_footer(text="Valeurs au moment où l'échange a été vu (médiane des ventes observées). Suivi depuis "
-                              "le 12/11/2026 ; les échanges faits avant n'y sont pas.")
+        embed.set_footer(text="Valeurs au moment de l'échange (médiane des ventes observées). ↩︎ : échange d'avant "
+                              "le suivi (12/11/2026), repris depuis le site, à valeur moins sûre.")
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------ boutons des messages de vente

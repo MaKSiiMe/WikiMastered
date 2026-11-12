@@ -208,3 +208,52 @@ def test_trade_history_counts_only_concluded_trades():
     assert "donné : L · Lucas Hernandez ✨ + 500 WB (~9 000)" in lines[3].replace("\u202f", " ")
     assert trades.history_text({}, "2026-11-01")[0] == "Aucun échange vu sur la période."
 
+
+@pytest.mark.asyncio
+async def test_trades_ended_before_tracking_are_taken_back_once(tmp_path):
+    """12/11 : rendement rétroactif. Les échanges terminés que le site donne encore sont repris une seule fois, à la
+    date de l'échange ; la rareté d'un exemplaire déjà mis en vente par le bot est connue, même parti."""
+    from src.workers.trade_watch import BACKFILL_KEY, LOG_KEY
+
+    when = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    past = {**trade("old", ME, AUTRE, [{"card_id": "jeffrey", "user_card_id": "u-jef", "offered_by": ME},
+                                       item("emma", AUTRE)], status="accepted"),
+            "recipient": {"username": "Camille"}, "recipient_wikibidous": 1000, "updated_at": when}
+    refused = {**trade("no", AUTRE, ME, [item("emma", AUTRE)], status="declined"), "updated_at": when}
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path == "/api/trades":
+            return httpx.Response(200, json={"trades": [] if "active" in request.url.params else [past, refused]})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(200, json={"summary": {}, "wikipedia_title": "Jeffrey Epstein"})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    now = datetime.now(UTC)
+    await ctx.db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at) VALUES (?, ?, ?, 'L', ?, ?)",
+        [(f"{card}{i}", card, title, price, (now - timedelta(hours=i + 3)).isoformat())
+         for card, (title, prices) in SALES.items() for i, price in enumerate(prices)])
+    await ctx.db.db.commit()
+    await ctx.db.schedule_listing(owned_card_id="u-jef", card_id="jeffrey", title="Jeffrey Epstein", rarity="L",
+                                  base_amount=12000, duration_minutes=60, post_at=now, target_end=now, reason="x")
+    worker = TradeWatch(ctx)
+    worker.notifier = Sent()  # type: ignore[assignment]
+    await worker.setup()
+    await worker.step()
+    kept = await ctx.db.kv_get(LOG_KEY)
+    assert set(kept) == {"old", "no"} and await ctx.db.kv_get(BACKFILL_KEY)
+    old = kept["old"]
+    assert (old["status"], old["retro"], old["with"], old["wb_received"]) == ("accepted", True, "Camille", 1000)
+    assert old["given"] == [{"title": "Jeffrey Epstein", "rarity": "L", "shiny": False, "value": 12150}]
+    assert old["received_total"] == 5500 + 1000 and old["unknown"] == 0
+    head, lines = trades.history_text(kept, "2026-01-01")
+    assert "**1 échange conclu**" in head and "↩︎" in lines[0] + lines[1]
+    before = calls.count("/api/trades")
+    await worker.step()
+    assert calls.count("/api/trades") == before + 1  # seulement les échanges actifs : la reprise n'est pas refaite
+    await ctx.db.close()
+

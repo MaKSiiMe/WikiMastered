@@ -657,7 +657,7 @@ async def run_bot(settings: Settings) -> None:
             jobs.append(("stats", lambda: stats_loop(ctx, workers)))
         if settings.enable_sniper and settings.sniper_report_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
-        if settings.enable_backup and settings.backup_keep > 0:
+        if (settings.enable_backup and settings.backup_keep > 0) or settings.observed_keep_days > 0:
             jobs.append(("sauvegarde", lambda: backup_loop(ctx)))
         if settings.discord_bot_token and settings.discord_owner_id <= 0:
             ctx.notifier.warning("Commandes Discord inactives", "DISCORD_OWNER_ID manquant ou pas un nombre : il faut "

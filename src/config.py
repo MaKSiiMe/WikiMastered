@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     backup_dir: Path = Path("backups")
     backup_time: time = time(4, 30)
     backup_keep: int = 7
+    # Ventes observées gardées N jours (0 = toutes, pour toujours) : chaque nuit à BACKUP_TIME, les ventes plus
+    # anciennes sont effacées, sauf les shiny (rares : toutes gardées) et celles d'une carte vendue moins de
+    # PRICE_RECENT_SALES fois sur la période (son estimation en dépend). Le 12/11 : 733 000 ventes en 30 jours,
+    # 320 Mo sur une base de 372, sauvegarde de 25 min ; 96 % des achats s'appuient sur des ventes de moins de 3 jours.
+    observed_keep_days: int = 0
     endpoints_file: Path = Path("config/endpoints.yaml")
 
     # --- Session WikiMasters ---------------------------------------------------
