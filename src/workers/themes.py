@@ -52,6 +52,7 @@ PERSON = "Q5"  # être humain : les règles « description » et « metiers » n
 MISSING_RETRY = timedelta(days=7)  # article sans élément Wikidata : relu après N jours
 BACKLOG_MINUTES = 30
 SHOWN = 40  # cartes sans thème gardées dans l'état (commande, message)
+NOTIFY_HOURS = 6  # un message Discord au plus toutes les N h, avec le cumul des étiquettes posées et retirées
 
 
 @dataclass(frozen=True)
@@ -302,6 +303,8 @@ class ThemeTagger(Worker):
     async def setup(self) -> None:
         load_rules()  # un fichier invalide : erreur dès le démarrage du worker
         self.wikidata = Wikidata()
+        self._added = self._removed = 0  # étiquettes posées et retirées depuis le dernier message
+        self._notified_at = utcnow() - timedelta(hours=NOTIFY_HOURS)
 
     async def step(self) -> float:
         state = await run_pass(self.ctx, self.wikidata)
@@ -312,9 +315,16 @@ class ThemeTagger(Worker):
             self.log.warning("étiquettes absentes du site (à créer) : %s", ", ".join(state["missing_tags"]))
         if state.get("tag_error"):
             self.log.warning("étiquettes : %s", state["tag_error"])
-        if state["added"] or state["removed"]:
-            self.notifier.info("Étiquettes de thème", f"{state['added']} posée(s), {state['removed']} retirée(s) ; "
+        # Un message toutes les NOTIFY_HOURS au plus, avec le cumul : un passage toutes les 30 min tant qu'il reste des
+        # étiquettes à poser en envoyait un à chaque fois (11 en deux jours, les 11 et 12/11).
+        self._added += state["added"]
+        self._removed += state["removed"]
+        now = utcnow()
+        if (self._added or self._removed) and now - self._notified_at >= timedelta(hours=NOTIFY_HOURS):
+            self.notifier.info("Étiquettes de thème", f"{self._added} posée(s), {self._removed} retirée(s) ; "
                                f"reste {state['to_add'] + state['to_remove']}.\n{summary(state)}")
+            self._added = self._removed = 0
+            self._notified_at = now
         backlog = state["pending_lookups"] or (state["live"] and state["to_add"] + state["to_remove"]
                                                and not state.get("tag_error"))
         return BACKLOG_MINUTES * 60 if backlog else self.settings.theme_tags_hours * 3600

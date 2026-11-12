@@ -7,7 +7,7 @@ ne fait que répondre, et seulement à DISCORD_OWNER_ID.
 - Lecture : /bilan, /roi, /solde, /positions, /ventes, /prix, /collection, /sniper.
 - Actions : /snipe (confirmée par un bouton), /snipes, /annuler. Voir src/snipes.py.
 - Pilotage : /etat (avec boutons), /pause, /reprise (src/pauses.py), /verif-faite. L'alerte « vérification
-  anti-bot demandée » arrive avec un bouton « C'est fait » ; levée, elle le dit.
+  anti-bot demandée » arrive avec un bouton « C'est fait » ; levée, elle est supprimée.
 - Cartes : /garder, /vendre, /carte, /opportunites, /top, /echange… et les boutons des messages de vente (src/discord_cards.py).
 - Connecté, le bot envoie lui-même les messages à boutons, dans le salon de leur webhook ; déconnecté, ou sans accès
   à ce salon, ils repartent par le webhook, sans boutons. Jamais de message privé (choix du 28/10).
@@ -385,7 +385,8 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         return "Aucune vérification en attente : les mises passent."
 
     async def verify_pressed(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(embed=verify_embed(verify("bouton « C'est fait »")))
+        # Réponse visible de toi seul : rien ne reste dans le salon.
+        await interaction.response.send_message(embed=verify_embed(verify("bouton « C'est fait »")), ephemeral=True)
 
     def pause_label(name: str) -> str:
         worker = next((w for w in workers if w.name == name), None)
@@ -423,17 +424,16 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     antibot_alerts: list[discord.Message] = []  # alertes anti-bot à boutons, modifiées quand elle est levée
 
     async def watch_antibot() -> None:
-        """Vérification levée (une mise est passée) : les alertes anti-bot le disent et perdent leur bouton."""
+        """Vérification levée (une mise est passée) : les alertes anti-bot sont supprimées, sans autre message (12/11 :
+        « demandée » puis « levée » dans deux salons, une cinquantaine de fois en deux jours)."""
         await client.wait_until_ready()
         while not client.is_closed():
             if antibot_alerts and (sniper is None or sniper.antibot_since is None):
-                done = discord.Embed(title="✅ Vérification levée", color=GREEN,
-                                     description=f"Les mises passent de nouveau ({paris(utcnow())}).")
                 for message in antibot_alerts:
                     try:
-                        await message.edit(content=None, embed=done, view=None)
-                    except discord.HTTPException as exc:  # message supprimé… : rien à modifier
-                        log.warning("Discord : alerte anti-bot non modifiée (%s)", exc)
+                        await message.delete()
+                    except discord.HTTPException as exc:  # déjà supprimée… : rien à faire
+                        log.warning("Discord : alerte anti-bot non supprimée (%s)", exc)
                 antibot_alerts.clear()
             await asyncio.sleep(WATCH_SECONDS)
 
@@ -546,7 +546,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
 
     @tree.command(name="verif-faite", description="Vérification anti-bot faite : les mises reprennent sans attendre")
     async def verif_faite(interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(embed=verify_embed(verify("/verif-faite")))
+        await interaction.response.send_message(embed=verify_embed(verify("/verif-faite")), ephemeral=True)
 
     @tree.command(name="pause", description="Mettre le sniper, les ventes ou tout le bot en pause")
     @app_commands.describe(quoi="sniper par défaut", duree="1 h par défaut")

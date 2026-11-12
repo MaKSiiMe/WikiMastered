@@ -285,3 +285,35 @@ async def test_gif_frames_read_once_with_title_changes_and_continuation(tmp_path
     down = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500))), spacing=0)
     assert await known_frames(ctx, down, rows) == {"anim_x.gif": 17, "Fixe.gif": 1}
     await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_theme_tags_message_comes_every_six_hours_with_the_total(monkeypatch):
+    """12/11 : « Étiquettes de thème » 11 fois en deux jours, un passage toutes les 30 min tant qu'il en reste."""
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from src.workers import themes
+
+    passes = [{"added": 200, "removed": 0, "to_add": 13}, {"added": 13, "removed": 1, "to_add": 0},
+              {"added": 0, "removed": 0, "to_add": 0}, {"added": 5, "removed": 0, "to_add": 0}]
+
+    async def run_pass(ctx, wikidata):
+        return {"classified": 10, "cards": 10, "to_remove": 0, "live": True, "missing_tags": [], "counts": {},
+                "pending_lookups": 0, "untagged_count": 0, "untagged": [], **passes.pop(0)}
+
+    monkeypatch.setattr(themes, "run_pass", run_pass)
+    sent = []
+    worker = themes.ThemeTagger.__new__(themes.ThemeTagger)
+    worker.ctx, worker.settings = None, SimpleNamespace(theme_tags_hours=6.0)
+    worker.log = themes.log
+    worker.notifier = SimpleNamespace(info=lambda title, text: sent.append(text.splitlines()[0]))
+    await themes.ThemeTagger.setup(worker)
+    await worker.step()
+    await worker.step()  # 30 min après : pas de deuxième message
+    await worker.step()
+    assert sent == ["200 posée(s), 0 retirée(s) ; reste 13."]
+    worker._notified_at -= timedelta(hours=themes.NOTIFY_HOURS)
+    await worker.step()  # 6 h après : le cumul depuis le dernier message
+    assert sent[1] == "18 posée(s), 1 retirée(s) ; reste 0."
+

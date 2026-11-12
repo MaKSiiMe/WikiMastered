@@ -1521,7 +1521,8 @@ class AuctionSniper(Worker):
             self._balance, self._balance_at = confirmed.bidder_balance, utcnow()
             if self._antibot_since:
                 self._antibot_since, self._antibot_missed = None, 0
-                self.notifier.success("Sniper : vérification levée", "Les mises passent de nouveau.")
+                # Pas de message : sur Discord, l'alerte « vérification demandée » est supprimée (bot Discord).
+                self.log.info("vérification levée : les mises passent de nouveau")
             if decision.collection and live:
                 self._collection_since_check += 1
             if live:
