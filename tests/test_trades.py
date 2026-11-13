@@ -257,3 +257,56 @@ async def test_trades_ended_before_tracking_are_taken_back_once(tmp_path):
     assert calls.count("/api/trades") == before + 1  # seulement les échanges actifs : la reprise n'est pas refaite
     await ctx.db.close()
 
+
+
+@pytest.mark.asyncio
+async def test_concluded_trade_values_the_card_received_from_the_collection(tmp_path):
+    """13/11, Pikmin_Scoville : 1917 (film) donnée (~1 759 WB) contre Barack Obama, de rareté inconnue tant que
+    l'échange attendait, donc comptée 0. Une fois l'échange accepté, la carte reçue est dans ta collection : sa
+    rareté y est lue et elle est cotée ; la carte donnée garde sa valeur."""
+    from src.workers.trade_watch import LOG_KEY
+
+    raw = {**trade("t", AUTRE, ME, [{"card_id": "emma", "user_card_id": "u-emma", "offered_by": ME,
+                                     "card": {"id": "emma", "wikipedia_title": "Emma Watson", "rarity": "L"}},
+                                    {"card_id": "zendaya", "user_card_id": "u-z", "offered_by": AUTRE}])}
+    active, finished = [raw], []
+
+    def handler(request):
+        path = request.url.path
+        if path == "/api/trades":
+            return httpx.Response(200, json={"trades": active if "active" in request.url.params
+                                             else active + finished})
+        if path.endswith("/zendaya/sales"):
+            return httpx.Response(200, json={"summary": {}, "wikipedia_title": "Zendaya"})
+        if path == "/api/my-collection":
+            if not finished:  # en attente : la carte de l'autre joueur n'est pas cherchée chez toi
+                raise AssertionError("collection lue pendant l'attente")
+            return httpx.Response(200, json={"collection": [
+                {"id": "u-z", "card_id": "zendaya", "snapshot_rarity": "L",
+                 "card": {"id": "zendaya", "wikipedia_title": "Zendaya", "rarity": "L"}}]})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    now = datetime.now(UTC)
+    await ctx.db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at) VALUES (?, ?, ?, 'L', ?, ?)",
+        [(f"{card}{i}", card, title, price, (now - timedelta(hours=i + 1)).isoformat())
+         for card, (title, prices) in SALES.items() for i, price in enumerate(prices)])
+    await ctx.db.db.commit()
+    await ctx.db.kv_set("trades_backfilled", True)
+    worker = TradeWatch(ctx)
+    worker.notifier = Sent()  # type: ignore[assignment]
+    await worker.setup()
+    await worker.step()
+    kept = (await ctx.db.kv_get(LOG_KEY))["t"]
+    assert (kept["given_total"], kept["received_total"], kept["unknown"]) == (5500, 0, 1)
+
+    active.clear()
+    finished.append({**raw, "status": "accepted"})
+    await worker.step()
+    kept = (await ctx.db.kv_get(LOG_KEY))["t"]
+    assert kept["status"] == "accepted" and kept["unknown"] == 0
+    assert kept["received"][0]["rarity"] == "L" and kept["received_total"] == 5675
+    assert kept["given_total"] == 5500
+    await ctx.db.close()

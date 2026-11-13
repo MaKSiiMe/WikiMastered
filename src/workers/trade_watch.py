@@ -69,7 +69,7 @@ class TradeWatch(Worker):
                                columns=e.columns, sections=[("\u200b", e.notes)] if e.notes else [],
                                url=f"{self.ctx.client.endpoints.base_url}/trades", important=True,
                                alert=True)  # à accepter ou refuser sur le site
-        await self._close_ended(history, active)
+        await self._close_ended(history, active, me)
         if me and not await self.db.kv_get(BACKFILL_KEY):
             await self._backfill(history, me)
         await self.db.kv_set(KV_KEY, sorted(seen & active))
@@ -77,9 +77,10 @@ class TradeWatch(Worker):
         minutes = self.settings.trade_check_minutes
         return random.uniform(0.8, 1.2) * minutes * 60
 
-    async def _close_ended(self, history: dict[str, dict], active: set[str]) -> None:
+    async def _close_ended(self, history: dict[str, dict], active: set[str], me: str) -> None:
         """Échanges qui ne sont plus en cours : statut final relu sur le site (accepté, refusé, annulé…), sinon
-        « ended ». Le premier est écrit en entier dans les logs : ses champs réels restent à relever."""
+        « ended ». Un échange conclu avec des cartes sans valeur est réévalué (`_revalue`). Le premier est écrit en
+        entier dans les logs : ses champs réels restent à relever."""
         ended = [t for tid, t in history.items() if t["status"] == "pending" and tid not in active]
         if not ended:
             return
@@ -95,12 +96,33 @@ class TradeWatch(Worker):
             status = str((found or {}).get("status") or "")
             t["status"] = status if status and status != "pending" else "ended"
             t["ended"] = utcnow().isoformat()
+            if found and me and t.get("unknown") and trades.concluded(t["status"]):
+                await self._revalue(t, found, me)
             self.log.info("échange avec %s terminé (%s) : donné ~%d WB, reçu ~%d WB", t["with"], t["status"],
                           t["given_total"], t["received_total"])
             if found and not self._ended_logged:
                 self._ended_logged = True
                 self.log.info("échange terminé, champs : %s", str({k: v for k, v in found.items()
                                                                   if k != "items"})[:1500])
+
+    async def _revalue(self, t: dict, found: dict, me: str) -> None:
+        """Échange conclu : ses cartes réévaluées maintenant qu'elles ont changé de main. En attente, la rareté d'une
+        carte de l'autre joueur est inconnue, et elle comptait 0 (13/11 : 1917 (film), ~1 759 WB, donnée contre
+        Barack Obama « ? », reçu ~0) ; reçue, elle est dans ta collection. Une carte déjà évaluée garde sa valeur."""
+        try:
+            trade = TradesList.model_validate({"trades": [found]}).trades[0]
+            e = await trades.evaluate_trade(self.ctx, trade, me, offers=False, at=utcnow())
+        except (ApiError, RateLimited, ValueError) as exc:
+            self.log.debug("échange %s pas réévalué (%s)", t["id"], exc)
+            return
+        fresh = trades.snapshot(trade, e, me, t["seen"], status=t["status"])
+        for side in ("given", "received"):
+            if len(fresh[side]) == len(t[side]):
+                t[side] = [old if old.get("value") is not None or new["value"] is None else new
+                           for old, new in zip(t[side], fresh[side])]
+        t["given_total"] = round(sum(c.get("value") or 0 for c in t["given"]) + t["wb_given"])
+        t["received_total"] = round(sum(c.get("value") or 0 for c in t["received"]) + t["wb_received"])
+        t["unknown"] = sum(c.get("value") is None for c in t["given"] + t["received"])
 
     async def _backfill(self, history: dict[str, dict], me: str) -> None:
         """Une seule fois : tes échanges terminés avant le suivi (12/11), si le site les donne encore. Chaque carte

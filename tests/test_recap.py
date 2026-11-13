@@ -121,6 +121,9 @@ async def test_recap_live_counts_only_real_positions_against_the_cap(tmp_path):
         await hold(i, False)
     stats = await db.recap_stats(now - timedelta(hours=4))
     assert "sniper : 6 positions réelles ouvertes, plafond 5" in anomalies(live, stats, pending)
+    # Aucune vente observée : signalé sur un récap de 4 h, pas juste après un démarrage (12/11, 19:59 → 20:00).
+    assert any("aucune vente observée" in p for p in anomalies(live, stats, pending, timedelta(hours=4)))
+    assert not any("aucune vente observée" in p for p in anomalies(live, stats, pending, timedelta(minutes=1)))
     await db.close()
 
 
