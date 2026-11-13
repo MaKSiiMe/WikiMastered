@@ -95,8 +95,14 @@ def activity(name: str, stats: dict[str, int]) -> list[str]:
     return []
 
 
-def anomalies(ctx: Context, stats: dict[str, int], pending: dict[str, int]) -> list[str]:
-    """Incohérences de la base, à corriger."""
+# Récap trop proche du démarrage pour conclure à un marché qui n'est plus lu : le 12/11, bot redémarré à 19:59,
+# « aucune vente observée » au récap de 20:00.
+OBSERVED_MIN_WINDOW = timedelta(minutes=30)
+
+
+def anomalies(ctx: Context, stats: dict[str, int], pending: dict[str, int],
+              window: timedelta = OBSERVED_MIN_WINDOW) -> list[str]:
+    """Incohérences de la base, à corriger. `window` : durée couverte par le récap."""
     found = []
     s = ctx.settings
     if s.enable_sniper:
@@ -110,7 +116,7 @@ def anomalies(ctx: Context, stats: dict[str, int], pending: dict[str, int]) -> l
                          f"plafond {s.portfolio_max_positions}")
         if pending["positions"] > 20:
             found.append(f"sniper : {pending['positions']} mises en attente de relecture")
-        if not stats["observed"]:
+        if not stats["observed"] and window >= OBSERVED_MIN_WINDOW:
             found.append("sniper : aucune vente observée, le marché n'est peut-être plus lu")
     return found
 
@@ -132,7 +138,7 @@ async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
     stats["collection_progress"] = progress_lines(collection, targets(ctx) if collection else {}, now)
     pending = await ctx.db.pending_bids()
     by_name = {w.name: w for w in workers}
-    problems = anomalies(ctx, stats, pending)
+    problems = anomalies(ctx, stats, pending, now - since)
     if getattr(ctx.client, "halted", None):
         problems.append(f"bot arrêté (sanction) : {ctx.client.halted} ; `rm data/HALT` pour reprendre")
     if not ctx.client.session_ok:
