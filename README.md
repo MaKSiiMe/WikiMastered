@@ -32,29 +32,29 @@ Les règles détaillées (estimation des prix, mises, remises en vente…) sont 
 - **Il n'ouvre pas de paquets** et ne répond pas aux échanges.
 - **Il ne garantit aucun gain.** Une carte achetée peut rester invendue et immobiliser ton capital ([détail](docs/FONCTIONNEMENT.md#positions--revendre)).
 
-## Démarrer
+## Installer
 
-Il te faut une machine allumée en permanence avec Docker, un serveur Discord et un compte WikiMasters.
+Il te faut une machine allumée en permanence avec [Docker](https://docs.docker.com/engine/install/) (un petit serveur Linux suffit), un serveur Discord et un compte WikiMasters.
 
 ```bash
-git clone https://github.com/MaKSiiMe/WikiMastered.git && cd WikiMastered
-cp .env.example .env                       # à remplir : session du site et webhook Discord
-mkdir -p backups && sudo chown -R 1000:1000 data backups
-docker compose up -d --build
-docker compose exec wikimastered python -m src.main check
+git clone https://github.com/MaKSiiMe/WikiMastered.git
+cd WikiMastered
+./installer.sh
 ```
 
-La récupération de la session demande quelques précautions, et Portainer est aussi possible : suis le [guide d'installation](docs/INSTALLATION.md).
+Le script te demande trois choses, en t'expliquant où les trouver : le cookie et le user-agent de ta session WikiMasters, puis l'URL d'un webhook Discord. Il lance ensuite le bot **en simulation** et vérifie que la session fonctionne. Discord affiche alors « [DRY RUN] Bot démarré ».
+
+Ensuite, [choisis ce que le bot doit faire](docs/INSTALLATION.md#5-choisir-les-réglages) puis [passe en réel](docs/INSTALLATION.md#6-passer-en-réel). Le [guide d'installation](docs/INSTALLATION.md) détaille chaque étape, l'installation à la main ou avec Portainer, les commandes Discord et le dépannage.
 
 ## Documentation
 
 | Page | Pour |
 |---|---|
 | [Installation](docs/INSTALLATION.md) | Installer, régler, passer en réel, entretenir, dépanner |
+| [Réglages](docs/REGLAGES.md) | Tous les réglages, avec leur valeur par défaut |
 | [Commandes](docs/COMMANDES.md) | Commandes Discord (`/bilan`, `/snipe`…), console, outils |
 | [Fonctionnement](docs/FONCTIONNEMENT.md) | Comprendre comment le bot décide |
 | [Développement](docs/DEVELOPPEMENT.md) | Lire ou modifier le code, lancer les tests |
-| [`.env.example`](.env.example) | Tous les réglages, commentés |
 
 ## Quand intervenir
 

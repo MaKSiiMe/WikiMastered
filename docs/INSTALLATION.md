@@ -17,11 +17,9 @@ Du premier lancement en simulation jusqu'au passage en réel, puis l'entretien.
 
 Il te faut :
 
-- une machine allumée en permanence avec Docker et Docker Compose, ou Portainer ;
+- une machine allumée en permanence avec [Docker](https://docs.docker.com/engine/install/) (Docker Compose est inclus), ou Portainer ;
 - un serveur Discord sur lequel tu peux créer des webhooks ;
 - un compte WikiMasters, en ayant lu l'[avertissement du README](../README.md#wikimastered).
-
-**Fais un fork plutôt que de déployer ce dépôt directement**, surtout avec Portainer et ses mises à jour automatiques. Sinon, tout ce qui arrive sur `main` ici s'exécuterait tout seul sur ta machine, là où se trouve la session de ton compte. Avec un fork, tu choisis quand récupérer les nouveautés (*Sync fork* sur GitHub).
 
 **Protège tes secrets.** Le cookie donne un accès complet à ton compte :
 
@@ -50,10 +48,24 @@ Un seul salon suffit pour commencer. Tu pourras [répartir les messages par salo
 
 ## 3. Lancer le bot
 
-### Avec Docker Compose
+### Avec le script (le plus simple)
 
 ```bash
-git clone https://github.com/<ton-pseudo>/WikiMastered.git && cd WikiMastered
+git clone https://github.com/MaKSiiMe/WikiMastered.git
+cd WikiMastered
+./installer.sh
+```
+
+Le script demande le cookie, le user-agent et le webhook des étapes 1 et 2, et les écrit dans `.env`. Puis il donne les dossiers `data/` et `backups/` au conteneur (il peut demander ton mot de passe pour `sudo`), construit l'image, lance le bot en simulation et vérifie la session.
+
+Tu peux le relancer quand tu veux, par exemple après avoir changé `.env` : Entrée garde chaque valeur déjà enregistrée, et le bot redémarre avec le `.env` actuel.
+
+Les commandes de ce guide se lancent ensuite avec `docker compose exec wikimastered <commande>`.
+
+### À la main, avec Docker Compose
+
+```bash
+git clone https://github.com/MaKSiiMe/WikiMastered.git && cd WikiMastered
 cp .env.example .env
 ```
 
@@ -65,9 +77,9 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-Les commandes de ce guide se lancent alors avec `docker compose exec wikimastered <commande>`.
-
 ### Avec Portainer
+
+**Fais d'abord un fork du dépôt** (bouton *Fork* sur GitHub) et déploie ton fork. Sinon, avec les mises à jour automatiques, tout ce qui arrive sur `main` ici s'exécuterait tout seul sur ta machine, là où se trouve la session de ton compte. Avec un fork, tu choisis quand récupérer les nouveautés (*Sync fork* sur GitHub).
 
 Portainer > ton environnement > *Stacks* > *+ Add stack* :
 
@@ -113,7 +125,7 @@ Si `inspect` affiche `ÉCART` ou `ERREUR`, le site a sans doute changé : voir [
 
 ## 5. Choisir les réglages
 
-Ce sont les réglages les plus utiles au départ. Tous les autres sont commentés dans [`.env.example`](../.env.example). Les valeurs par défaut sont volontairement prudentes et n'ont pas été optimisées : à toi de les ajuster, avec `python -m src.main sniper-report --breakdown` et `python -m src.main sniper-backtest`.
+Ce sont les réglages les plus utiles au départ. Pour en changer un, ajoute ou modifie sa ligne dans `.env` (dans les variables de la stack avec Portainer), puis redémarre le bot : `docker compose up -d`, ou relance `./installer.sh`. Tous les réglages sont décrits dans [Réglages](REGLAGES.md). Les valeurs par défaut sont volontairement prudentes et n'ont pas été optimisées : à toi de les ajuster, avec `python -m src.main sniper-report --breakdown` et `python -m src.main sniper-backtest`.
 
 | Réglage | Par défaut | À savoir |
 |---|---|---|
@@ -189,7 +201,7 @@ Crée un salon et son webhook pour chaque catégorie voulue, puis ajoute son URL
 
 | Installation | Comment |
 |---|---|
-| Docker Compose | `git pull && docker compose up -d --build` |
+| Script ou Docker Compose | `git pull && docker compose up -d --build` |
 | Portainer | Automatique dès que la branche suivie change (après *Sync fork*, pour un fork), dans les 5 minutes. À la main : stack > **Pull and redeploy** |
 
 Chaque mise à jour redémarre le bot. Le message « Bot démarré » le confirme. Si l'ancien code tourne encore avec Portainer, supprime `wikimastered:latest` dans *Images* et relance *Pull and redeploy*.
