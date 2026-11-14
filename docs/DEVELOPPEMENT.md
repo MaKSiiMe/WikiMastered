@@ -55,7 +55,7 @@ Les docstrings en tête des modules, en particulier `auction_sniper.py`, `invent
 ## Ajouter un réglage
 
 1. Ajoute le champ dans `Settings` (`src/config.py`) ; son nom en majuscules devient la variable d'environnement.
-2. Documente-le dans [`.env.example`](../.env.example), avec sa valeur par défaut. [`tests/test_docs.py`](../tests/test_docs.py) échoue sinon, comme pour une commande non documentée ou un lien cassé.
+2. Documente-le dans [Réglages](REGLAGES.md), avec sa valeur par défaut ; dans [`.env.example`](../.env.example) aussi s'il sert à presque tout le monde. [`tests/test_docs.py`](../tests/test_docs.py) échoue sinon, comme pour une commande non documentée ou un lien cassé.
 3. Mets à jour [Fonctionnement](FONCTIONNEMENT.md) ou [Installation](INSTALLATION.md) s'il change un comportement décrit.
 
 Un défaut qui change modifie le comportement de toute instance qui n'a pas renseigné ce réglage : préviens-les, et ajoute l'ancienne valeur à `tests/conftest.py` si des tests en dépendent.
@@ -82,7 +82,3 @@ Une correction durable va dans [`config/endpoints.yaml`](../config/endpoints.yam
 ## Ajouter une collection
 
 Dans [`config/collections.yaml`](../config/collections.yaml) : un nom, une étiquette, les titres exacts des articles (ou un fichier avec un titre par ligne), puis active sa clé dans `COLLECTION_SETS`. Pour les GIF, `python -m src.tools.gif_list` régénère la liste.
-
-## Déploiement de référence
-
-Sur le dépôt d'origine, `main` est protégée par la CI. Portainer surveille `main` en Polling et redéploie chaque fusion en 5 minutes environ. [`deploy.yml`](../.github/workflows/deploy.yml) sert seulement si le Portainer est joignable depuis internet : il appelle alors le webhook du secret `PORTAINER_WEBHOOK_URL`, et sans ce secret il ne fait rien.

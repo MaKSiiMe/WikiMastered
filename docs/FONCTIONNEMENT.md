@@ -1,6 +1,6 @@
 # Fonctionnement
 
-Comment le bot décide. Les valeurs citées sont celles par défaut : volontairement prudentes, elles n'ont pas été optimisées. Chaque réglage cité est commenté dans [.env.example](../.env.example).
+Comment le bot décide. Les valeurs citées sont celles par défaut : volontairement prudentes, elles n'ont pas été optimisées. Chaque réglage cité est décrit dans [Réglages](REGLAGES.md).
 
 - [Vue d'ensemble](#vue-densemble)
 - [Réseau](#réseau)

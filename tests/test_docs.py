@@ -7,6 +7,7 @@ vérifiées : à relire quand un réglage par défaut change.
 from __future__ import annotations
 
 import ast
+import os
 import re
 from pathlib import Path
 
@@ -16,22 +17,24 @@ from src.config import Settings
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_EXAMPLE = ROOT / ".env.example"
+REGLAGES = ROOT / "docs" / "REGLAGES.md"
+# .env.example ne montre que l'essentiel ; docs/REGLAGES.md les montre tous.
+SETTINGS_FILES = [ENV_EXAMPLE, REGLAGES]
 COMMANDS = ROOT / "docs" / "COMMANDES.md"
 PAGES = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
 
 # Valeurs à remplacer par les tiennes : pas des valeurs par défaut.
 PLACEHOLDERS = {"WM_COOKIE", "DISCORD_WEBHOOK_URL"}
-# Mots en majuscules cités dans la doc qui ne sont pas des réglages : texte affiché par `inspect`, secret GitHub,
-# constante du code.
-NOT_SETTINGS = {"ERREUR", "PORTAINER_WEBHOOK_URL", "WRITE_GROUPS"}
+# Mots en majuscules cités dans la doc qui ne sont pas des réglages : texte affiché par `inspect`, constante du code.
+NOT_SETTINGS = {"ERREUR", "WRITE_GROUPS"}
 # Guide d'une extension communautaire, cité comme source d'une route (config/endpoints.yaml) : pas un guide d'ici.
 EXTERNAL_GUIDES = {"docs/TECHNIQUE.md"}
 
 
-def env_example() -> dict[str, str]:
-    """Variables de .env.example, commentées ou non : nom -> valeur, sans commentaire de fin ni apostrophes."""
+def settings_in(path: Path) -> dict[str, str]:
+    """Variables d'un fichier de réglages, commentées ou non : nom -> valeur, sans commentaire de fin ni apostrophes."""
     found = {}
-    for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if match := re.match(r"\s*(?:#\s*)?([A-Z][A-Z0-9_]+)=(.*)$", line):
             value = re.split(r"\s+#", match[2])[0].strip().strip("'\"")
             found.setdefault(match[1], value)
@@ -69,20 +72,22 @@ def console_commands() -> list[str]:
     return re.findall(r'add_parser\(\s*"([^"]+)"', (ROOT / "src" / "main.py").read_text(encoding="utf-8"))
 
 
-def test_every_setting_is_in_env_example():
-    missing = {name.upper() for name in Settings.model_fields} - set(env_example())
-    assert not missing, f"À ajouter dans .env.example, avec la valeur par défaut : {sorted(missing)}"
+def test_every_setting_is_documented():
+    missing = {name.upper() for name in Settings.model_fields} - set(settings_in(REGLAGES))
+    assert not missing, f"À ajouter dans docs/REGLAGES.md, avec la valeur par défaut : {sorted(missing)}"
 
 
-def test_env_example_has_no_dead_setting():
-    dead = set(env_example()) - {name.upper() for name in Settings.model_fields}
-    assert not dead, f"À retirer de .env.example, le code ne les lit plus : {sorted(dead)}"
+@pytest.mark.parametrize("path", SETTINGS_FILES, ids=lambda p: p.name)
+def test_no_dead_setting(path):
+    dead = set(settings_in(path)) - {name.upper() for name in Settings.model_fields}
+    assert not dead, f"À retirer de {path.name}, le code ne les lit plus : {sorted(dead)}"
 
 
-def test_env_example_shows_the_real_defaults(monkeypatch):
+@pytest.mark.parametrize("path", SETTINGS_FILES, ids=lambda p: p.name)
+def test_settings_show_the_real_defaults(path, monkeypatch):
     """Lue comme le ferait le bot, la valeur affichée doit donner le défaut du code. Un exemple se marque « ex. »."""
     wrong = {}
-    for name, shown in env_example().items():
+    for name, shown in settings_in(path).items():
         if name in PLACEHOLDERS or name.lower() not in Settings.model_fields:
             continue
         monkeypatch.setenv(name, shown)
@@ -90,7 +95,7 @@ def test_env_example_shows_the_real_defaults(monkeypatch):
         monkeypatch.delenv(name)
         if read != default(name):
             wrong[name] = f"affiche {shown!r}, défaut du code {default(name)!r}"
-    assert not wrong, f"Valeurs fausses dans .env.example : {wrong}"
+    assert not wrong, f"Valeurs fausses dans {path.name} : {wrong}"
 
 
 def test_env_example_loads():
@@ -172,3 +177,14 @@ def test_guides_cited_by_the_code_exist():
             for guide in re.findall(r"docs/[A-Za-z]+\.md", path.read_text(encoding="utf-8"))
             if guide not in EXTERNAL_GUIDES and not (ROOT / guide).exists()}
     assert not gone, f"Guides cités mais absents : {sorted(gone)}"
+
+
+def test_installer_fills_env_example():
+    """installer.sh remplace des lignes non commentées de .env.example, et doit rester exécutable."""
+    script = ROOT / "installer.sh"
+    asked = re.findall(r"^ask ([A-Z_]+)", script.read_text(encoding="utf-8"), re.M)
+    assert asked, "Aucune question trouvée dans installer.sh : le test ne lit plus le bon code"
+    lines = ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
+    missing = [name for name in asked if not any(line.startswith(f"{name}=") for line in lines)]
+    assert not missing, f"installer.sh demande {missing}, absents (ou commentés) de .env.example"
+    assert os.access(script, os.X_OK), "installer.sh doit rester exécutable : git update-index --chmod=+x installer.sh"
