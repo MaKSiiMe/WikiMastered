@@ -28,6 +28,8 @@ jobs:
         run: pip install -r requirements.txt pytest==8.4.2 pytest-asyncio==1.2.0
       - name: Tests
         run: python -m pytest -q
+      - name: Script d'installation
+        run: shellcheck installer.sh
 
   image:
     name: image Docker
