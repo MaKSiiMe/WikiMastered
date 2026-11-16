@@ -1,0 +1,28 @@
+# Stack Portainer (Stacks > Add stack > Repository, chemin : portainer-stack.yml).
+# Les variables saisies dans Portainer (onglet Environment variables) sont écrites
+# par Portainer dans stack.env, lu ci-dessous. Guide : docs/INSTALLATION.md
+services:
+  wikimastered:
+    image: ghcr.io/maksiime/wikimastered:sha-b55c173
+    container_name: wikimastered
+    restart: unless-stopped
+    env_file:
+      - stack.env
+    environment:
+      TZ: Europe/Paris
+    volumes:
+      # Volume nommé : survit aux redéploiements et hérite des droits de l'image (UID 1000).
+      - wikimastered_data:/app/data
+      # Sauvegardes de la base : un volume à part, pour qu'elles survivent à la perte du volume des données.
+      - wikimastered_backups:/app/backups
+    stop_grace_period: 20s
+    mem_limit: 640m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  wikimastered_data:
+  wikimastered_backups:
