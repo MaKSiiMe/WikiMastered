@@ -135,6 +135,7 @@ class SnipeParams:
     max_spread: float = 0.0  # plus haute / plus basse des dernières ventes, au plus (0 = sans limite)
     min_bid_share: float = 0.0  # mise / estimation, au moins (0 = sans limite) : voir SNIPER_MIN_BID_SHARE
     min_value: float = 0.0  # valeur d'une mise, au moins (0 = sans limite) : voir SNIPER_MIN_BID_VALUE
+    min_estimate: int = 0   # estimation minimale d'une carte non shiny revendue (0 = toutes) : SNIPER_MIN_ESTIMATE
 
 
 def snipe_params(s: Settings, night: bool) -> SnipeParams:
@@ -148,12 +149,20 @@ def snipe_params(s: Settings, night: bool) -> SnipeParams:
         max_spread=s.sniper_max_price_spread,
         min_bid_share=s.sniper_min_bid_share,
         min_value=s.night_min_bid_value if night and s.night_min_bid_value > 0 else s.sniper_min_bid_value,
+        min_estimate=s.sniper_min_estimate,
     )
 
 
 def min_sales(s: Settings, shiny: bool) -> int:
     """Ventes observées minimum avant d'acheter pour revendre : plus pour un shiny (SNIPER_SHINY_MIN_SALES)."""
     return max(s.price_min_sales, s.sniper_shiny_min_sales) if shiny else s.price_min_sales
+
+
+def too_low_value(auction: Auction, quote: Quote, params: SnipeParams) -> str | None:
+    """Carte non shiny estimée sous SNIPER_MIN_ESTIMATE : pas revendue, le quota anti-bot va aux cartes chères."""
+    if params.min_estimate > 0 and not auction.shiny and quote.average < params.min_estimate:  # type: ignore[operator]
+        return f"estimation < {params.min_estimate} WB"
+    return None
 
 
 def unsteady(quote: Quote, params: SnipeParams) -> str | None:
@@ -296,7 +305,8 @@ def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales
     if collection_cap is not None and amount <= collection_cap:
         options.append(Decision(amount, collection_cap, f"{COLLECTION_PREFIX} : carte manquante ≤ {collection_cap}",
                                 quote.average if quote else None))
-    if resale and quote is not None and quote.reliable(min_sales) and not unsteady(quote, params):
+    if resale and quote is not None and quote.reliable(min_sales) and not unsteady(quote, params) \
+            and not too_low_value(auction, quote, params):
         net = quote.average * (1 - fee)  # type: ignore[operator]
         limit = math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
         if portfolio is not None:
@@ -325,7 +335,7 @@ def refusal(auction: Auction, params: SnipeParams, quote: Quote | None, min_sale
         return "rareté non revendue"
     if quote is None or not quote.reliable(min_sales):
         return "pas assez vue vendue"
-    if why := unsteady(quote, params):
+    if why := unsteady(quote, params) or too_low_value(auction, quote, params):
         return why
     amount = auction.min_bid
     if amount > math.floor(quote.average * params.deal_ratio):  # type: ignore[operator]
@@ -354,7 +364,7 @@ def hopeless(auction: Auction, params: SnipeParams, quote: Quote | None, min_sal
     (SNIPER_MIN_BID_SHARE) : une mise relue plus haute peut la lever."""
     if quote is None or not quote.reliable(min_sales):
         return "pas assez vue vendue" if quoted else None
-    if why := unsteady(quote, params):
+    if why := unsteady(quote, params) or too_low_value(auction, quote, params):
         return why
     if auction.min_bid > math.floor(quote.average * params.deal_ratio):  # type: ignore[operator]
         return f"mise > {params.deal_ratio:.0%} de l'estimation"
