@@ -20,7 +20,7 @@ services:
       # Sauvegardes de la base : un volume à part, pour qu'elles survivent à la perte du volume des données.
       - wikimastered_backups:/app/backups
     stop_grace_period: 20s
-    mem_limit: 256m
+    mem_limit: 640m
     logging:
       driver: json-file
       options:

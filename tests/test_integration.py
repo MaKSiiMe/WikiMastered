@@ -541,6 +541,34 @@ async def test_older_market_reads_do_not_overwrite_newer_ones(tmp_path):
     assert not is_older(auction(now + timedelta(seconds=53), 2985), auction(now, 2714))
 
 
+@pytest.mark.asyncio
+async def test_identical_market_reads_are_not_rewritten_far_from_the_end(tmp_path):
+    """16/11 : chaque enchère vue était réécrite à chaque passage (~16 Go écrits par jour). Loin de la fin, une lecture
+    identique ne change rien ; près de la fin, `seen_at` suit (il sert à reconnaître la vente)."""
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    now = datetime.now(UTC)
+
+    def row(aid, end, seen, bid=300):
+        return {"auction_id": aid, "card_id": "c", "title": "t", "rarity": "L", "is_shiny": 0, "current_bid": bid,
+                "base_amount": 100, "min_bid": bid + 1, "end_at": end.isoformat(), "seen_at": seen.isoformat()}
+
+    async def seen(aid):
+        return (await db._one("SELECT seen_at FROM auctions_seen WHERE auction_id = ?", (aid,)))["seen_at"]
+
+    far, near = now + timedelta(hours=2), now + timedelta(seconds=100)
+    await db.upsert_auctions([row("far", far, now), row("near", near, now)])
+    changes = db.db.total_changes
+    later = now + timedelta(seconds=30)
+    await db.upsert_auctions([row("far", far, later)])
+    assert db.db.total_changes == changes and await seen("far") == now.isoformat()
+    await db.upsert_auctions([row("near", near, later)])
+    assert await seen("near") == later.isoformat()
+    await db.upsert_auctions([row("far", far, later, bid=350)])  # nouvelle mise : prise
+    assert await seen("far") == later.isoformat()
+    await db.close()
+
+
 def test_position_copy_has_the_bought_rarity_and_version():
     """Une carte existe en plusieurs raretés : un exemplaire plus récent d'une autre rareté ou shiny (tiré d'un paquet)
     n'est jamais vendu à la place de la position, ni un exemplaire protégé, ni un exemplaire qu'on avait déjà."""

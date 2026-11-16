@@ -18,6 +18,9 @@ log = logging.getLogger(__name__)
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
+-- Sans risque en WAL : plus d'écriture forcée sur disque à chaque commit (une coupure de courant peut perdre les
+-- dernières transactions, jamais abîmer la base).
+PRAGMA synchronous=NORMAL;
 
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -168,6 +171,13 @@ def _observed_filter(card_id: str, rarity: str | None, shiny: bool | None) -> tu
 # en tête à l'ancienne fin.
 FRESHER = ("(julianday(excluded.end_at) >= julianday(auctions_seen.end_at) "
            "AND COALESCE(excluded.current_bid, 0) >= COALESCE(auctions_seen.current_bid, 0))")
+# Ligne réécrite seulement si la lecture apporte quelque chose (16/11 : l'enchère réécrite à chaque passage, ~16 Go
+# écrits par jour) : une valeur a changé, ou la fin est proche, où `seen_at` sert à reconnaître une vente
+# (harvest_ended_auctions, écart de 120 s au plus) ; loin de la fin, une lecture identique n'est pas gardée.
+SEEN_REFRESH_SECONDS = 300
+SEEN_CHANGED = (" OR ".join(f"excluded.{col} IS NOT auctions_seen.{col}"
+                            for col in ("current_bid", "min_bid", "end_at", "bidder_id"))
+                + f" OR julianday(excluded.end_at) - julianday(excluded.seen_at) <= {SEEN_REFRESH_SECONDS} / 86400.0")
 
 
 def iso(dt: datetime | None) -> str | None:
@@ -723,8 +733,8 @@ class Database:
             "base_amount, min_bid, end_at, seen_at, seller_id, bidder_id, is_gif) VALUES (:auction_id, :card_id, "
             ":title, :rarity, :is_shiny, :current_bid, :base_amount, :min_bid, :end_at, :seen_at, "
             ":seller_id, :bidder_id, :is_gif) ON CONFLICT(auction_id) DO UPDATE SET "
-            + ", ".join(f"{col} = CASE WHEN {FRESHER} THEN excluded.{col} ELSE {col} END"
-                        for col in ("current_bid", "min_bid", "end_at", "seen_at", "bidder_id")),
+            + ", ".join(f"{col} = excluded.{col}" for col in ("current_bid", "min_bid", "end_at", "seen_at", "bidder_id"))
+            + f" WHERE {FRESHER} AND ({SEEN_CHANGED})",
             rows,
         )
         await self.db.commit()
@@ -754,9 +764,12 @@ class Database:
         return len(sales)
 
     async def correct_observed_sale(self, auction_id: str, price: int, buyer_id: str | None) -> None:
-        """Prix final et gagnant relus au règlement d'une de nos mises : ils remplacent la dernière lecture."""
-        await self.db.execute("UPDATE observed_sales SET price = ?, buyer_id = COALESCE(?, buyer_id) "
-                              "WHERE auction_id = ?", (price, buyer_id, auction_id))
+        """Prix final et gagnant relus au règlement d'une de nos mises : ils remplacent la dernière lecture (une
+        ligne déjà juste n'est pas réécrite)."""
+        await self.db.execute(
+            "UPDATE observed_sales SET price = ?, buyer_id = COALESCE(?, buyer_id) "
+            "WHERE auction_id = ? AND (price IS NOT ? OR buyer_id IS NOT COALESCE(?, buyer_id))",
+            (price, buyer_id, auction_id, price, buyer_id))
         await self.db.commit()
 
     async def gif_stats(self) -> list[aiosqlite.Row]:
