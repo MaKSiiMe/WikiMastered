@@ -51,6 +51,7 @@ class Worker:
         self._errors = 0
         # Santé, pour le récap : dernier passage réussi, prochain prévu, erreurs depuis le dernier récap.
         self.last_ok: datetime | None = None
+        self.last_duration = 0.0  # durée du dernier passage réussi, en secondes (moniteur Uptime Kuma)
         self.next_due: datetime | None = None
         self.recent_errors = 0
         self.last_error = ""
@@ -80,7 +81,8 @@ class Worker:
                     self.log.info("démarré")
                 started = time.monotonic()
                 delay = await self.step()
-                self.passes.timings.add(time.monotonic() - started)
+                self.last_duration = time.monotonic() - started
+                self.passes.timings.add(self.last_duration)
                 self._errors = 0
                 self.last_ok = utcnow()
             except asyncio.CancelledError:

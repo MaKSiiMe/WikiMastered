@@ -77,6 +77,7 @@ DISCORD_WEBHOOK_COLLECTION=           # cartes de collection, étiquettes, succ�
 DISCORD_WEBHOOK_BILAN=                # bilan de 23:00, récap des workers toutes les 4 h
 DISCORD_WEBHOOK_SYSTEME=              # démarrage, session, réseau, sauvegardes
 DISCORD_MENTION=                      # ex. @here : mention des alertes rouges
+KUMA_PUSH_URL=                        # moniteur « Push » d'Uptime Kuma, appelé après les passages réussis
 # Commandes slash (/roi, /bilan, /snipe…) : bot du portail développeur Discord (onglet Bot > Reset Token).
 # Seul DISCORD_OWNER_ID (clic droit sur ton pseudo > Copier l'identifiant) peut s'en servir ; DISCORD_GUILD_ID
 # (clic droit sur le serveur) les fait apparaître tout de suite. Vide = pas de commandes, les webhooks seuls.
