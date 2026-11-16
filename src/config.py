@@ -138,6 +138,9 @@ class Settings(BaseSettings):
     discord_webhook_bilan: str = ""       # bilan de 23:00, récap des workers toutes les 4 h
     discord_webhook_systeme: str = ""     # démarrage, session, réseau, sauvegardes
     discord_mention: str = ""
+    # Moniteur « Push » d'Uptime Kuma : appelé au plus une fois par minute après un passage réussi d'un worker. Vide =
+    # rien. Kuma prévient (sur Discord, par exemple) si le bot tourne mais ne fait plus rien.
+    kuma_push_url: str = ""
     # Commandes slash (/roi, /bilan, /snipe…) : bot Discord (portail développeur > Bot > token). Vide = pas de
     # commandes, les webhooks seuls. Seul DISCORD_OWNER_ID (ton identifiant utilisateur) peut s'en servir ;
     # DISCORD_GUILD_ID (ton serveur) les fait apparaître tout de suite au lieu d'attendre jusqu'à 1 h.

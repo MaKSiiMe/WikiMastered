@@ -235,3 +235,26 @@ def test_uncontested_sales_cannot_raise_the_estimate():
     eclipse = trusted_prices([(900, True), (733, False), (800, True), (999, True), (435, False)])
     assert eclipse == [733, 733, 733, 733, 435]
     assert trusted_prices([]) == []
+
+
+@pytest.mark.asyncio
+async def test_kuma_push_sends_the_last_pass_and_never_raises():
+    """Moniteur Uptime Kuma : l'URL copiée de Kuma garde son chemin, ses paramètres sont remplacés ; une panne de Kuma
+    n'est qu'un avertissement."""
+    import httpx
+
+    from src.main import kuma_push
+
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url)
+        return httpx.Response(200 if len(seen) == 1 else 500)
+
+    worker = type("W", (), {"last_duration": 1.2345})()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        url = "https://kuma.example/api/push/abc?status=up&msg=OK&ping="
+        assert await kuma_push(http, url, worker)
+        assert not await kuma_push(http, url, worker)
+    assert seen[0].path == "/api/push/abc"
+    assert dict(seen[0].params) == {"status": "up", "msg": "OK", "ping": "1234"}

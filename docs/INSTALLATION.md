@@ -93,6 +93,8 @@ Portainer > ton environnement > *Stacks* > *+ Add stack* :
 | Authentication | désactivé (un dépôt public n'en a pas besoin) |
 | GitOps updates | activé, mécanisme **Polling**, intervalle `5m` |
 
+**Image construite par GitHub (facultatif).** Avec `refs/heads/main`, le serveur construit l'image à chaque mise à jour : plusieurs minutes sur une petite machine, et un cache de construction qui grossit. Si les GitHub Actions sont activées sur ton dépôt (onglet *Actions*, désactivées par défaut sur un fork), chaque fusion sur `main` publie l'image sur `ghcr.io/<ton-pseudo>/wikimastered:sha-<commit>` et écrit sur la branche `deploy` une pile qui la fixe. Mets alors `refs/heads/deploy` en *Repository reference* : le serveur ne fait plus que télécharger l'image. Pour revenir à la version précédente, remets l'ancien tag dans `portainer-stack.yml` de la branche `deploy`. Si l'image est privée (*Packages* > `wikimastered` > *Package settings*), ajoute dans Portainer *Registries* > *Add registry* > *Custom registry* : URL `ghcr.io`, ton pseudo GitHub et un jeton *classic* avec le seul droit `read:packages`.
+
 Pourquoi Polling : Portainer vérifie lui-même `main` et redéploie s'il y a du nouveau, sans rien ouvrir sur internet. Le mécanisme *Webhook* exige que GitHub puisse joindre ton Portainer, ce qui est impossible avec une adresse locale ou Tailscale. Les options *Re-pull image* et *Force redeployment* sont réservées à la version Business : laisse-les désactivées.
 
 Dans *Environment variables*, clique sur **Advanced mode** et colle, une variable par ligne, **sans apostrophes** :

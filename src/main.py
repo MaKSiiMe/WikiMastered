@@ -33,6 +33,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
+import httpx
+
 from src.account import bilan_text as account_bilan
 from src.backup import backup_loop
 from src.config import RARITY_RANK, Settings, get_settings
@@ -576,6 +578,37 @@ async def heartbeat(ctx: Context) -> None:
         await asyncio.sleep(30)
 
 
+KUMA_PUSH_SECONDS = 60
+
+
+async def kuma_push(http: httpx.AsyncClient, url: str, worker: Worker) -> bool:
+    """Signale à Uptime Kuma le dernier passage réussi. Un échec n'est qu'un avertissement : Kuma, sans nouvelle,
+    préviendra de lui-même."""
+    try:
+        resp = await http.get(url.split("?", 1)[0], params={
+            "status": "up", "msg": "OK", "ping": round(worker.last_duration * 1000)})
+        resp.raise_for_status()
+        return True
+    except Exception as exc:  # noqa: BLE001 - le moniteur ne doit jamais gêner le bot
+        log.warning("Uptime Kuma injoignable : %s", f"{type(exc).__name__} {exc}"[:200])
+        return False
+
+
+async def kuma_loop(ctx: Context, workers: list[Worker]) -> None:
+    """Toutes les minutes, si un worker a fini un passage depuis le dernier appel, prévient Uptime Kuma (le plus
+    récent, avec sa durée)."""
+    last_sent = None
+    async with httpx.AsyncClient(timeout=10) as http:
+        while True:
+            await asyncio.sleep(KUMA_PUSH_SECONDS)
+            done = [w for w in workers if w.last_ok is not None]
+            if not done:
+                continue
+            latest = max(done, key=lambda w: w.last_ok)
+            if latest.last_ok != last_sent and await kuma_push(http, ctx.settings.kuma_push_url, latest):
+                last_sent = latest.last_ok
+
+
 SUPERVISE_BASE_SECONDS = 30  # 1re relance d'une tâche arrêtée, doublée à chaque nouvel arrêt (10 min au plus)
 
 
@@ -652,6 +685,8 @@ async def run_bot(settings: Settings) -> None:
             jobs.append(("recap", lambda: recap_loop(ctx, workers, started_at)))
         if settings.stats_minutes > 0:
             jobs.append(("stats", lambda: stats_loop(ctx, workers)))
+        if settings.kuma_push_url:
+            jobs.append(("kuma", lambda: kuma_loop(ctx, workers)))
         if settings.enable_sniper and settings.sniper_report_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
         if (settings.enable_backup and settings.backup_keep > 0) or settings.observed_keep_days > 0:
