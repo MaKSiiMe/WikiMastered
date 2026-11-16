@@ -3,11 +3,14 @@
 # par Portainer dans stack.env, lu ci-dessous. Guide : docs/INSTALLATION.md
 services:
   wikimastered:
-    build: .
     image: wikimastered:latest
-    # Reconstruit l'image à chaque déploiement : sinon Portainer réutilise l'ancienne image
-    # et l'ancien code continue de tourner après une mise à jour du dépôt.
+    # construction: début
+    # Image construite sur le serveur, reconstruite à chaque déploiement (sinon l'ancien code continue de
+    # tourner). La CI publie sur la branche `deploy` cette même pile sans ce bloc, avec l'image construite par
+    # GitHub (ghcr.io/…/wikimastered:sha-<commit>) : voir docs/INSTALLATION.md.
+    build: .
     pull_policy: build
+    # construction: fin
     container_name: wikimastered
     restart: unless-stopped
     env_file:
