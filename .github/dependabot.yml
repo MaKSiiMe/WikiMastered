@@ -1,0 +1,25 @@
+# PR automatiques de mise à jour. Pas de fusion automatique : fusionner redéploie le bot.
+version: 2
+updates:
+  # Image de base du Dockerfile (version et empreinte) : correctifs de Python 3.12 et de Debian seulement. Passer à
+  # une autre version de Python (3.13…) reste un choix à faire à la main.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    commit-message:
+      prefix: "Dockerfile"
+
+  # Actions des workflows (.github/workflows), regroupées en une seule PR.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "CI"
