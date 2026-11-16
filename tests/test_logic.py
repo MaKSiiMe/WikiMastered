@@ -19,7 +19,7 @@ from src.core.text import normalize_title
 from src.core.timeutils import PARIS, in_window
 from src.tools.parse_curl import parse_curl, to_endpoint
 from src.workers.auction_sniper import (
-    decide, in_snipe_window, portfolio_state, position_cap, refusal, snipe_params, waiting_profits,
+    decide, hopeless, in_snipe_window, portfolio_state, position_cap, refusal, snipe_params, waiting_profits,
 )
 from src.workers.inventory_manager import (
     achievement_guard, group_by_card, plan_listing_time, select_for_discard, select_for_sale,
@@ -130,6 +130,28 @@ def test_position_skipped_when_our_bid_is_far_below_the_estimate():
     assert fair and fair.amount == 420  # 300 + 120
     off = snipe_params(settings(sniper_min_bid_share=0), night=False)
     assert decide(cheap, off, quote, 3, pf, push=0.5).amount == 370
+
+
+def test_cheap_non_shiny_cards_skipped_below_min_estimate():
+    """16/11 : revente des seules cartes chères (shiny toujours), pour garder le quota anti-bot aux mises qui
+    rapportent le plus."""
+    assert settings().sniper_min_estimate == 0  # dépôt public : tout est revendu
+    s = settings(sniper_min_estimate=2000, sniper_deal_ratio_max=0.85, sniper_min_bid_share=0,
+                 portfolio_min_profit_ratio=0, portfolio_min_profit=300)
+    params = snipe_params(s, night=False)
+    pf = portfolio_state(s, balance=100_000, held_count=0, held_real_cost=0, held_sim_cost=0,
+                         engaged_real=0, engaged_sim=0, bot_engaged_count=0)
+    card = {"id": "c", "wikipedia_title": "x", "rarity": "L"}
+    low, high = Quote(1500.0, 5, contested=3, spread=1.5), Quote(2500.0, 5, contested=3, spread=1.5)
+    cheap = auction(card=card, base_amount=1000)
+    assert decide(cheap, params, low, 3, pf) is None
+    assert refusal(cheap, params, low, 3, pf) == "estimation < 2000 WB"
+    assert hopeless(cheap, params, low, 3, 0.0, 100, True) == "estimation < 2000 WB"
+    assert decide(auction(card=card, base_amount=1500), params, high, 3, pf) is not None
+    shiny = auction(card={**card, "is_shiny": True}, base_amount=1000)
+    assert decide(shiny, params, low, 3, pf) is not None
+    # Collection : non concernée.
+    assert decide(cheap, params, low, 3, pf, collection_cap=1000) is not None
 
 
 def test_position_needs_contested_and_steady_recent_sales():

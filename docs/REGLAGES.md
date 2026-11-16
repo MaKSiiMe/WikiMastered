@@ -207,6 +207,7 @@ SNIPER_WINDOW_SECONDS=30              # miser s'il reste moins de X s
 SNIPER_MIN_SECONDS_LEFT=15            # ... mais jamais dans les 10 dernières (prolongation de 60 s), marge de 5 s
 SNIPER_DEAL_RATIO_MAX=0.5             # mise ≤ 50 % de l'estimation, en plus du bénéfice minimum
 SNIPER_MIN_BID_SHARE=0.25             # mise < 25 % de l'estimation : position sautée (quota anti-bot gardé)
+SNIPER_MIN_ESTIMATE=0                 # carte non shiny revendue seulement si estimée ≥ N WB (0 = toutes ; shiny toujours)
 SNIPER_ANTIBOT_RETRY_SECONDS=300     # vérification anti-bot en attente : une mise tentée toutes les N s (0 = chacune)
 SNIPER_PREFETCH_SECONDS=8             # estimation anticipée d'une enchère toutes les N s
 SNIPER_MIN_BALANCE_RESERVE=50         # solde jamais descendu sous ce seuil

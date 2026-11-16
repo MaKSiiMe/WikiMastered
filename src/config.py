@@ -208,6 +208,11 @@ class Settings(BaseSettings):
     # Position sautée si notre mise vaut moins de cette part de l'estimation (0 = jamais) : une enchère très sous sa
     # valeur partira bien plus haut, et la mise userait une place du quota anti-bot pour rien.
     sniper_min_bid_share: float = 0.25
+    # Revente d'une carte non shiny seulement si son estimation atteint ce prix (0 = toutes) : moins de mises, donc
+    # moins de vérifications anti-bot, gardées pour les cartes chères. Les shiny sont toujours revendues ; collection,
+    # cartes demandées et souhaits ne sont pas concernés. Du 01/11 au 16/11 : shiny et L ≥ 2000 = 16 % des mises
+    # tentées, 37 % du bénéfice.
+    sniper_min_estimate: int = 0
     sniper_max_bid: int = 500        # plafond absolu d'une mise, /snipe excepté (0 = aucun, le budget par position s'applique)
     sniper_daily_budget: int = 0     # 0 = pas de budget quotidien
     sniper_min_balance_reserve: int = 50
