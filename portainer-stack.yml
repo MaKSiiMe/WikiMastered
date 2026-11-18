@@ -3,7 +3,7 @@
 # par Portainer dans stack.env, lu ci-dessous. Guide : docs/INSTALLATION.md
 services:
   wikimastered:
-    image: ghcr.io/maksiime/wikimastered:sha-1d70219
+    image: ghcr.io/maksiime/wikimastered:sha-84eb1d0
     container_name: wikimastered
     restart: unless-stopped
     env_file:
