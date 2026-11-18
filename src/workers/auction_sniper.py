@@ -76,6 +76,9 @@ PLACED = ("misée", "misée (collection)")
 # SNIPER_ANTIBOT_RETRY_SECONDS : elle teste si la vérification est levée. Le 16/10, ~45 mises refusées en 1 h 30 (toutes
 # inutiles), puis vérification des paquets demandée à son tour.
 ANTIBOT_REMIND = timedelta(hours=1)  # alerte renouvelée tant que la vérification n'est pas faite
+# Vente proposée dans l'alerte anti-bot pour la mise à la main qui fait la vérification : encore ouverte au moins N.
+# Celle que le bot vient de se voir refuser finit dans les secondes qui suivent (il mise dans les dernières ~25 s).
+MANUAL_BID_MIN_LEFT = timedelta(minutes=3)
 PENDING_ANTIBOT = "pas tentée : vérification anti-bot en attente"
 QUOTA_FOR_L = "collection : quota de la vérification gardé pour les L"
 # Mises acceptées après lesquelles le quota de la collection repart sans refus : le 21/10, 36 mises sont passées
@@ -476,6 +479,10 @@ class AuctionSniper(Worker):
         self._antibot_retry_at = _EPOCH  # prochaine mise réelle permise tant que la vérification attend
         self._antibot_remind_at = _EPOCH  # prochain rappel d'alerte tant que la vérification attend
         self._antibot_missed = 0  # mises non placées depuis le début du blocage
+        # Vérification signalée faite (bouton, /verif-faite) : plus de rappel qui mentionne ; mise encore refusée
+        # depuis : son heure, montrée sur l'alerte sans nouvelle mention (bot Discord).
+        self._antibot_acknowledged: datetime | None = None
+        self._antibot_refused_after_ack: datetime | None = None
         self._collection_since_check = 0  # mises réelles de collection depuis la dernière vérification
         self._bids_since_check = 0  # mises réelles acceptées depuis la dernière vérification (ou CHECK_QUOTA_BIDS)
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
@@ -1447,14 +1454,36 @@ class AuctionSniper(Worker):
         if not self._antibot_since or now < self._antibot_remind_at:
             return
         self._antibot_remind_at = now + ANTIBOT_REMIND
+        if self._antibot_acknowledged:  # signalée faite : l'alerte affiche les refus suivants, sans mention
+            self.log.info("vérification toujours en attente malgré le signalement de %s : pas de rappel",
+                          self._antibot_acknowledged.astimezone(timeutils.PARIS).strftime("%H:%M"))
+            return
         minutes = int((now - self._antibot_since).total_seconds() // 60)
         since = self._antibot_since.astimezone(timeutils.PARIS)
         self.notifier.critical(
             "Sniper : vérification anti-bot toujours en attente",
             f"Mises refusées depuis {since:%d/%m %H:%M} ({minutes // 60} h {minutes % 60:02d}) : "
             f"{self._antibot_missed} mise(s) non placée(s) depuis. Fais la vérification dans ton navigateur "
-            "(mise à la main sur le marché, ou page Paquets) : les mises repartent dès qu'elle est faite.",
-            actions={"kind": "antibot"})
+            f"(mise à la main sur le marché, ou page Paquets) : les mises repartent dès qu'elle est faite."
+            f"{self._manual_bid_hint()}", actions={"kind": "antibot"})
+
+    def _manual_bid_hint(self) -> str:
+        """La mise à la main de la vérification, sur une vente que le bot vise : elle sert au lieu d'être perdue.
+        La plus proche de sa fin parmi les cibles encore ouvertes MANUAL_BID_MIN_LEFT, mise minimale sous le plafond."""
+        now, me = utcnow(), (self.api.user_id or "").lower()
+        open_ = [t for t in self._targets.values()
+                 if t.ceiling is not None and not is_own(t.auction, self.api.user_id)
+                 and (t.auction.current_bidder_id or "").lower() != me and t.auction.min_bid <= t.ceiling
+                 and t.auction.seconds_left(now) >= MANUAL_BID_MIN_LEFT.total_seconds()]
+        if not open_:
+            return ""
+        t = min(open_, key=lambda t: t.auction.end_at)
+        a = t.auction
+        name = f"{a.title} ({a.rarity}{' ✨' if a.shiny else ''})"
+        return (f"\n\n👉 **Mise à faire** : **{a.min_bid} WB** sur [{name}]({auction_url(self.settings.wm_base_url, a.id)})"
+                f", fin à {a.end_at.astimezone(timeutils.PARIS):%H:%M} (plafond du bot : {t.ceiling} WB). Surenchérie, "
+                f"le bot remise lui-même une fois la vérification levée. Gagnée, mets-lui l'étiquette "
+                f"« {self.settings.manual_resale_tag or 'revente'} » pour qu'il la revende.")
 
     @property
     def antibot_since(self) -> datetime | None:
@@ -1465,6 +1494,11 @@ class AuctionSniper(Worker):
     def antibot_missed(self) -> int:
         return self._antibot_missed
 
+    @property
+    def antibot_refused_after_ack(self) -> datetime | None:
+        """Mise encore refusée après « C'est fait » (None : pas encore, ou rien de signalé)."""
+        return self._antibot_refused_after_ack
+
     def verification_done(self) -> bool:
         """Vérification faite dans le navigateur (/verif-faite) : la prochaine mise réelle part sans attendre
         SNIPER_ANTIBOT_RETRY_SECONDS. Acceptée, elle lève le blocage (« vérification levée ») ; refusée, l'attente
@@ -1472,6 +1506,7 @@ class AuctionSniper(Worker):
         if not self._antibot_since:
             return False
         self._antibot_retry_at = _EPOCH
+        self._antibot_acknowledged, self._antibot_refused_after_ack = utcnow(), None
         self.log.info("vérification signalée faite : la prochaine mise réelle la teste")
         return True
 
@@ -1566,7 +1601,8 @@ class AuctionSniper(Worker):
             self._balance, self._balance_at = confirmed.bidder_balance, utcnow()
             if self._antibot_since:
                 self._antibot_since, self._antibot_missed = None, 0
-                # Pas de message : sur Discord, l'alerte « vérification demandée » est supprimée (bot Discord).
+                self._antibot_acknowledged = self._antibot_refused_after_ack = None
+                # Pas de message : sur Discord, l'alerte « vérification demandée » passe au vert (bot Discord).
                 self.log.info("vérification levée : les mises passent de nouveau")
             if decision.collection and live:
                 self._collection_since_check += 1
@@ -1588,9 +1624,12 @@ class AuctionSniper(Worker):
             self._antibot_retry_at = utcnow() + timedelta(seconds=retry)
             self._antibot_missed += 1
             if self._antibot_since:
+                if self._antibot_acknowledged:
+                    self._antibot_refused_after_ack = utcnow()
                 self._antibot_remind()
             else:
                 self._antibot_since = utcnow()
+                self._antibot_acknowledged = self._antibot_refused_after_ack = None
                 self._antibot_remind_at = self._antibot_since + ANTIBOT_REMIND
                 # La prochaine vérification ouvre un nouveau quota.
                 self._collection_since_check = self._bids_since_check = 0
@@ -1601,7 +1640,8 @@ class AuctionSniper(Worker):
                     f"Le site refuse les mises tant qu'elle n'est pas faite ({label} : {decision.amount} WB "
                     "refusée). Fais-la toi-même dans ton navigateur : mise à la main sur le marché, ou page "
                     f"Paquets si elle la demande. En attendant, le bot {retry_text(retry)} et te prévient dès "
-                    "qu'une mise repasse.", actions={"kind": "antibot"})  # bouton « C'est fait » (bot Discord)
+                    f"qu'une mise repasse.{self._manual_bid_hint()}",
+                    actions={"kind": "antibot"})  # bouton « C'est fait » (bot Discord)
             return False
         if not retried and isinstance(server_min, int) and decision.amount < server_min <= decision.ceiling:
             # Un rival a misé entre la lecture et la mise : une position repart au-dessus du nouveau minimum.

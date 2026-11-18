@@ -112,7 +112,7 @@ async def test_antibot_refusal_alerts_once_until_a_bid_passes(tmp_path):
     sniper._antibot_retry_at = datetime.now(UTC)
     market["d"] = sale("d", "15 octobre", 15)
     await sniper.step()
-    # 12/11 : plus de message « vérification levée » : l'alerte est supprimée sur Discord (bot), rien d'autre.
+    # 12/11 : plus de message « vérification levée » : l'alerte passe au vert sur Discord (bot), rien d'autre.
     assert sniper.blocked is None and sniper.antibot_since is None
     assert not [title for _, title in notifier.sent if "levée" in title]
     await db.close()
@@ -597,4 +597,34 @@ async def test_shiny_win_notes_the_purchase_page(tmp_path, shiny):
     page = "https://www.wiki-masters.com/marketplace/w"
     assert fields.get("page") == (page if shiny else None)
     assert (f"[page de l'achat]({page})" in fields["thread"].line) is shiny
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_antibot_alert_offers_a_manual_bid_and_stays_quiet_once_done(tmp_path):
+    """18/11 : la mise à la main de la vérification se fait sur une vente que le bot vise, encore ouverte (celle
+    refusée finit dans les secondes qui suivent) ; « C'est fait » cliqué, plus de rappel qui mentionne."""
+    from src.workers.auction_sniper import ANTIBOT_REMIND
+
+    sniper, db, notifier = await start(tmp_path, {}, [])
+    now = datetime.now(UTC)
+    soon = Auction.model_validate(sale("soon", "Ada", 60, base=50))  # finit trop tôt pour une mise à la main
+    later = Auction.model_validate(sale("later", "Babbage", 900, base=50, bid=100, bidder=RIVAL))
+    last = Auction.model_validate(sale("last", "Curie", 3000, base=50))
+    dear = Auction.model_validate(sale("dear", "Dirac", 600, base=500))  # au-dessus du plafond
+    sniper._targets = {a.id: Target(a, now, ceiling=300) for a in (soon, later, last, dear)}
+    hint = sniper._manual_bid_hint()
+    assert f"**{later.min_bid} WB**" in hint and "Babbage (R)" in hint and "/marketplace/later" in hint and "300 WB" in hint
+    sniper._targets = {}
+    assert sniper._manual_bid_hint() == ""
+
+    sniper._antibot_since = now - timedelta(hours=2)
+    assert sniper.verification_done()
+    sniper._antibot_remind_at = now - timedelta(seconds=1)
+    sniper._antibot_remind()
+    assert not [t for _, t in notifier.sent if "toujours en attente" in t]
+    sniper._antibot_acknowledged = None  # pas signalée : le rappel de l'heure part
+    sniper._antibot_remind_at = now - ANTIBOT_REMIND
+    sniper._antibot_remind()
+    assert [t for _, t in notifier.sent if "toujours en attente" in t]
     await db.close()

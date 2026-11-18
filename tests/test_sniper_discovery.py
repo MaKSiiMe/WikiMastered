@@ -137,7 +137,7 @@ async def test_missed_new_sales_are_reported(tmp_path, caplog):
         later = [Auction.model_validate(sale(f"b{n}-{i}", "T", "UR", 3600)) for i in range(50)]
         assert sniper._check_gap("UR", later, True, now, page=n) == (n == RECENT_MAX_PAGES)
     assert sniper._gaps == 1
-    assert sniper._check_gap("UR", page, True, now, 95.0)  # 2e trou, dans l'heure : pas de 2e avertissement
+    assert sniper._check_gap("UR", page, True, now, 95.0, page=RECENT_MAX_PAGES)  # 2e trou : pas de 2e avertissement
     assert sniper._gaps == 2
     warned = [r.message for r in caplog.records if "certaines ont été manquées" in r.message]
     assert len(warned) == 1  # une fois par heure
