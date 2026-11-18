@@ -32,20 +32,9 @@ class TradeWatch(Worker):
     name = "echanges"
     topic = Topic.TRADES
 
-    async def setup(self) -> None:
-        self._shape_logged = False
-        self._ended_logged = False
-
     async def step(self) -> float:
         raw = await self.ctx.client.get("active_trades", background=True)
         listed = TradesList.model_validate(raw)
-        # Champs réels d'une carte d'échange, à relire dans les logs : le 30/10, le 1er échange n'en avait aucune
-        # (« d'une carte : [] ») et celles de jarry0 restaient illisibles (« ? · ? »).
-        items = [i for t in (raw.get("trades") or [] if isinstance(raw, dict) else []) if isinstance(t, dict)
-                 for i in t.get("items") or []]
-        if items and not self._shape_logged:
-            self.log.info("carte d'un échange : %s", str(items[0])[:1500])
-            self._shape_logged = True
         me = (self.ctx.client.user_id or "").lower()
         seen = set(await self.db.kv_get(KV_KEY) or [])
         history: dict[str, dict] = await self.db.kv_get(LOG_KEY) or {}
@@ -100,10 +89,6 @@ class TradeWatch(Worker):
                 await self._revalue(t, found, me)
             self.log.info("échange avec %s terminé (%s) : donné ~%d WB, reçu ~%d WB", t["with"], t["status"],
                           t["given_total"], t["received_total"])
-            if found and not self._ended_logged:
-                self._ended_logged = True
-                self.log.info("échange terminé, champs : %s", str({k: v for k, v in found.items()
-                                                                  if k != "items"})[:1500])
 
     async def _revalue(self, t: dict, found: dict, me: str) -> None:
         """Échange conclu : ses cartes réévaluées maintenant qu'elles ont changé de main. En attente, la rareté d'une
