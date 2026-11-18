@@ -76,7 +76,7 @@ Le bot n'envoie jamais de message privé : tout arrive dans les salons des webho
 
 | Message | Boutons |
 |---|---|
-| Vérification anti-bot demandée (rappel toutes les heures) | **C'est fait** (réponse visible de toi seul) ; quand une mise repasse, l'alerte est supprimée |
+| Vérification anti-bot demandée (rappel toutes les heures, plus après **C'est fait**), avec la vente à miser à la main et le montant | **C'est fait** (réponse visible de toi seul) ; quand une mise repasse, l'alerte passe au vert, sans nouvelle mention |
 | Revente sans acheteur | **Changer le prix**, **Garder** (tant que la remise en vente n'est pas publiée) |
 | Position invendue, Vente sans acheteur | **Remettre en vente…** |
 

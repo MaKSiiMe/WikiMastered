@@ -7,7 +7,7 @@ ne fait que répondre, et seulement à DISCORD_OWNER_ID.
 - Lecture : /bilan, /roi, /solde, /positions, /ventes, /prix, /collection, /sniper.
 - Actions : /snipe (confirmée par un bouton), /snipes, /annuler. Voir src/snipes.py.
 - Pilotage : /etat (avec boutons), /pause, /reprise (src/pauses.py), /verif-faite. L'alerte « vérification
-  anti-bot demandée » arrive avec un bouton « C'est fait » ; levée, elle est supprimée.
+  anti-bot demandée » arrive avec un bouton « C'est fait » ; levée, elle passe au vert, sans bouton ni mention.
 - Cartes : /garder, /vendre, /carte, /opportunites, /top, /echange… et les boutons des messages de vente (src/discord_cards.py).
 - Connecté, le bot envoie lui-même les messages à boutons, dans le salon de leur webhook ; déconnecté, ou sans accès
   à ce salon, ils repartent par le webhook, sans boutons. Jamais de message privé (choix du 28/10).
@@ -438,20 +438,40 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         log.info("Discord : sniper repris")
         await refresh(interaction, "▶️ Sniper repris.")
 
-    antibot_alerts: list[discord.Message] = []  # alertes anti-bot à boutons, modifiées quand elle est levée
+    # Alertes anti-bot à boutons (avec leur texte d'origine), modifiées quand elle est levée ou encore refusée.
+    antibot_alerts: list[tuple[discord.Message, discord.Embed]] = []
+    shown_refusal: list[datetime | None] = [None]
+
+    async def edit_alerts(title: str, note: str, color: int | None, keep_button: bool) -> None:
+        """Alertes anti-bot modifiées sur place : une modification ne mentionne personne (18/11 : gardées, plus
+        supprimées ; seulement plus de nouveau message qui sonne une fois la vérification signalée faite)."""
+        for message, original in antibot_alerts:
+            embed = original.copy()
+            embed.title = title
+            embed.description = f"{original.description or ''}\n\n{note}"[:4096]
+            if color is not None:
+                embed.colour = discord.Colour(color)
+            try:
+                await message.edit(embed=embed, view=view_for({"kind": "antibot"}) if keep_button else None)
+            except discord.HTTPException as exc:  # supprimée à la main… : rien à faire
+                log.info("Discord : alerte anti-bot non modifiée (%s)", exc)
 
     async def watch_antibot() -> None:
-        """Vérification levée (une mise est passée) : les alertes anti-bot sont supprimées, sans autre message (12/11 :
-        « demandée » puis « levée » dans deux salons, une cinquantaine de fois en deux jours)."""
+        """Vérification levée (une mise est passée) : les alertes anti-bot passent au vert, sans autre message (12/11 :
+        « demandée » puis « levée » dans deux salons, une cinquantaine de fois en deux jours). Signalée faite mais une
+        mise encore refusée : l'heure s'affiche sur l'alerte, sans mention."""
         await client.wait_until_ready()
         while not client.is_closed():
             if antibot_alerts and (sniper is None or sniper.antibot_since is None):
-                for message in antibot_alerts:
-                    try:
-                        await message.delete()
-                    except discord.HTTPException as exc:  # déjà supprimée… : rien à faire
-                        log.warning("Discord : alerte anti-bot non supprimée (%s)", exc)
+                await edit_alerts("✅ Vérification levée", f"✅ Levée à {timeutils.now_local():%H:%M} : les mises "
+                                  "passent de nouveau.", GREEN, keep_button=False)
                 antibot_alerts.clear()
+                shown_refusal[0] = None
+            elif antibot_alerts and (refused := sniper.antibot_refused_after_ack) and refused != shown_refusal[0]:
+                shown_refusal[0] = refused
+                await edit_alerts(antibot_alerts[-1][1].title or "Vérification anti-bot",
+                                  f"⚠️ Mise encore refusée à {short_time(refused)} après ton « C'est fait » : refais "
+                                  "la vérification, puis reclique.", None, keep_button=True)
             await asyncio.sleep(WATCH_SECONDS)
 
     channels: dict[str, discord.abc.Messageable | None] = {}
@@ -489,7 +509,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             channels[url] = None
             return None
         if actions and actions.get("kind") == "antibot":
-            antibot_alerts.append(message)
+            antibot_alerts.append((message, discord.Embed.from_dict(embed)))
         return str(message.id)
 
     async def bot_edit(url: str, message_id: str, embed: dict, actions: dict | None) -> bool:

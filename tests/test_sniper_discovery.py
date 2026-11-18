@@ -10,7 +10,7 @@ import pytest
 from src.config import Settings
 from src.core.models import Auction
 from src.core.pricing import Quote
-from src.workers.auction_sniper import AuctionSniper, Target, decide, hopeless, snipe_params
+from src.workers.auction_sniper import RECENT_MAX_PAGES, AuctionSniper, Target, decide, hopeless, snipe_params
 from src.workers.collection import collection_key
 from tests.test_integration import make_client, make_context, seed_observed
 
@@ -103,6 +103,24 @@ def test_resale_only_for_watched_rarities():
 
 
 @pytest.mark.asyncio
+async def test_new_sales_are_read_until_the_previous_read(tmp_path):
+    """Plus de 50 nouvelles ventes depuis la lecture précédente : la page 2 est lue au passage suivant, et le
+    rattrapage s'arrête dès qu'elle retrouve une vente déjà lue ; rien n'est compté manqué."""
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"bidding": [], "balance": 0}))
+    ctx = await make_context(tmp_path, client, notifier)
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    now = datetime.now(UTC)
+    old = [Auction.model_validate(sale(f"o{i}", "T", "UR", 3600)) for i in range(50)]
+    new = [Auction.model_validate(sale(f"n{i}", "T", "UR", 3600)) for i in range(70)]
+    assert sniper._check_gap("UR", old, True, now)
+    assert not sniper._check_gap("UR", new[:50], True, now, 30.0)  # page 1 : aucune vente déjà lue
+    assert sniper._check_gap("UR", new[50:] + old[:30], True, now, page=2)  # page 2 : retrouvée
+    assert sniper._gaps == 0 and {"n0", "n69", "o0"} <= sniper._recent_ids["UR"]
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
 async def test_missed_new_sales_are_reported(tmp_path, caplog):
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"bidding": [], "balance": 0}))
     ctx = await make_context(tmp_path, client, notifier)
@@ -111,12 +129,15 @@ async def test_missed_new_sales_are_reported(tmp_path, caplog):
     await sniper.setup()
     now = datetime.now(UTC)
     page = [Auction.model_validate(sale(f"a{i}", "T", "UR", 3600)) for i in range(50)]
-    sniper._check_gap("UR", page, True, now)
-    sniper._check_gap("UR", page[10:] + page[:10], True, now)  # recoupement : rien de manqué
+    assert sniper._check_gap("UR", page, True, now)
+    assert sniper._check_gap("UR", page[10:] + page[:10], True, now)  # recoupement : rien de manqué
     assert sniper._gaps == 0
-    later = [Auction.model_validate(sale(f"b{i}", "T", "UR", 3600)) for i in range(50)]
-    sniper._check_gap("UR", later, True, now)
-    sniper._check_gap("UR", page, True, now, 95.0)
+    # Sans recoupement, les pages suivantes sont lues jusqu'à RECENT_MAX_PAGES ; la dernière sans recoupement : trou.
+    for n in range(1, RECENT_MAX_PAGES + 1):
+        later = [Auction.model_validate(sale(f"b{n}-{i}", "T", "UR", 3600)) for i in range(50)]
+        assert sniper._check_gap("UR", later, True, now, page=n) == (n == RECENT_MAX_PAGES)
+    assert sniper._gaps == 1
+    assert sniper._check_gap("UR", page, True, now, 95.0, page=RECENT_MAX_PAGES)  # 2e trou : pas de 2e avertissement
     assert sniper._gaps == 2
     warned = [r.message for r in caplog.records if "certaines ont été manquées" in r.message]
     assert len(warned) == 1  # une fois par heure
