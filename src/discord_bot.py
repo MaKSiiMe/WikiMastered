@@ -66,6 +66,10 @@ def paris(value: str | datetime | None) -> str:
     return f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
 
 
+# Jeton de réponse d'une commande périmé (15 min) : 50027 « Invalid Webhook Token », 10015 « Unknown Webhook ».
+INTERACTION_EXPIRED = {50027, 10015}
+
+
 def text_embed(title: str, text: str, *, code: bool = True) -> tuple[discord.Embed, discord.File | None]:
     """Embed du texte ; trop long, il est coupé et joint en entier dans un fichier."""
     file = None
@@ -75,11 +79,24 @@ def text_embed(title: str, text: str, *, code: bool = True) -> tuple[discord.Emb
     return discord.Embed(title=title, description=f"```\n{text}\n```" if code else text, color=COLOR), file
 
 
+async def followup(interaction: discord.Interaction, content: str | None = None, **kwargs) -> None:
+    """Suite d'une commande différée. Discord ne l'accepte que 15 min : au-delà (une longue lecture, comme
+    /collection-joueur le 16/11 : « 401 Invalid Webhook Token »), la réponse est postée dans le salon de la commande."""
+    try:
+        await interaction.followup.send(content, **kwargs)
+    except (discord.NotFound, discord.HTTPException) as exc:
+        if getattr(exc, "code", 0) not in INTERACTION_EXPIRED or interaction.channel is None:
+            raise
+        log.info("commande /%s : délai de réponse de Discord dépassé, réponse postée dans le salon",
+                 interaction.command.name if interaction.command else "?")
+        await interaction.channel.send(content, **kwargs)
+
+
 async def reply(interaction: discord.Interaction, title: str, text: str, *, code: bool = True) -> None:
     embed, file = text_embed(title, text, code=code)
     extra = {"file": file} if file else {}
     if interaction.response.is_done():
-        await interaction.followup.send(embed=embed, **extra)
+        await followup(interaction, embed=embed, **extra)
     else:
         await interaction.response.send_message(embed=embed, **extra)
 
@@ -347,7 +364,7 @@ class OwnerTree(app_commands.CommandTree):
                   exc_info=cause)
         text = f"Erreur : {type(cause).__name__} : {cause}"[:1900]
         if interaction.response.is_done():
-            await interaction.followup.send(text)
+            await followup(interaction, text)
         else:
             await interaction.response.send_message(text)
 
@@ -535,14 +552,14 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             result = await backup.run_backup(ctx)
         except Exception as exc:  # noqa: BLE001 - l'erreur est dite à l'utilisateur
             log.exception("Sauvegarde demandée impossible")
-            await interaction.followup.send(embed=discord.Embed(
+            await followup(interaction, embed=discord.Embed(
                 title="❌ Sauvegarde impossible", description=f"{type(exc).__name__} : {exc}"[:4000], color=RED))
             return
         embed = discord.Embed(title="💾 Sauvegarde faite", color=GREEN,
                               description=f"`{result.path.name}`\n{result.size >> 20} Mo (base {result.db_size >> 20} "
                                           f"Mo) en {result.seconds:.0f} s")
         embed.set_footer(text=f"{s.backup_keep} sauvegardes gardées au plus")
-        await interaction.followup.send(embed=embed)
+        await followup(interaction, embed=embed)
 
     @tree.command(name="verif-faite", description="Vérification anti-bot faite : les mises reprennent sans attendre")
     async def verif_faite(interaction: discord.Interaction) -> None:
@@ -606,7 +623,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             embed.add_field(name=name, value=value[:1024] or "—", inline=True)
         for name, value in report.sections:
             embed.add_field(name=name, value=value[:1024] or "—", inline=False)
-        await interaction.followup.send(embed=embed)
+        await followup(interaction, embed=embed)
 
     @tree.command(name="roi", description="Bénéfice et ROI des reventes, jour par jour")
     @app_commands.describe(jours="nombre de jours, aujourd'hui compris (7 par défaut)")
@@ -640,7 +657,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                         value=f"{wb(held['real_cost'])} WB ({plural(held['real_count'], 'carte')})")
         embed.add_field(name="Solde + positions", value=f"**{wb(balance + held['real_cost'])} WB**", inline=True)
         embed.set_footer(text="/valeur : la valeur complète du compte (cartes, ventes en cours)")
-        await interaction.followup.send(embed=embed)
+        await followup(interaction, embed=embed)
 
     @tree.command(name="positions", description="Cartes achetées pour la revente, pas encore revendues")
     async def positions(interaction: discord.Interaction) -> None:
@@ -669,7 +686,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         from src.discord_cards import card_image  # même module chargé par build_client
         if image := await card_image(ctx, exact or titre):
             embed.set_thumbnail(url=image)
-        await interaction.followup.send(embed=embed, **({"file": file} if file else {}))
+        await followup(interaction, embed=embed, **({"file": file} if file else {}))
 
     @tree.command(name="collection", description="Avancement des collections et cartes manquantes")
     async def collection(interaction: discord.Interaction) -> None:
@@ -704,10 +721,10 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         try:
             state = await scan_player(ctx, pseudo.strip(), etiquette.strip())
         except ApiError as exc:
-            await interaction.followup.send(embed=discord.Embed(
+            await followup(interaction, embed=discord.Embed(
                 title=f"🔎 Collection de {pseudo}", description=f"Lecture refusée : {exc}", color=colors.WARN))
             return
-        await interaction.followup.send(embed=discord.Embed(title=f"🔎 Collection de {pseudo}",
+        await followup(interaction, embed=discord.Embed(title=f"🔎 Collection de {pseudo}",
                                                             description=summary_player(state)[:4000], color=COLOR))
 
     @tree.command(name="amis", description="Tes cartes de collection manquantes que possèdent tes amis (rien ne leur est envoyé)")
@@ -726,13 +743,13 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             text = friends.friend_text(await friends.friend_cards(ctx, name)) if name else \
                 friends.overview_text(await friends.overview(ctx, actualiser))
         except ApiError as exc:
-            await interaction.followup.send(embed=discord.Embed(title=title, description=f"Lecture refusée : {exc}",
+            await followup(interaction, embed=discord.Embed(title=title, description=f"Lecture refusée : {exc}",
                                                                 color=colors.WARN))
             return
         embed = discord.Embed(title=title, description=text[:4000], color=COLOR)
         embed.set_footer(text="Rien n'est envoyé à tes amis : l'échange se propose sur le site"
                               + ("" if name else " · /amis pseudo pour le détail"))
-        await interaction.followup.send(embed=embed)
+        await followup(interaction, embed=embed)
 
     @tree.command(name="sniper", description="Récap des enchères misées par le sniper")
     @app_commands.describe(heures="période, en heures (24 par défaut)")
@@ -802,7 +819,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                               color=COLOR if s.wish_max_price > 0 else GREY)
         embed.set_footer(text="Ajoute ou retire une carte dans ta liste de souhaits du site. /snipe pour un prix "
                               "choisi par toi.")
-        await interaction.followup.send(embed=embed)
+        await followup(interaction, embed=embed)
 
     async def snipe_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         return [app_commands.Choice(name=sn.label[:100], value=sn.title[:100])
@@ -826,7 +843,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         from src.discord_cards import card_image  # même module chargé par build_client
         if image := await card_image(ctx, removed.title):
             embed.set_thumbnail(url=image)
-        await interaction.followup.send(embed=embed)
+        await followup(interaction, embed=embed)
 
     return client
 

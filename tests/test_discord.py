@@ -204,3 +204,30 @@ async def test_state_shows_antibot_and_verification_done_unblocks_next_bid(tmp_p
     assert "🛑 sniper" in embed.fields[0].value and "À vérifier" not in embed.description  # dit une seule fois
     assert sniper.verification_done() and sniper._antibot_retry_at == _EPOCH
     await ctx.db.close()
+
+
+def _http_error(code: int):
+    import discord
+    response = type("R", (), {"status": 401, "reason": "Unauthorized"})()
+    return discord.HTTPException(response, {"code": code, "message": "Invalid Webhook Token"})
+
+
+@pytest.mark.asyncio
+async def test_expired_followup_is_posted_in_the_channel():
+    """/collection-joueur du 16/11 : plus de 15 min de lecture, Discord refuse la suite (50027) ; elle part dans le
+    salon. Une autre erreur Discord n'est pas cachée."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.discord_bot import followup
+
+    interaction = MagicMock()
+    interaction.followup.send = AsyncMock(side_effect=_http_error(50027))
+    interaction.channel.send = AsyncMock()
+    await followup(interaction, embed="résumé")
+    interaction.channel.send.assert_awaited_once_with(None, embed="résumé")
+
+    interaction.followup.send = AsyncMock(side_effect=_http_error(50035))
+    interaction.channel.send = AsyncMock()
+    with pytest.raises(Exception):
+        await followup(interaction, "texte")
+    interaction.channel.send.assert_not_awaited()
