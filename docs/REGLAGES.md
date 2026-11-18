@@ -59,6 +59,10 @@ LIVE_WRITES=
 SIMULATE=
 ```
 
+**Exemples**
+- `DRY_RUN=true`, `LIVE_WRITES=ventes` : le bot vend vraiment tes doublons, mais ses enchères restent simulées.
+- `DRY_RUN=false`, `SIMULATE=sniper` : tout est réel (ventes, défausse, étiquettes…) sauf les mises de revente. Pratique pour regarder quelques jours ce que le sniper aurait acheté avant de lui confier des WikiBidous.
+
 ## Discord
 
 Salons et commandes : [Installation, Commandes Discord et salons](INSTALLATION.md#commandes-discord-et-salons).
@@ -86,6 +90,10 @@ DISCORD_OWNER_ID=
 DISCORD_GUILD_ID=
 ```
 
+**Exemple** : avec seulement `DISCORD_WEBHOOK_URL` et `DISCORD_ALERT_WEBHOOK_URL`, tout arrive dans un salon, sauf les alertes rouges (vérification anti-bot à faire, session expirée), qui ont le leur. Si ce salon n'est réglé que pour les mentions, ton téléphone ne sonne que pour elles.
+
+Si les logs disent `pas le droit d'écrire dans le salon du webhook, messages sans boutons`, le bot Discord (`DISCORD_BOT_TOKEN`) n'a pas le droit d'écrire dans ce salon. Les messages arrivent quand même par le webhook, mais sans boutons (« C'est fait », changer le prix, garder). Pour corriger, donne au bot les droits « Voir le salon » et « Envoyer des messages » dans ce salon.
+
 ## Sauvegardes
 
 Restauration : [Installation, Sauvegardes](INSTALLATION.md#sauvegardes).
@@ -98,6 +106,8 @@ BACKUP_TIME=04:30
 BACKUP_KEEP=7
 OBSERVED_KEEP_DAYS=0                  # ventes observées effacées après N jours, sauf shiny et cartes rarement vendues (0 = toutes gardées)
 ```
+
+**Exemple** : le bot note toutes les fins d'enchères du site. Au bout de quelques semaines, ça fait plusieurs centaines de Mo. Avec `OBSERVED_KEEP_DAYS=30`, une vente vieille de plus d'un mois est effacée. Les ventes de shiny et de cartes rarement vendues sont gardées, parce qu'elles sont les seules qui permettent d'estimer ces cartes.
 
 ## Réseau
 
@@ -117,6 +127,8 @@ BACKOFF_RATE_LIMIT_BASE_SECONDS=60    # 429 : 60 s, 120 s...
 BACKOFF_MAX_SECONDS=900
 SESSION_RECHECK_MINUTES=15            # après un 401/403, re-test de la session
 ```
+
+**Exemple** : avec 1,5 s d'écart et 0 à 0,8 s d'aléa, il y a environ 2 s entre deux lectures, soit une trentaine par minute pour tous les workers ensemble. Dans les logs, `Route sales_summary limitée par le site : pause 71 s` veut dire que le site a refusé une route. Le bot la met en pause et les autres continuent. Tant que ces pauses restent rares, il n'y a rien à changer.
 
 ## Workers
 
@@ -144,6 +156,10 @@ JOURNAL_KEEP_DAYS=7                   # jours de journal gardés (un fichier par
 STATS_MINUTES=15                      # relevé des passages et des requêtes (0 = aucun)
 ```
 
+**Exemples**
+- `TRADE_FAIR_MARGIN=0.1` : on te propose 900 WB de cartes contre 1000 WB des tiennes. 900 fait 90 % de 1000, donc l'échange est jugé équitable. À 850 contre 1000, il est jugé défavorable, et le bot propose une contre-offre sur Discord.
+- `WISH_MAX_PRICE=2000` : une carte de ta liste de souhaits estimée 1500 WB est achetée jusqu'à 1500 WB. Une carte estimée 3000 l'est jusqu'à 2000 WB au plus.
+
 ## Estimation des prix
 
 ```sh
@@ -158,6 +174,14 @@ SNIPER_MIN_CONTESTED_SALES=4          # parmi elles, ventes disputées (plus d'u
 SNIPER_MAX_PRICE_SPREAD=1.5           # et la plus haute ≤ 1,5 × la plus basse (0 = sans limite)
 PRICE_CACHE_TTL_MINUTES=180            # cache de la moyenne du site (route limitée)
 ```
+
+**Exemple** : les 5 dernières ventes observées d'une carte UR sont 700, 800, 820, 900 et 950 WB, dont 4 disputées (plus d'une mise).
+- **Assez de ventes :** 5 ventes, il en faut 4 (`PRICE_MIN_SALES`). C'est bon.
+- **Assez de ventes disputées :** 4, il en faut 4 (`SNIPER_MIN_CONTESTED_SALES`). C'est bon.
+- **Ventes assez proches :** la plus haute fait 950 / 700 = 1,36 fois la plus basse, la limite est 1,5 (`SNIPER_MAX_PRICE_SPREAD`). C'est bon. Avec une vente à 1200, on aurait 1200 / 700 = 1,7 et la carte serait écartée, parce que ses ventes sont trop dispersées.
+- **Estimation :** la médiane vaut 820, mais la moyenne du site est de 780. Avec `PRICE_SITE_MARGIN=1.0`, l'estimation est plafonnée à 780 WB. Avec `1.1`, le plafond passerait à 858 et l'estimation resterait à 820.
+
+Cette estimation est la « revente visée » des messages Discord. C'est ce que la carte rapporte en moyenne, pas son prix de mise en vente : voir plus bas.
 
 ## Sniper : achats et reventes
 
@@ -233,6 +257,47 @@ NIGHT_BUDGET_BONUS=0
 NIGHT_MIN_BID_VALUE=0                 # valeur minimale d'une mise la nuit (0 = SNIPER_MIN_BID_VALUE)
 ```
 
+### Exemple : une position, de l'achat à la revente
+
+Réglages par défaut, avec `SNIPER_RESALE_RARITIES=UR`, un solde de 3000 WB et aucune position. La carte est celle de l'exemple d'[Estimation des prix](#estimation-des-prix), estimée 780 WB.
+
+**1. Le budget.**
+- **Budget d'une position :** 3000 × 0,5 / 5 = **300 WB** (`PORTFOLIO_CAPITAL_RATIO`, `PORTFOLIO_SLOTS`).
+- **Bénéfice minimum :** le plus grand de 300 × 0,5 = 150 (`PORTFOLIO_MIN_PROFIT_RATIO`) et de 100 (`PORTFOLIO_MIN_PROFIT`), soit **150 WB**.
+
+Les positions déjà achetées comptent dans le capital : avec 2000 WB de solde et 1000 WB en cartes à revendre, le budget est le même.
+
+**2. La mise maximale.** C'est la plus petite de ces limites :
+- 780 × 0,5 = 390 (`SNIPER_DEAL_RATIO_MAX`) ;
+- 780 − 150 = 630 (le bénéfice minimum doit rester) ;
+- 300 (le budget d'une position) ;
+- 500 (`SNIPER_MAX_BID`).
+
+Le bot mise donc **300 WB au plus**.
+
+**3. La mise.** Le bot attend qu'il reste entre 30 s (`SNIPER_WINDOW_SECONDS`) et 15 s (`SNIPER_MIN_SECONDS_LEFT`) avant la fin de l'enchère.
+- **Mise minimale du site à 240 :** 240 ≤ 300, le bot mise 240 (`SNIPER_BID_PUSH=0` : il mise toujours le minimum). Avec `SNIPER_BID_PUSH=0.5`, il miserait 240 + 0,5 × (300 − 240) = 270. Ses chances de gagner sont meilleures, mais le bénéfice est plus petit.
+- **Mise minimale à 150 :** 150 est sous 25 % de l'estimation (780 × 0,25 = 195, `SNIPER_MIN_BID_SHARE`). L'enchère partira sûrement bien plus haut, donc le bot ne gâche pas une mise du quota anti-bot dessus.
+- **Mise minimale à 320 :** au-dessus de 300, le bot ne mise pas.
+
+La nuit (`NIGHT_START` à `NIGHT_END`), `NIGHT_DEAL_RATIO_MAX` et `NIGHT_WINDOW_SECONDS` remplacent les réglages de jour.
+
+**4. Le prix de mise en vente.** Le bot gagne à 240. La carte est remise en vente aux enchères, et le prix affiché est un **prix de départ** que les joueurs font monter. C'est le plus grand de :
+- 240 × 1,2 = 288 (`POSITION_LIST_MARGIN`) ;
+- 240 + 25 % du bénéfice attendu = 240 + 0,25 × (780 − 240) = **375** (`POSITION_LIST_PROFIT_SHARE`).
+
+La carte est mise en vente à **375 WB pour 6 h** (`POSITION_LIST_DURATION_MINUTES`). Le prix de départ est donc toujours entre le prix d'achat et la revente visée. Si la plupart de tes reventes partent à leur prix de départ, monte `POSITION_LIST_PROFIT_SHARE` : avec `0.5`, le départ passe à 510, avec moins d'acheteurs.
+
+**5. Une vente concurrente.** Exemple réel : une carte achetée 1000 et estimée 2000 est prévue à 1250. Juste avant la publication, une autre vente de la même carte est à 1100. Le bot se met 1 WB en dessous, à 1099, pour être la moins chère. Il ne descend jamais sous le prix d'achat. Une vente concurrente sous 50 % de l'estimation (ici sous 1000) est ignorée : c'est un prix de départ, pas un vrai prix.
+
+**6. Personne n'achète.** Sans acheteur, la carte avance d'une étape toutes les 6 h en vente (`POSITION_STEP_MINUTES`).
+- **Étapes 1 à 3 :** la carte est remise en vente 5 % moins cher à chaque fois (`POSITION_RELIST_DISCOUNT`, `POSITION_MAX_RELISTS=3`) : 375 → 356 → 338 → 321.
+- **Ensuite :** elle est remise en vente au prix d'achat + 1 (241) tant qu'une place de vente est libre. Si les 5 places sont prises, le bot la garde dans ta collection.
+- **Limite de perte :** `POSITION_MAX_LOSS=0` interdit de vendre sous le prix d'achat. Avec `POSITION_MAX_LOSS=0.1` et `POSITION_LOSS_AFTER=2`, le prix pourrait descendre jusqu'à 217 (241 − 10 %) à partir de la 2e étape.
+- **Abandon :** `POSITION_GIVE_UP_AFTER=4` arrête après 4 étapes. La carte reste dans ta collection avec l'étiquette `Invendue`.
+
+**7. Le bilan.** Dans le pire cas (réglages par défaut), la carte revient dans ta collection, achetée 240. Dans le meilleur, des joueurs surenchérissent au-dessus de 375.
+
 ## Inventaire : ventes et défausse
 
 ```sh
@@ -284,6 +349,23 @@ ENABLE_ACCOUNT_VALUE=true
 ACCOUNT_VALUE_HOURS=6
 ```
 
+Cette partie ne concerne que les cartes de ta collection : les doublons qu'on vend, et les cartes sans valeur qu'on défausse. Les cartes achetées par le sniper suivent les règles de la section précédente.
+
+**Vente des doublons** (`AUTO_LIST=true`) : tu as 3 exemplaires d'une carte cotée 83 WB.
+- **Exemplaires vendus :** le bot en garde 1 (`SELL_KEEP_COPIES`) et vend les 2 autres, une vente par place libre.
+- **Prix :** 83 ≥ 15 (`SELL_MIN_VALUE`), donc la carte est vendue au prix de départ 83 × 1,0 = 83 WB (`SELL_PRICE_MULTIPLIER`). Une carte cotée 10 WB ne serait pas vendue.
+- **Horaire :** avec `SELL_ANYTIME=true`, la vente part dès qu'une place se libère. Avec `false`, elle est programmée pour finir entre 20:00 et 22:30.
+
+**Défausse** (`AUTO_DISCARD=true`) : la défausse rapporte 1 WB par exemplaire. Avec `DISCARD_RARITIES=C,PC` et `DISCARD_MAX_VALUE=2`, chaque doublon C ou PC coté 2 WB ou moins est défaussé. Un exemplaire de chaque carte est toujours gardé (`DISCARD_KEEP_COPIES=1`), et les moins cotés partent en premier, 250 au plus par passage (`DISCARD_MAX_PER_RUN`).
+
+**Paliers de succès**, avec `ACHIEVEMENT_MILESTONES=1000,2500,5000` et `ACHIEVEMENT_MARGIN=50` :
+- **2480 exemplaires :** le palier 2500 est à 20 exemplaires, moins que la marge de 50. La défausse est bloquée pour ne pas t'en éloigner.
+- **2700 exemplaires :** le palier 2500 est atteint, la défausse peut retirer 200 exemplaires au plus, pour ne pas repasser sous 2500.
+- **`ACHIEVEMENT_MILESTONES=0` :** aucun palier à protéger, la défausse n'a pas de limite de ce côté (log `on ne repasse pas sous 0`).
+- **Vide (par défaut) :** aucune défausse.
+
+**Étiquettes protégées** : avec `PROTECTED_TAGS=GIF,date`, un exemplaire portant l'étiquette « GIF » ou « date » sur le site n'est jamais vendu ni défaussé, même en doublon.
+
 ## Collections
 
 Collections disponibles : `jours` (les 366 jours de l'année), `gifs` (articles à GIF animé), ou la tienne dans [`config/collections.yaml`](../config/collections.yaml). Détail : [Fonctionnement](FONCTIONNEMENT.md#collections).
@@ -300,6 +382,12 @@ COLLECTION_REFRESH_MINUTES=360        # relecture de la collection
 COLLECTION_TAG=date                   # étiquette des jours et de COLLECTION_TITLES (vide = non)
 COLLECTION_TAG_MAX_PER_RUN=60
 ```
+
+**Exemple**, avec `COLLECTION_SETS=jours` et `COLLECTION_MAX_PRICE=50` : il te manque la carte « 14 juillet ». Une enchère sur cette carte, à n'importe quelle rareté, arrive à sa fin avec une mise minimale de 30 WB. Le bot mise 30 et garde la carte, sans la revendre. À 60 WB, il ne mise pas.
+
+Avec `COLLECTION_UPGRADE=true`, s'il te reste un « 14 juillet » en C, le bot mise aussi sur un exemplaire de rareté plus haute (PC, R…), dans la même limite de 50 WB.
+
+Le site laisse passer environ 9 ou 10 mises par vérification anti-bot. Avec `COLLECTION_BIDS_PER_CHECK=2`, la collection en prend 2 au plus, et les autres restent aux reventes.
 
 ## Étiquettes de thème
 
