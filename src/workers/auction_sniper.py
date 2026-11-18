@@ -596,13 +596,20 @@ class AuctionSniper(Worker):
                  and in_snipe_window(t.auction, me, params.window_seconds, now, self.settings.sniper_min_seconds_left)]
         if ready:
             self._phase(f"mises ({len(ready)} vente(s))")
+            replayed = set()
             for a in ready:
                 # Surenchérie puis rejouée : la nouvelle issue (ex. « trop chère ») remplace la mise précédente,
                 # sinon elle n'est ni journalisée ni comptée, et la vente est encore relue à sa fin pour rien.
                 if self._outcomes.get(a.id) in PLACED:
                     del self._outcomes[a.id]
+                    replayed.add(a.id)
             await self._play(ready, params, now)
             self._log_collection_outcomes(ready)
+            for a in ready:
+                # Rejouée sans nouvelle mise : la raison n'apparaissait nulle part (Madison Beer, 17/11 chez un ami).
+                if a.id in replayed and (outcome := self._outcomes.get(a.id)) not in PLACED:
+                    self.log.info("%s rejouée, pas de nouvelle mise : %s (prix actuel %d WB)", a.title,
+                                  outcome or "aucune issue", a.current_bid or a.base_amount or 0)
             for a in ready:
                 if self._outcomes.get(a.id) in PLACED:
                     self._targets[a.id].recheck = True  # relue à sa fin : prolongée, elle sera rejouée
