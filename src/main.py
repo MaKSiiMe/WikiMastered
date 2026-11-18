@@ -573,7 +573,9 @@ async def roi_status(ctx: Context, days: int) -> str:
 async def heartbeat(ctx: Context) -> None:
     path = ctx.settings.data_dir / "heartbeat"
     while True:
-        path.write_text(now_local().isoformat(), encoding="utf-8")
+        # Dans un thread : sur un disque qui cale, l'écriture figeait toute la boucle, donc tous les workers et
+        # Discord (le 18/11 chez un ami : « heartbeat blocked for more than 10 seconds »).
+        await asyncio.to_thread(path.write_text, now_local().isoformat(), encoding="utf-8")
         ctx.client.check_cookie_drop()
         await asyncio.sleep(30)
 
