@@ -102,6 +102,9 @@ HARVEST_DELAY = timedelta(seconds=120)
 # finies pas encore closes) s'arrête avant la fin de la fenêtre de mise et qu'au moins N cibles de la fenêtre restent
 # au-delà, la page suivante est lue au passage d'après, jusqu'à la page ENDED_MAX_PAGES.
 ENDED_MAX_PAGES = 3
+# Nouvelles ventes : sans vente commune avec la lecture précédente, la page suivante est lue au passage d'après, jusqu'à
+# la retrouver ou jusqu'à la page RECENT_MAX_PAGES (18/11 chez un ami : plus de 50 UR en 30 s, ~280 trous en 4 h).
+RECENT_MAX_PAGES = 10
 # Valeur d'une mise (core/winmodel.py) : modèle refait toutes les N, d'après les mises réglées depuis.
 VALUE_MODEL_REFRESH = timedelta(hours=1)
 LOW_VALUE = "valeur de la mise trop faible"
@@ -426,10 +429,14 @@ class AuctionSniper(Worker):
         self._min_profit = self.settings.portfolio_min_profit  # bénéfice minimum du dernier portefeuille lu
         # Ventes suivies (repérées à l'avance) : auction_id -> cible.
         self._targets: dict[str, Target] = {}
-        # Dernière lecture de chaque source de repérage, et ids de la dernière page « recent » par rareté
-        # (sans recoupement avec la précédente, des ventes ont pu passer entre deux lectures).
+        # Dernière lecture de chaque source de repérage, et ids des nouvelles ventes de la dernière lecture complète
+        # par rareté (pages de rattrapage comprises) ; rattrapage en cours : page à lire, ids déjà lus, début.
         self._last_read: dict[tuple[str, str], datetime] = {}
         self._recent_ids: dict[str, set[str]] = {}
+        self._recent_page: dict[str, int] = {}
+        self._sweep_ids: dict[str, set[str]] = {}
+        self._sweep_started: dict[str, datetime] = {}
+        self._catchup_reads = 0  # pages 2+ des nouvelles ventes lues depuis le dernier récap
         self._day_queue: list[str] = []
         self._upgrade_queue: list[str] = []
         self._upgrade_turn = False  # recherches alternées : carte manquante, puis carte à monter en rareté
@@ -672,10 +679,22 @@ class AuctionSniper(Worker):
         previous = self._last_read.get((kind, rarity))
         self._last_read[(kind, rarity)] = now
         if kind == "recent":
-            auctions, more = await self.api.market_page(sort="recent", rarity=rarity, limit=MARKET_LIMIT)
-            self._check_gap(rarity, auctions, more, now, (now - previous).total_seconds() if previous else None)
+            page = self._recent_page.pop(rarity, 1)
+            if page == 1:
+                self._sweep_started[rarity] = now
+                elapsed = (now - previous).total_seconds() if previous else None
+            else:
+                self._catchup_reads += 1
+                elapsed = None
+            auctions, more = await self.api.market_page(sort="recent", rarity=rarity, limit=MARKET_LIMIT, page=page)
+            done = self._check_gap(rarity, auctions, more, now, elapsed, page=page)
             await self._remember(auctions, now)  # ventes en cours : la concurrence d'une revente (_against_rivals)
             await self._ingest(auctions, params, now)
+            if done:  # la période se compte depuis la page 1
+                self._last_read[(kind, rarity)] = self._sweep_started.pop(rarity, now)
+            else:
+                self._recent_page[rarity] = page + 1
+                self._last_read[(kind, rarity)] = _EPOCH  # la page suivante passe au prochain passage
         elif kind == "ended":
             # Ventes terminées pas encore clôturées : leur dernier prix devient une vente observée.
             page = self._ended_page.pop(rarity, 1)
@@ -761,15 +780,20 @@ class AuctionSniper(Worker):
         return asked.title if asked else self._day_titles.get(key, key)
 
     def _check_gap(self, rarity: str, auctions: list[Auction], more: bool, now: datetime,
-                   elapsed: float | None = None) -> None:
-        """Deux lectures « recent » sans vente commune : des ventes créées entre les deux ont été manquées.
-
-        L'avertissement n'est écrit qu'une fois par heure ; le récap compte tous les trous."""
+                   elapsed: float | None = None, *, page: int = 1) -> bool:
+        """Nouvelles ventes lues jusqu'à retrouver une vente de la lecture précédente : True quand c'est fait (ou
+        impossible), False s'il faut lire la page suivante. Arrivé à RECENT_MAX_PAGES sans la retrouver, des ventes ont
+        été manquées : l'avertissement n'est écrit qu'une fois par heure ; le récap compte tous les trous."""
         ids = {a.id for a in auctions}
+        sweep = (self._sweep_ids.pop(rarity, set()) if page > 1 else set()) | ids
         previous = self._recent_ids.get(rarity)
-        self._recent_ids[rarity] = ids
-        if not previous or not more or ids & previous:
-            return
+        caught_up = not previous or not more or not auctions or bool(ids & previous)
+        if not caught_up and page < RECENT_MAX_PAGES:
+            self._sweep_ids[rarity] = sweep
+            return False
+        self._recent_ids[rarity] = sweep
+        if caught_up:
+            return True
         self._gaps += 1
         if now - self._gap_warned_at > timedelta(hours=1):
             self._gap_warned_at = now
@@ -778,7 +802,8 @@ class AuctionSniper(Worker):
             gap = f"{elapsed:.0f} s" if elapsed is not None else "?"
             self.log.warning("repérage %s : plus de %d nouvelles ventes en %s entre deux lectures, certaines ont "
                              "été manquées (visé : %s s ; avertissement suivant dans 1 h au plus tôt)", rarity,
-                             len(auctions), gap, f"{self.settings.sniper_discovery_seconds:g}")
+                             len(sweep), gap, f"{self.settings.sniper_discovery_seconds:g}")
+        return True
 
     async def _ingest(self, auctions: list[Auction], params: SnipeParams, now: datetime) -> None:
         """Met à jour les cibles connues et en ajoute : jour manquant, rareté achetée, revente possible."""
@@ -1462,6 +1487,8 @@ class AuctionSniper(Worker):
         watched = " et ".join(filter(None, ("/".join(self.settings.sniper_resale_rarities), "jours manquants")))
         found = f"Repérage : {len(self._targets)} vente(s) suivie(s) ({watched}), " \
                 f"{self._days_found} vente(s) de cartes de collection trouvée(s)"
+        if self._catchup_reads:
+            found += f", {self._catchup_reads} page(s) de rattrapage des nouvelles ventes"
         if self._gaps:
             found += f", {self._gaps} trou(s) dans les nouvelles ventes"
         if self._unread_winnable:
@@ -1470,6 +1497,7 @@ class AuctionSniper(Worker):
             found += f", fins imminentes : {self._deep_reads} page(s) 2+ lue(s), {self._deep_refreshed} vente(s) " \
                      "de la fenêtre de mise relue(s) par elles"
         self._gaps = self._days_found = self._unread_winnable = self._deep_reads = self._deep_refreshed = 0
+        self._catchup_reads = 0
         if not outcomes:
             return [found, "Aucune enchère dans la fenêtre de mise."]
         ranked = Counter(outcomes.values()).most_common()
