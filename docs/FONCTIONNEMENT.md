@@ -123,6 +123,8 @@ valeur = chance de gagner × (revente attendue − mise)
 
 Une première mise dont la valeur est sous le seuil est sautée (« valeur de la mise trop faible ») : le quota va aux meilleures, et le bot reste moins longtemps bloqué. `NIGHT_MIN_BID_VALUE` fixe un seuil plus haut pour les heures où tu ne peux pas faire la vérification. `python -m src.main sniper-value` montre, seuil par seuil, ce que tes occasions des derniers jours auraient rapporté.
 
+**Enchères déjà disputées** (`SNIPER_MAX_RISE`, coupé par défaut) : quand plusieurs joueurs ont déjà misé, souvent des bots de revente, l'enchère part le plus souvent au-dessus de ton plafond. Une mise y gagne rarement et use une place du quota anti-bot. Chaque mise fait passer la mise minimale à 1,1 × la précédente : `SNIPER_MAX_RISE=1.5` saute une carte non shiny dont l'enchère a déjà monté de plus de 50 % (environ 5 mises), « enchère déjà montée de plus de 50% ». `NIGHT_MAX_RISE=1.2` est plus strict la nuit (une mise déjà faite au plus) : les quelques mises de ta dernière vérification du soir tiennent plus longtemps. Règle la nuit (`NIGHT_START`, `NIGHT_END`) sur les heures où tu ne peux pas faire la vérification. La collection, `/snipe` et les souhaits ne sont pas concernés.
+
 **Mise** : le minimum du site. `SNIPER_BID_PUSH` la pousse vers le plafond, et `SNIPER_ALLOW_REBID=true` remise au plafond, une seule fois, si elle est surenchérie. Le bot ignore toute carte sur laquelle tu mises toi-même. Pour savoir si pousser la mise rapporte plus qu'il ne coûte, `SNIPER_BID_PUSH_CONTROL_SHARE=0.3` laisse 30 % des mises au minimum : `python -m src.main sniper-report --breakdown` compare ensuite les deux groupes.
 
 ## Positions : revendre
