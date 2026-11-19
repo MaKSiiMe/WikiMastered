@@ -154,6 +154,35 @@ def test_cheap_non_shiny_cards_skipped_below_min_estimate():
     assert decide(cheap, params, low, 3, pf, collection_cap=1000) is not None
 
 
+def test_disputed_auctions_skipped_above_max_rise():
+    """Enchère déjà montée au-delà de SNIPER_MAX_RISE × son prix de départ : d'autres joueurs se la disputent, la mise
+    gagne rarement et use une place du quota anti-bot. Plus strict la nuit (NIGHT_MAX_RISE)."""
+    assert settings().sniper_max_rise == 0 and settings().night_max_rise == 0  # dépôt public : aucune limite
+    s = settings(sniper_max_rise=1.5, night_max_rise=1.2, sniper_deal_ratio_max=0.85, sniper_min_bid_share=0,
+                 portfolio_min_profit_ratio=0, portfolio_min_profit=100)
+    day, night = snipe_params(s, night=False), snipe_params(s, night=True)
+    pf = portfolio_state(s, balance=100_000, held_count=0, held_real_cost=0, held_sim_cost=0,
+                         engaged_real=0, engaged_sim=0, bot_engaged_count=0)
+    card = {"id": "c", "wikipedia_title": "x", "rarity": "L"}
+    quote = Quote(2000.0, 5, contested=3, spread=1.5)
+    fresh = auction(card=card, base_amount=600)                       # aucune mise : 600
+    one = auction(card=card, base_amount=600, current_bid=600)         # une mise : 660 (× 1,1)
+    many = auction(card=card, base_amount=600, current_bid=880)        # 968 > 900 (1,5 × 600)
+    assert decide(fresh, day, quote, 3, pf) is not None
+    assert decide(many, day, quote, 3, pf) is None
+    assert refusal(many, day, quote, 3, pf) == "enchère déjà montée de plus de 50%"
+    assert hopeless(many, day, quote, 3, 0.0, 100, True) == "enchère déjà montée de plus de 50%"
+    # La nuit : une mise déjà faite au plus (660 ≤ 720).
+    assert decide(one, night, quote, 3, pf) is not None
+    two = auction(card=card, base_amount=600, current_bid=660)         # 726 > 720
+    assert decide(two, night, quote, 3, pf) is None and decide(two, day, quote, 3, pf) is not None
+    # Shiny et collection : non concernés.
+    assert decide(auction(card={**card, "is_shiny": True}, base_amount=600, current_bid=880), day, quote, 3, pf)
+    assert decide(many, day, quote, 3, pf, collection_cap=1000) is not None
+    # Nuit sans réglage propre : celui du jour.
+    assert snipe_params(settings(sniper_max_rise=1.5), night=True).max_rise == 1.5
+
+
 def test_position_needs_contested_and_steady_recent_sales():
     """18/10 : l'éclipse XXIe achetée 882, estimée 1197 sur 3 ventes au prix de départ et 2 disputées (970, 1774)."""
     s = settings()

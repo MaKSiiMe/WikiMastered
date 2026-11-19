@@ -216,6 +216,10 @@ class Settings(BaseSettings):
     # cartes demandées et souhaits ne sont pas concernés. Du 01/11 au 16/11 : shiny et L ≥ 2000 = 16 % des mises
     # tentées, 37 % du bénéfice.
     sniper_min_estimate: int = 0
+    # Revente d'une carte non shiny sautée si sa mise minimale dépasse N × son prix de départ (0 = jamais) : une
+    # enchère déjà très disputée part le plus souvent au-dessus de notre plafond. Chaque mise minimale vaut 1,1 × la
+    # précédente : 1,1 = une mise déjà faite, 1,21 = deux, 1,46 = quatre. Collection, /snipe et souhaits non concernés.
+    sniper_max_rise: float = 0.0
     sniper_max_bid: int = 500        # plafond absolu d'une mise, /snipe excepté (0 = aucun, le budget par position s'applique)
     sniper_daily_budget: int = 0     # 0 = pas de budget quotidien
     sniper_min_balance_reserve: int = 50
@@ -249,6 +253,7 @@ class Settings(BaseSettings):
     night_window_seconds: int = 30
     night_budget_bonus: int = 0
     night_min_bid_value: float = 0.0  # valeur minimale d'une mise la nuit (0 = SNIPER_MIN_BID_VALUE)
+    night_max_rise: float = 0.0  # SNIPER_MAX_RISE la nuit (0 = celui du jour)
 
     # --- Capital : positions achetées pour être revendues ----------------------------
     portfolio_slots: int = 5              # = places de vente simultanées du site

@@ -233,6 +233,7 @@ SNIPER_MIN_SECONDS_LEFT=15            # ... mais jamais dans les 10 dernières (
 SNIPER_DEAL_RATIO_MAX=0.5             # mise ≤ 50 % de l'estimation, en plus du bénéfice minimum
 SNIPER_MIN_BID_SHARE=0.25             # mise < 25 % de l'estimation : position sautée (quota anti-bot gardé)
 SNIPER_MIN_ESTIMATE=0                 # carte non shiny revendue seulement si estimée ≥ N WB (0 = toutes ; shiny toujours)
+SNIPER_MAX_RISE=0                     # enchère sautée si sa mise minimale dépasse N × le prix de départ, ex. 1.5 (0 = jamais ; shiny toujours)
 SNIPER_ANTIBOT_RETRY_SECONDS=300     # vérification anti-bot en attente : une mise tentée toutes les N s (0 = chacune)
 SNIPER_PREFETCH_SECONDS=8             # estimation anticipée d'une enchère toutes les N s
 SNIPER_MIN_BALANCE_RESERVE=50         # solde jamais descendu sous ce seuil
@@ -255,6 +256,7 @@ NIGHT_DEAL_RATIO_MAX=0.5
 NIGHT_WINDOW_SECONDS=30
 NIGHT_BUDGET_BONUS=0
 NIGHT_MIN_BID_VALUE=0                 # valeur minimale d'une mise la nuit (0 = SNIPER_MIN_BID_VALUE)
+NIGHT_MAX_RISE=0                      # SNIPER_MAX_RISE la nuit, ex. 1.2 : une mise déjà faite au plus (0 = celui du jour)
 ```
 
 ### Exemple : une position, de l'achat à la revente

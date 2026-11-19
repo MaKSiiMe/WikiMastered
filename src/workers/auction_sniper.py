@@ -142,6 +142,7 @@ class SnipeParams:
     min_bid_share: float = 0.0  # mise / estimation, au moins (0 = sans limite) : voir SNIPER_MIN_BID_SHARE
     min_value: float = 0.0  # valeur d'une mise, au moins (0 = sans limite) : voir SNIPER_MIN_BID_VALUE
     min_estimate: int = 0   # estimation minimale d'une carte non shiny revendue (0 = toutes) : SNIPER_MIN_ESTIMATE
+    max_rise: float = 0.0   # mise minimale / prix de départ, au plus (0 = sans limite) : SNIPER_MAX_RISE
 
 
 def snipe_params(s: Settings, night: bool) -> SnipeParams:
@@ -156,6 +157,7 @@ def snipe_params(s: Settings, night: bool) -> SnipeParams:
         min_bid_share=s.sniper_min_bid_share,
         min_value=s.night_min_bid_value if night and s.night_min_bid_value > 0 else s.sniper_min_bid_value,
         min_estimate=s.sniper_min_estimate,
+        max_rise=s.night_max_rise if night and s.night_max_rise > 0 else s.sniper_max_rise,
     )
 
 
@@ -169,6 +171,22 @@ def too_low_value(auction: Auction, quote: Quote, params: SnipeParams) -> str | 
     if params.min_estimate > 0 and not auction.shiny and quote.average < params.min_estimate:  # type: ignore[operator]
         return f"estimation < {params.min_estimate} WB"
     return None
+
+
+def too_disputed(auction: Auction, params: SnipeParams) -> str | None:
+    """Carte non shiny dont l'enchère a déjà monté au-delà de SNIPER_MAX_RISE × son prix de départ : d'autres
+    joueurs (souvent des bots de revente) se la disputent, elle part le plus souvent au-dessus de notre plafond et la
+    mise userait une place du quota anti-bot pour rien. La mise minimale ne fait que monter : refus définitif."""
+    if params.max_rise <= 0 or auction.shiny or auction.base_amount <= 0:
+        return None
+    if auction.min_bid > auction.base_amount * params.max_rise:
+        return f"enchère déjà montée de plus de {params.max_rise - 1:.0%}"
+    return None
+
+
+def skipped(auction: Auction, quote: Quote, params: SnipeParams) -> str | None:
+    """Revente écartée avant tout calcul de prix : ventes trop peu sûres, carte trop peu chère, enchère disputée."""
+    return unsteady(quote, params) or too_low_value(auction, quote, params) or too_disputed(auction, params)
 
 
 def unsteady(quote: Quote, params: SnipeParams) -> str | None:
@@ -311,8 +329,7 @@ def decide(auction: Auction, params: SnipeParams, quote: Quote | None, min_sales
     if collection_cap is not None and amount <= collection_cap:
         options.append(Decision(amount, collection_cap, f"{COLLECTION_PREFIX} : carte manquante ≤ {collection_cap}",
                                 quote.average if quote else None))
-    if resale and quote is not None and quote.reliable(min_sales) and not unsteady(quote, params) \
-            and not too_low_value(auction, quote, params):
+    if resale and quote is not None and quote.reliable(min_sales) and not skipped(auction, quote, params):
         net = quote.average * (1 - fee)  # type: ignore[operator]
         limit = math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
         if portfolio is not None:
@@ -341,7 +358,7 @@ def refusal(auction: Auction, params: SnipeParams, quote: Quote | None, min_sale
         return "rareté non revendue"
     if quote is None or not quote.reliable(min_sales):
         return "pas assez vue vendue"
-    if why := unsteady(quote, params) or too_low_value(auction, quote, params):
+    if why := skipped(auction, quote, params):
         return why
     amount = auction.min_bid
     if amount > math.floor(quote.average * params.deal_ratio):  # type: ignore[operator]
@@ -370,7 +387,7 @@ def hopeless(auction: Auction, params: SnipeParams, quote: Quote | None, min_sal
     (SNIPER_MIN_BID_SHARE) : une mise relue plus haute peut la lever."""
     if quote is None or not quote.reliable(min_sales):
         return "pas assez vue vendue" if quoted else None
-    if why := unsteady(quote, params) or too_low_value(auction, quote, params):
+    if why := skipped(auction, quote, params):
         return why
     if auction.min_bid > math.floor(quote.average * params.deal_ratio):  # type: ignore[operator]
         return f"mise > {params.deal_ratio:.0%} de l'estimation"
