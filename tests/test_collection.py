@@ -717,3 +717,79 @@ async def test_a_card_you_wishlist_yourself_is_bought_up_to_its_quote_and_tagged
     assert tagged == [{"user_card_id": "o-sr", "tag_id": "t-wish"}]
     assert (await db.kv_get(wishes.KV_KEY))["to_tag"] == []
     await db.close()
+
+
+def test_set_price_rules_parse_and_apply_to_their_collection_only(monkeypatch):
+    """20/11 : COLLECTION_SET_MAX_PRICE et COLLECTION_SET_QUOTE_RATIO, par clé de collection (nom=valeur ou nom:valeur)."""
+    from src.config import Settings
+    from src.workers.collection import PriceRule, price_rules
+
+    monkeypatch.setenv("COLLECTION_SET_MAX_PRICE", "Elements=100")
+    monkeypatch.setenv("COLLECTION_SET_QUOTE_RATIO", "pays:0.8")
+    s = Settings(_env_file=None, collection_sets=["jours", "elements", "pays"])
+    assert s.collection_set_max_price == {"Elements": 100} and s.collection_set_quote_ratio == {"pays": 0.8}
+    rules = price_rules(s)
+    assert rules["hydrogene"] == [PriceRule(100, None)] and rules["france"] == [PriceRule(None, 0.8)]
+    assert "14 octobre" not in rules  # les jours gardent COLLECTION_MAX_PRICE
+    assert len([k for k, v in rules.items() if v == [PriceRule(None, 0.8)]]) == 197
+    assert len([k for k, v in rules.items() if v == [PriceRule(100, None)]]) == 118
+    assert PriceRule(None, 0.8).fixed(50) is None and PriceRule(300, 0.8).fixed(50) == 300 and PriceRule().fixed(50) == 50
+    monkeypatch.delenv("COLLECTION_SET_MAX_PRICE")
+    monkeypatch.delenv("COLLECTION_SET_QUOTE_RATIO")
+    assert price_rules(Settings(_env_file=None, collection_sets=["pays"])) == {}
+
+
+@pytest.mark.asyncio
+async def test_quoted_collection_is_bid_below_its_quote_and_never_resold(tmp_path):
+    """20/11 : la collection « pays » est misée jusqu'à sa cote × COLLECTION_SET_QUOTE_RATIO (comme une revente, mais
+    gardée) ; sans cote, pas de mise ; « elements » a son plafond fixe."""
+    from datetime import datetime, timedelta
+
+    from src.workers.auction_sniper import AuctionSniper
+    from tests.test_integration import seed_observed
+
+    now = datetime.now(UTC)
+
+    def sale(aid, title, rarity, base, seconds=15):
+        return {"id": aid, "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": rarity},
+                "seller_id": "22222222-2222-2222-2222-222222222222", "status": "active",
+                "end_at": (now + timedelta(seconds=seconds)).isoformat(), "base_amount": base,
+                "current_bid": None, "current_bidder_id": None}
+
+    # France : cote 1000 → plafond 800. Japon : 900 > 800. Italie : sans cote. Fer : plafond fixe 100.
+    market = [sale("fr", "France", "L", 700), sale("jp", "Japon", "L", 900, 16), sale("it", "Italie", "UR", 10, 17),
+              sale("fe", "Fer", "R", 90, 18)]
+
+    def handler(request):
+        if request.url.path == "/api/wikibidous":
+            return httpx.Response(200, json={"balance": 30000})
+        if "mine" in request.url.params:
+            return httpx.Response(200, json={"bidding": [], "selling": []})
+        if request.url.path == "/api/marketplace/mine":
+            return httpx.Response(200, json={"sellingCount": 0, "maxConcurrentAuctions": 5})
+        if request.url.path == "/api/marketplace":
+            return httpx.Response(200, json={"auctions": market, "hasMore": False})
+        if request.url.path.endswith("/sales"):
+            return httpx.Response(404, json={})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, collection_sets=["pays", "elements"], collection_max_price=50,
+                                   collection_set_max_price={"elements": 100},
+                                   collection_set_quote_ratio={"pays": 0.8}, sniper_resale_rarities=["L"],
+                                   collection_bids_per_check=0, sniper_max_concurrent_bids=0)
+    ctx = await make_context(tmp_path, client, notifier)
+    db = ctx.db
+    for card in ("card-France", "card-Japon"):
+        await seed_observed(db, card, [1000] * 5, rarity="L")
+    await db.kv_set("collection", {"owned": [], "missing": ["france", "japon", "italie", "fer"], "total": 315})
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    for _ in range(4):
+        await sniper.step()
+    rows = await db._all("SELECT auction_id, amount, reason FROM bids")
+    assert {r["auction_id"]: r["amount"] for r in rows} == {"fr": 700, "fe": 90}
+    assert all(r["reason"].startswith("collection") for r in rows)  # gardées, pas des reventes
+    assert sniper._outcomes["jp"] == "collection : trop chère"
+    assert sniper._outcomes["it"] == "collection : sans cote, pas de mise"
+    assert {a.id: cap for a, cap, _ in sniper.watched()}.get("it", None) is None
+    await db.close()

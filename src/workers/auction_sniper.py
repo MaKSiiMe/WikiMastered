@@ -52,7 +52,7 @@ from src.snipes import remove as remove_snipe
 from src.workers.base import Worker
 from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers import wishes, wishlist
-from src.workers.collection import collection_key, record_win, targets as collection_targets
+from src.workers.collection import PriceRule, collection_key, price_rules, record_win, targets as collection_targets
 from src.workers.inventory_manager import ANTIBOT_HINT, RIVAL_MIN_SHARE
 
 COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, pas revendues
@@ -507,6 +507,9 @@ class AuctionSniper(Worker):
         self._wishlist_covered: set[str] = set()  # le site annonce leurs ventes : plus de recherche par titre
         # Cartes possédées à monter en rareté (COLLECTION_UPGRADE) : clé -> rang de la meilleure rareté possédée.
         self._collection_best: dict[str, int] = {}
+        # Plafonds propres aux collections (COLLECTION_SET_MAX_PRICE, COLLECTION_SET_QUOTE_RATIO), par clé de titre.
+        self._price_rules: dict[str, list[PriceRule]] = {}
+        self._collection_unquoted: set[str] = set()  # ventes de collection sans cote, donc sans mise
         # Jours manquants d'après la dernière lecture (avant de retirer ceux que le bot a gagnés), et
         # ventes de ces cartes déjà signalées dans les logs : id -> issue journalisée (None = repérée).
         self._collection_wanted: set[str] = set()
@@ -849,7 +852,8 @@ class AuctionSniper(Worker):
         if snipe := self._snipe_for(a):
             return a.min_bid <= snipe.max_price
         if self._collection_wants(a):
-            return a.min_bid <= self.settings.collection_max_price
+            cap = self._fixed_collection_cap(a)
+            return cap is None or a.min_bid <= cap
         if a.rarity not in self.settings.sniper_resale_rarities:
             return False
         ceiling = await self._observed_ceiling(a, params)
@@ -943,7 +947,7 @@ class AuctionSniper(Worker):
                 out.append((a, snipe.max_price, "souhaitée" if snipe.wish else "demandée"))
             elif self._collection_wants(a):
                 have = self._upgrade_from(a)
-                out.append((a, self.settings.collection_max_price,
+                out.append((a, self._fixed_collection_cap(a),
                             f"collection, rareté {have} → {a.rarity}" if have else "collection"))
             else:
                 out.append((a, t.ceiling, "revente, misée" if t.recheck else "revente"))
@@ -961,6 +965,40 @@ class AuctionSniper(Worker):
         self._snipes = await load_snipes(self.db)
         self._wishes = await wishes.load(self.db, self.settings.wish_max_price)
         self._wish_ids = await wishes.card_ids(self.db) if self._wishes else {}
+
+    def _rules(self, auction: Auction) -> list[PriceRule]:
+        return self._price_rules.get(collection_key(auction.title)) or [PriceRule()]
+
+    def _fixed_collection_cap(self, auction: Auction) -> int | None:
+        """Plafond de collection connu sans cote ; None : il dépend de la cote (COLLECTION_SET_QUOTE_RATIO)."""
+        caps = [r.fixed(self.settings.collection_max_price) for r in self._rules(auction)]
+        return None if None in caps else max(caps)  # type: ignore[type-var]
+
+    def _quoted_collection(self, auction: Auction) -> bool:
+        return any(r.ratio is not None for r in self._rules(auction))
+
+    async def _set_cap(self, auction: Auction) -> int | None:
+        """Plafond d'une carte de collection : fixe, ou sa cote dans cette rareté × le ratio de sa collection, ramenée
+        au prix de la vente concurrente la moins chère comme une revente (sans requête : mise en cache par
+        `_prepare`). Sans cote : pas de mise."""
+        self._collection_unquoted.discard(auction.id)
+        caps: list[int] = []
+        for rule in self._rules(auction):
+            if rule.ratio is None:
+                caps.append(rule.cap if rule.cap is not None else self.settings.collection_max_price)
+                continue
+            try:
+                quote = await self._against_rivals(auction, await self.ctx.prices.quote(
+                    auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False))
+            except (RateLimited, ApiError):
+                continue
+            if quote.average is not None:
+                cap = math.floor(quote.average * rule.ratio)
+                caps.append(min(cap, rule.cap) if rule.cap is not None else cap)
+        if not caps:
+            self._collection_unquoted.add(auction.id)
+            return None
+        return max(caps)
 
     async def _wish_cap(self, auction: Auction) -> int | None:
         """Plafond d'une carte souhaitée : sa cote dans cette rareté (sans requête : mise en cache par `_prepare`),
@@ -1033,7 +1071,8 @@ class AuctionSniper(Worker):
         await self.portfolio(now)
         auction = target.auction
         wish = (snipe := self._snipe_for(auction)) is not None and snipe.wish  # son plafond est sa cote
-        if wish or (auction.rarity in self.settings.sniper_resale_rarities and not self._wanted(auction)
+        quoted = snipe is None and self._collection_wants(auction) and self._quoted_collection(auction)
+        if wish or quoted or (auction.rarity in self.settings.sniper_resale_rarities and not self._wanted(auction)
                     and target.room >= 0):
             with contextlib.suppress(RateLimited, ApiError):
                 await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
@@ -1263,6 +1302,7 @@ class AuctionSniper(Worker):
                     best[key] = max(best.get(key, -1), RARITY_RANK[rarity])
         # Déjà en L : plus rien au-dessus.
         self._collection_best = {k: i for k, i in best.items() if i < len(RARITY_RANK) - 1}
+        self._price_rules = price_rules(self.settings)
 
     def _log_collection_sales(self, auctions: list[Auction], now: datetime) -> None:
         """Journalise une fois chaque vente d'une carte de collection manquante (ou de rareté plus haute) repérée sur
@@ -1312,7 +1352,7 @@ class AuctionSniper(Worker):
             return None  # une autre vente de la même carte est déjà en cours pour le bot
         if snipe is not None and snipe.wish:
             return await self._wish_cap(auction)
-        return snipe.max_price if snipe else self.settings.collection_max_price
+        return snipe.max_price if snipe else await self._set_cap(auction)
 
     def is_manual_interest(self, auction: Auction) -> bool:
         """Carte que tu cherches toi-même (tu mises dessus) : le bot ne l'achète pas pour la revendre."""
@@ -1381,9 +1421,11 @@ class AuctionSniper(Worker):
         push = 1.0 if rebid else self.settings.sniper_bid_push
         snipe = self._snipe_for(auction)  # demandée sur Discord : gardée, jamais achetée pour la revente
         # Sa mise maximale est choisie à la demande : SNIPER_MAX_BID ne la réduit pas.
+        # Carte de collection voulue : gardée, jamais achetée pour la revente.
         decision = decide(auction, params if snipe is None else replace(params, max_bid=0), quote,
                           min_sales(self.settings, auction.shiny), portfolio, self.settings.sale_fee_pct,
-                          collection_cap=collection_cap, resale=resale and snipe is None, push=push)
+                          collection_cap=collection_cap,
+                          resale=resale and snipe is None and not self._collection_wants(auction), push=push)
         if decision is not None and snipe is not None:
             decision = replace(decision, reason=f"{WISH_REASON if snipe.wish else SNIPE_REASON} "
                                                 f"≤ {decision.ceiling}")
@@ -1392,6 +1434,7 @@ class AuctionSniper(Worker):
                                                 f"≤ {decision.ceiling}")
         if decision is None:
             self._outcome(auction, "collection : trop chère" if collection_cap is not None else
+                          "collection : sans cote, pas de mise" if auction.id in self._collection_unquoted else
                           refusal(auction, params, quote, min_sales(self.settings, auction.shiny), portfolio,
                                   self.settings.sale_fee_pct, resale, push), quote)
         elif decision.profit is not None and decision.reference and not rebid:

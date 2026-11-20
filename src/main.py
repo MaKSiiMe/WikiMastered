@@ -775,6 +775,10 @@ async def collection_status(ctx: Context) -> None:
     if state["unmatched"]:
         print("Titres trouvés mais non reconnus (format différent ?) : " + ", ".join(state["unmatched"]))
     print(f"Mise maximale par carte manquante : {s.collection_max_price} WB")
+    for name, cap in s.collection_set_max_price.items():
+        print(f"  {name} : {cap:g} WB au plus")
+    for name, ratio in s.collection_set_quote_ratio.items():
+        print(f"  {name} : jusqu'à sa cote × {ratio:g}")
     if state.get("tag"):
         live = "" if s.is_live("tag_card") else " (simulé : DRY_RUN)"
         print(f"Étiquette « {state['tag']} » : {state['tagged']} ajoutée(s){live}, {state['to_tag']} restante(s)")

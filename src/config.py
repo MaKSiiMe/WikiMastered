@@ -380,6 +380,12 @@ class Settings(BaseSettings):
     collection_sets: CsvList = Field(default_factory=list)    # « jours » + clés de config/collections.yaml
     collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
     collection_max_price: int = 10                              # mise maximale pour une carte manquante
+    # Plafond propre à une collection, à la place de COLLECTION_MAX_PRICE : elements=100,pays=3000 (clés de
+    # COLLECTION_SETS ; vide : aucune).
+    collection_set_max_price: Annotated[dict[str, float], NoDecode] = Field(default_factory=dict)
+    # Collection misée comme une revente : jusqu'à sa cote dans la rareté en vente × ce ratio (pays=0.8), au plus son
+    # plafond de COLLECTION_SET_MAX_PRICE s'il en a un. Sans cote connue : pas de mise. Vide : aucune.
+    collection_set_quote_ratio: Annotated[dict[str, float], NoDecode] = Field(default_factory=dict)
     # Carte possédée : le sniper mise aussi sur un exemplaire de rareté plus haute que la meilleure possédée,
     # jusqu'à COLLECTION_MAX_PRICE (le but : chaque carte dans sa plus haute rareté).
     collection_upgrade: bool = False
@@ -434,10 +440,11 @@ class Settings(BaseSettings):
             raise ValueError(f"raretés inconnues {unknown}, attendues : {RARITIES}")
         return value
 
-    @field_validator("http_worker_spacing_seconds", mode="before")
+    @field_validator("http_worker_spacing_seconds", "collection_set_max_price", "collection_set_quote_ratio",
+                     mode="before")
     @classmethod
-    def _worker_spacing(cls, value: Any) -> Any:
-        """worker=écart séparés par des virgules, ou du JSON ; vide ou 0 : aucun."""
+    def _name_values(cls, value: Any, info: ValidationInfo) -> Any:
+        """nom=valeur (ou nom:valeur) séparés par des virgules, ou du JSON ; vide ou 0 : aucun."""
         if not isinstance(value, str | int | float):
             return value
         text = str(value).strip().strip("\"'")
@@ -445,10 +452,11 @@ class Settings(BaseSettings):
             return {}
         if text.startswith("{"):
             return json.loads(text)
-        pairs = [part.split("=", 1) for part in text.split(",") if part.strip()]
+        pairs = [re.split(r"[=:]", part, maxsplit=1) for part in text.split(",") if part.strip()]
         if any(len(pair) != 2 for pair in pairs):
-            raise ValueError(f"attendu worker=secondes séparés par des virgules (ex. cotes=5,etiquettes=3) : {text}")
-        return {name.strip(): float(spacing) for name, spacing in pairs}
+            example = "cotes=5,etiquettes=3" if info.field_name == "http_worker_spacing_seconds" else "elements=100"
+            raise ValueError(f"attendu nom=valeur séparés par des virgules (ex. {example}) : {text}")
+        return {name.strip(): float(number) for name, number in pairs}
 
     @field_validator("position_step_minutes", mode="before")
     @classmethod

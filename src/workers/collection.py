@@ -120,6 +120,44 @@ def collections(settings: Settings) -> tuple[dict[str, Collection], list[str]]:
     return active, unknown
 
 
+@dataclass(frozen=True)
+class PriceRule:
+    """Plafond d'une carte de collection : fixe (`cap`, None : COLLECTION_MAX_PRICE), ou sa cote × `ratio`, au plus
+    `cap` s'il est donné (COLLECTION_SET_MAX_PRICE, COLLECTION_SET_QUOTE_RATIO)."""
+    cap: int | None = None
+    ratio: float | None = None
+
+    def fixed(self, default: int) -> int | None:
+        """Plafond connu sans cote ; None : il dépend de la cote, sans plafond fixe."""
+        if self.cap is not None:
+            return self.cap
+        return None if self.ratio is not None else default
+
+
+def _by_set(values: dict[str, float]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for name, value in values.items():
+        key = normalize_title(name)
+        out[SET_ALIASES.get(key, key)] = value
+    return out
+
+
+def price_rules(settings: Settings) -> dict[str, list[PriceRule]]:
+    """Clé de titre -> règles de prix de ses collections actives, seulement pour les cartes d'une collection à plafond
+    propre (les autres : COLLECTION_MAX_PRICE). Une carte de plusieurs collections prend le plus haut de leurs
+    plafonds."""
+    caps, ratios = _by_set(settings.collection_set_max_price), _by_set(settings.collection_set_quote_ratio)
+    if not caps and not ratios:
+        return {}
+    rules: dict[str, list[PriceRule]] = {}
+    for key, c in collections(settings)[0].items():
+        cap = int(caps[key]) if key in caps else None
+        rule = PriceRule(cap, ratios.get(key) or None)
+        for title in c.titles:
+            rules.setdefault(collection_key(title), []).append(rule)
+    return {k: v for k, v in rules.items() if any(r != PriceRule() for r in v)}
+
+
 def unknown_text(settings: Settings, unknown: list[str]) -> str:
     return f"COLLECTION_SETS : {', '.join(unknown)} inconnu(s) ; collections connues : {', '.join(defined(settings))}."
 

@@ -190,9 +190,13 @@ Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur 
 |---|---|
 | `jours` | Les 366 jours de l'année, intégrés au code |
 | `gifs` | Les articles dont l'image principale est un GIF animé ([liste](../config/gifs_animes.txt)) |
+| `elements` | Les 118 éléments du tableau périodique ([liste](../config/elements.txt)), étiquette « Élément » |
+| `pays` | Les 193 membres de l'ONU, le Vatican, la Palestine, le Kosovo et Taïwan ([liste](../config/pays.txt)), sans étiquette de collection : le worker etiquettes pose « Pays » |
 | la tienne | À décrire dans [config/collections.yaml](../config/collections.yaml) : un nom, une étiquette, les titres |
 
 `COLLECTION_TITLES` ajoute des titres isolés. Pour protéger les cartes gagnées, ajoute leur étiquette à `PROTECTED_TAGS`.
+
+Une collection peut avoir son propre plafond (`COLLECTION_SET_MAX_PRICE`), ou être misée comme une revente, jusqu'à sa cote dans la rareté en vente × `COLLECTION_SET_QUOTE_RATIO`. Dans ce cas, la cote est relue avant la mise et ramenée au prix de la vente concurrente la moins chère. Sans cote connue, le bot ne mise pas. Une carte de collection voulue n'est jamais achetée pour être revendue.
 
 ```mermaid
 flowchart TD
