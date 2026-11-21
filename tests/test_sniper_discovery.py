@@ -44,12 +44,12 @@ async def test_sniper_spots_sales_early_then_rereads_them_to_bid(tmp_path):
         if path.startswith("/api/marketplace/"):
             return httpx.Response(200, json={"auction": market[path.rsplit("/", 1)[1]]})
         if path == "/api/marketplace":
-            queries.append((params["sort"], params.get("rarity"), params.get("q")))
+            queries.append((params["sort"], ",".join(params.get_list("rarity")) or None, params.get("q")))
             if params.get("q"):
                 return httpx.Response(200, json={"auctions": [market["d1"]], "hasMore": False})
             if params["sort"] == "ending_soon":
                 return httpx.Response(200, json={"auctions": ended, "hasMore": False})
-            rows = [market["u1"], market["c1"]] if params.get("rarity") == "UR" else []
+            rows = [market["u1"], market["c1"]] if "UR" in params.get_list("rarity") else []
             return httpx.Response(200, json={"auctions": rows, "hasMore": False})
         raise AssertionError(f"route inattendue {request.url}")
 
@@ -63,9 +63,11 @@ async def test_sniper_spots_sales_early_then_rereads_them_to_bid(tmp_path):
     await sniper.setup()
     for _ in range(8):
         await sniper.step()
-    # Nouvelles ventes UR et L, ventes terminées, puis le jour manquant cherché par son titre.
-    assert ("recent", "UR", None) in queries and ("recent", "L", None) in queries
-    assert ("ending_soon", "UR", None) in queries and ("ending_soon", None, "14 octobre") in queries
+    # Nouvelles ventes UR et L (une seule requête, rarity=UR&rarity=L, depuis le 21/11), ventes terminées, puis le jour
+    # manquant cherché par son titre.
+    assert ("recent", "UR,L", None) in queries and ("ending_soon", "UR,L", None) in queries
+    assert not [q for q in queries if q[1] in ("UR", "L")]
+    assert ("ending_soon", "UR,L", None) in queries and ("ending_soon", None, "14 octobre") in queries
     assert set(sniper._targets) == {"u1", "d1"}  # la C n'est pas revendue, rien n'est encore misé
     assert not await db._all("SELECT * FROM bids")
 

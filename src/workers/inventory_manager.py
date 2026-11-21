@@ -860,7 +860,7 @@ class InventoryManager(Worker):
         de le vendre : le 16/10, Place publique refusée 3 fois « en favori »). STARRED : tu as mis l'exemplaire
         acheté en favori, tu le gardes. Un favori plus ancien que l'achat ne dit rien : l'exemplaire acheté n'est
         pas encore arrivé, il est recherché de nouveau."""
-        copies = same_copies(await self._owned_copies(row["card_id"], row["title"]), row["rarity"],
+        copies = same_copies(await self._owned_copies(row["card_id"], row["title"], row["rarity"]), row["rarity"],
                              bool(row["is_shiny"]))
         since = datetime.fromisoformat(row["placed_at"]) - timedelta(minutes=1)
         if copies and all(c.starred for c in copies):
@@ -890,7 +890,7 @@ class InventoryManager(Worker):
     def _protected_tags(self) -> set[str]:
         return self.settings.protected_tag_keys
 
-    async def _owned_copies(self, card_id: str, title: str) -> list[OwnedCard]:
+    async def _owned_copies(self, card_id: str, title: str, rarity: str | None = None) -> list[OwnedCard]:
         """Exemplaires de cette carte pas déjà en vente : recherchés par titre sur toutes les pages, sinon parmi les
         derniers obtenus. Le 18/10, 5G (L, achetée 443) restait introuvable 2 h par la seule 1re page de « q=5G »,
         et la revente était abandonnée."""
@@ -899,12 +899,15 @@ class InventoryManager(Worker):
         def mine(page) -> list[OwnedCard]:
             return [r for r in page.rows() if r.catalog_id == card_id and r.id not in taken]
 
-        for number in range(COPY_SEARCH_PAGES):
-            page = await self.api.collection_page(number, sort="rarity", q=title)
-            if copies := mine(page):
-                return copies
-            if len(page.collection) < COLLECTION_PAGE_SIZE:
-                break
+        # D'abord la seule rareté achetée (rarity=…, relevé du 21/11) : moins de pages pour une carte très possédée ;
+        # rien trouvé (filtre sur une autre rareté que celle de l'exemplaire ?) : toutes les raretés.
+        for only in ([rarity, ""] if rarity else [""]):
+            for number in range(COPY_SEARCH_PAGES):
+                page = await self.api.collection_page(number, sort="rarity", q=title, rarity=only)
+                if copies := mine(page):
+                    return copies
+                if len(page.collection) < COLLECTION_PAGE_SIZE:
+                    break
         return mine(await self.api.collection_page(0, sort="added"))
 
     async def warn_stale_positions(self) -> int:
@@ -1065,7 +1068,7 @@ class InventoryManager(Worker):
                     # solaires et Les Feux de l'amour, refusées 2 fois en 5 min, étaient retrouvées 30 s après.
                     try:
                         bid = await self.db.get_bid(row["bid_id"])
-                        copy = newest_sellable(same_copies(await self._owned_copies(row["card_id"], row["title"]),
+                        copy = newest_sellable(same_copies(await self._owned_copies(row["card_id"], row["title"], row["rarity"]),
                                                            row["rarity"], bool(bid and bid["is_shiny"])),
                                                self._protected_tags())
                     except ApiError:
@@ -1407,7 +1410,7 @@ class InventoryManager(Worker):
             copy = None
             if bid is not None and tag_id is not None:
                 with contextlib.suppress(ApiError):
-                    copy = newest_sellable(same_copies(await self._owned_copies(bid["card_id"], bid["title"]),
+                    copy = newest_sellable(same_copies(await self._owned_copies(bid["card_id"], bid["title"], bid["rarity"]),
                                                        bid["rarity"], bool(bid["is_shiny"])), set())
             posted = False
             if copy:
@@ -1438,7 +1441,7 @@ class InventoryManager(Worker):
         if bid["dry_run"] or row["owned_card_id"].startswith("sim-"):
             return row["owned_card_id"]
         try:
-            copies = same_copies(await self._owned_copies(row["card_id"], row["title"]), row["rarity"],
+            copies = same_copies(await self._owned_copies(row["card_id"], row["title"], row["rarity"]), row["rarity"],
                                  bool(bid["is_shiny"]))
         except ApiError as exc:
             self.log.debug("%s : collection illisible (%s), ancien exemplaire gardé", row["title"], exc)

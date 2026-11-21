@@ -111,6 +111,7 @@ async def test_antibot_refusal_alerts_once_until_a_bid_passes(tmp_path):
 
     sniper._antibot_retry_at = datetime.now(UTC)
     market["d"] = sale("d", "15 octobre", 15)
+    sniper._last_read.clear()  # une seule lecture groupée des raretés (21/11) : la nouvelle vente est relue maintenant
     await sniper.step()
     # 12/11 : plus de message « vérification levée » : l'alerte passe au vert sur Discord (bot), rien d'autre.
     assert sniper.blocked is None and sniper.antibot_since is None

@@ -171,6 +171,11 @@ def min_sales(s: Settings, shiny: bool) -> int:
     return max(s.price_min_sales, s.sniper_shiny_min_sales) if shiny else s.price_min_sales
 
 
+def rarity_param(group: str) -> str | list[str]:
+    """Clé d'une source de repérage (« L » ou « L,UR ») : la valeur du paramètre rarity du marché."""
+    return group.split(",") if "," in group else group
+
+
 def too_low_value(auction: Auction, quote: Quote, params: SnipeParams) -> str | None:
     """Carte non shiny estimée sous SNIPER_MIN_ESTIMATE : pas revendue, le quota anti-bot va aux cartes chères."""
     if params.min_estimate > 0 and not auction.shiny and quote.average < params.min_estimate:  # type: ignore[operator]
@@ -688,9 +693,12 @@ class AuctionSniper(Worker):
     def _lateness(self, params: SnipeParams, now: datetime) -> list[tuple[float, float, tuple[str, str]]]:
         """(retard en s, période visée, source) de chaque source de repérage : nouvelles ventes et ventes
         terminées de chaque rareté suivie, jours manquants de la collection et cartes demandées sur Discord."""
-        sources = [((kind, rarity), every) for rarity in self.settings.sniper_resale_rarities
-                   for kind, every in (("recent", self.settings.sniper_discovery_seconds),
-                                       ("ended", self.settings.sniper_observe_seconds))]
+        # Toutes les raretés de revente en une seule lecture (rarity=L&rarity=UR, comme le site, relevé du 21/11) :
+        # ajouter UR ne double plus les requêtes du repérage.
+        group = ",".join(self.settings.sniper_resale_rarities)
+        sources = [((kind, group), every) for kind, every in (("recent", self.settings.sniper_discovery_seconds),
+                                                               ("ended", self.settings.sniper_observe_seconds))
+                   if group]
         if self._searched() or self._collection_best:
             sources.append((("day", ""), self.settings.collection_search_seconds))
         if (self.settings.collection_wishlist and self._collection_missing) or self._wishes:
@@ -719,7 +727,8 @@ class AuctionSniper(Worker):
             else:
                 self._catchup_reads += 1
                 elapsed = self._sweep_elapsed.get(rarity)
-            auctions, more = await self.api.market_page(sort="recent", rarity=rarity, limit=MARKET_LIMIT, page=page)
+            auctions, more = await self.api.market_page(sort="recent", rarity=rarity_param(rarity),
+                                                        limit=MARKET_LIMIT, page=page)
             done = self._check_gap(rarity, auctions, more, now, elapsed, page=page)
             await self._remember(auctions, now)  # ventes en cours : la concurrence d'une revente (_against_rivals)
             await self._ingest(auctions, params, now)
@@ -731,8 +740,8 @@ class AuctionSniper(Worker):
         elif kind == "ended":
             # Ventes terminées pas encore clôturées : leur dernier prix devient une vente observée.
             page = self._ended_page.pop(rarity, 1)
-            auctions, more = await self.api.market_page(sort="ending_soon", rarity=rarity, limit=MARKET_LIMIT,
-                                                        page=page)
+            auctions, more = await self.api.market_page(sort="ending_soon", rarity=rarity_param(rarity),
+                                                        limit=MARKET_LIMIT, page=page)
             await self._remember(auctions, now)
             self._judge_unread(auctions, now)
             await self._ingest(auctions, params, now)

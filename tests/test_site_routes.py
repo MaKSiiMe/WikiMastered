@@ -168,3 +168,26 @@ async def test_stuck_auction_is_settled_once_after_a_minute():
     off = _Worker(live=False)
     stuck2 = Auction.model_validate({**_selling(100, hours_left=-3 / 60), "id": "stuck2"})
     assert not await settle_module.nudge_settle(off, stuck2) and off.calls == []
+
+
+@pytest.mark.asyncio
+async def test_owned_copies_are_searched_in_the_bought_rarity_first(tmp_path):
+    """La copie d'une position est cherchée dans sa seule rareté (rarity=L) ; rien trouvé : toutes les raretés."""
+    reads, found = [], {"L": False}
+
+    def handler(request):
+        rarity = request.url.params.get("rarity")
+        reads.append(rarity)
+        row = {"id": "o1", "card_id": "c-eve", "obtained_at": datetime.now(UTC).isoformat(),
+               "card": {"id": "c-eve", "wikipedia_title": "Eve", "rarity": "L"}}
+        return httpx.Response(200, json={"collection": [row] if rarity != "L" or found["L"] else []})
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    inv = InventoryManager(ctx)
+    found["L"] = True
+    assert [c.id for c in await inv._owned_copies("c-eve", "Eve", "L")] == ["o1"] and reads == ["L"]
+    reads.clear()
+    found["L"] = False
+    assert [c.id for c in await inv._owned_copies("c-eve", "Eve", "L")] == ["o1"] and reads == ["L", None]
+    await ctx.db.close()
