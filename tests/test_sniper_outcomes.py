@@ -628,3 +628,43 @@ async def test_antibot_alert_offers_a_manual_bid_and_stays_quiet_once_done(tmp_p
     sniper._antibot_remind()
     assert [t for _, t in notifier.sent if "toujours en attente" in t]
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bid_refused_after_done_alerts_again_and_reminders_resume(tmp_path):
+    """20/11 : « C'est fait » à 22:26, mise test refusée à 22:32, puis une heure sans mention. La mise refusée après
+    « C'est fait » envoie une nouvelle alerte, une seule, et les rappels de l'heure reprennent."""
+    from src.workers.auction_sniper import ANTIBOT_REMIND
+
+    refusal = (400, {"error": "Vérification anti-bot requise."})
+    market = {"a": sale("a", "14 octobre", 15)}
+    sniper, db, notifier = await start(tmp_path, market, [refusal, refusal, refusal])
+    await sniper.step()
+    assert sniper.blocked and sniper.verification_done()
+    market["b"] = sale("b", "15 octobre", 15)
+    await sniper.step()  # la mise test : encore refusée
+    assert notifier.sent.count(("CRITICAL", "Sniper : vérification anti-bot pas prise")) == 1
+    assert sniper._antibot_acknowledged is None
+    sniper._antibot_retry_at = datetime.now(UTC)
+    market["c"] = sale("c", "16 octobre", 15)
+    await sniper.step()
+    assert notifier.sent.count(("CRITICAL", "Sniper : vérification anti-bot pas prise")) == 1  # pas de 2e
+    sniper._antibot_remind_at = datetime.now(UTC) - ANTIBOT_REMIND
+    sniper._antibot_remind()
+    assert ("CRITICAL", "Sniper : vérification anti-bot toujours en attente") in notifier.sent
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_unquoted_wish_is_bid_up_to_its_own_cap(tmp_path):
+    """20/11 : 27 cartes souhaitées en vente ignorées faute de cote, dont la moitié entre 10 et 100 WB. Sans cote,
+    WISH_UNQUOTED_MAX_PRICE sert de plafond (au plus WISH_MAX_PRICE) ; au-dessus, pas de mise et un seul message."""
+    sniper, db, notifier = await start(tmp_path, {}, [], wish_max_price=5000, wish_unquoted_max_price=100)
+    cheap = Auction.model_validate(sale("cheap", "TrackMania Nations", 600, base=10))
+    dear = Auction.model_validate(sale("dear", "Clair Obscur", 600, base=3667))
+    assert await sniper._wish_cap(cheap) == 100
+    assert await sniper._wish_cap(dear) is None and await sniper._wish_cap(dear) is None
+    assert notifier.sent.count(("INFO", "Carte souhaitée sans cote")) == 1
+    sniper.settings.wish_unquoted_max_price = 0  # coupé : jamais de mise sans cote
+    assert await sniper._wish_cap(cheap) is None
+    await db.close()

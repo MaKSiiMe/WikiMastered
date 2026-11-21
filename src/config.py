@@ -169,6 +169,9 @@ class Settings(BaseSettings):
     # misée par le sniper jusqu'à sa cote dans la rareté en vente, au plus WISH_MAX_PRICE (0 = désactivé), dans toute
     # rareté plus haute que celle que tu possèdes. Gagnée, elle est gardée et reçoit WISH_TAG (vide = aucune).
     wish_max_price: int = 0
+    # Carte souhaitée sans cote dans la rareté en vente (jamais vue vendue) : misée jusqu'à N WB quand même, au plus
+    # WISH_MAX_PRICE (le 20/11, 27 ventes ignorées faute de cote, dont la moitié entre 10 et 100 WB). 0 = pas de mise.
+    wish_unquoted_max_price: int = 0
     wish_tag: str = "Souhait"
     wish_check_minutes: float = 10.0
     trade_check_minutes: float = 10.0
@@ -454,8 +457,10 @@ class Settings(BaseSettings):
             return json.loads(text)
         pairs = [re.split(r"[=:]", part, maxsplit=1) for part in text.split(",") if part.strip()]
         if any(len(pair) != 2 for pair in pairs):
-            example = "cotes=5,etiquettes=3" if info.field_name == "http_worker_spacing_seconds" else "elements=100"
-            raise ValueError(f"attendu nom=valeur séparés par des virgules (ex. {example}) : {text}")
+            example = {"http_worker_spacing_seconds": "cotes=5,etiquettes=3",
+                       "collection_set_quote_ratio": "pays=0.8"}.get(info.field_name or "", "elements=100")
+            raise ValueError(f"{(info.field_name or '').upper()} : attendu nom=valeur séparés par des virgules "
+                             f"(ex. {example}) : {text}")
         return {name.strip(): float(number) for name, number in pairs}
 
     @field_validator("position_step_minutes", mode="before")

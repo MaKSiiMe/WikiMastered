@@ -5,7 +5,8 @@ Les cartes que le bot y a mises pour les collections (COLLECTION_WISHLIST) ne co
 deviennent des cartes souhaitées (kv « wishes »), avec leur titre et la plus haute rareté que tu en possèdes déjà.
 
 Le sniper les mise comme une carte demandée sur Discord (/snipe), au minimum, jusqu'à la cote de la carte dans la rareté
-en vente et jamais au-dessus de WISH_MAX_PRICE. Sans cote connue : pas de mise. Il prend toute rareté plus haute que
+en vente et jamais au-dessus de WISH_MAX_PRICE. Sans cote connue : jusqu'à WISH_UNQUOTED_MAX_PRICE (0 = pas de mise).
+Il prend toute rareté plus haute que
 celle que tu possèdes : une carte obtenue en R peut encore être rachetée en SR, tant qu'elle reste dans ta liste.
 Une carte gagnée est gardée (pas revendue) et reçoit l'étiquette WISH_TAG. Le bot ne retire rien de ta liste : retire
 la carte toi-même pour arrêter.
@@ -183,7 +184,9 @@ async def overview_text(ctx: Context) -> str:
     if not cards:
         return ("Aucune carte souhaitée. Ajoute une carte à ta liste de souhaits sur le site : elle apparaît ici en "
                 f"{ctx.settings.wish_check_minutes:g} min au plus.")
-    lines = [f"Plafond : la cote de la carte, au plus **{cap} WB**.\n"]
+    unquoted = min(ctx.settings.wish_unquoted_max_price, cap)
+    blind = f" ; sans cote, **{unquoted} WB**" if unquoted > 0 else ""
+    lines = [f"Plafond : la cote de la carte, au plus **{cap} WB**{blind}.\n"]
     for cid, card in sorted(cards.items(), key=lambda kv: kv[1].get("title", "")):
         best = int(card.get("best", -1))
         have = f"tu as la {RARITIES[best]}" if best >= 0 else "pas encore possédée"
@@ -196,8 +199,10 @@ async def overview_text(ctx: Context) -> str:
             quote = quotes.get(rarity)
             if quote is not None and quote.average is not None:
                 caps.append(f"{rarity} ≤ {min(int(quote.average), cap)}")
+        none_yet = (f"aucune cote connue pour l'instant : mise jusqu'à {unquoted} WB" if unquoted > 0
+                    else "aucune cote connue pour l'instant : pas de mise")
         detail = " · ".join(caps) if caps else ("déjà en L : plus rien à acheter" if best >= len(RARITIES) - 1
-                                                else "aucune cote connue pour l'instant : pas de mise")
+                                                else none_yet)
         lines.append(f"• **{card.get('title', cid)}** ({have})\n{detail}")
     return "\n".join(lines)
 

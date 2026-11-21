@@ -108,6 +108,10 @@ ENDED_MAX_PAGES = 3
 # Nouvelles ventes : sans vente commune avec la lecture précédente, la page suivante est lue au passage d'après, jusqu'à
 # la retrouver ou jusqu'à la page RECENT_MAX_PAGES (18/11 chez un ami : plus de 50 UR en 30 s, ~280 trous en 4 h).
 RECENT_MAX_PAGES = 10
+# Une page recoupe aussi toute vente vue depuis RECENT_MEMORY, pas seulement la lecture précédente. Du 19 au 21/11 :
+# « plus de ~450 nouvelles ventes » environ une fois par heure, alors qu'il naît ~22 L par minute ; une page dans le
+# désordre (ventes plus anciennes) déclenchait 10 lectures et un trou qui n'en était pas un.
+RECENT_MEMORY = timedelta(minutes=30)
 # Valeur d'une mise (core/winmodel.py) : modèle refait toutes les N, d'après les mises réglées depuis.
 VALUE_MODEL_REFRESH = timedelta(hours=1)
 LOW_VALUE = "valeur de la mise trop faible"
@@ -456,6 +460,8 @@ class AuctionSniper(Worker):
         self._recent_page: dict[str, int] = {}
         self._sweep_ids: dict[str, set[str]] = {}
         self._sweep_started: dict[str, datetime] = {}
+        self._sweep_elapsed: dict[str, float | None] = {}  # délai depuis la lecture précédente, mesuré à la page 1
+        self._recent_seen: dict[str, dict[str, datetime]] = {}  # nouvelles ventes vues depuis RECENT_MEMORY
         self._catchup_reads = 0  # pages 2+ des nouvelles ventes lues depuis le dernier récap
         self._day_queue: list[str] = []
         self._upgrade_queue: list[str] = []
@@ -496,10 +502,8 @@ class AuctionSniper(Worker):
         self._antibot_retry_at = _EPOCH  # prochaine mise réelle permise tant que la vérification attend
         self._antibot_remind_at = _EPOCH  # prochain rappel d'alerte tant que la vérification attend
         self._antibot_missed = 0  # mises non placées depuis le début du blocage
-        # Vérification signalée faite (bouton, /verif-faite) : plus de rappel qui mentionne ; mise encore refusée
-        # depuis : son heure, montrée sur l'alerte sans nouvelle mention (bot Discord).
+        # Vérification signalée faite (bouton, /verif-faite) : pas de rappel tant que la mise test n'est pas refusée.
         self._antibot_acknowledged: datetime | None = None
-        self._antibot_refused_after_ack: datetime | None = None
         self._collection_since_check = 0  # mises réelles de collection depuis la dernière vérification
         self._bids_since_check = 0  # mises réelles acceptées depuis la dernière vérification (ou CHECK_QUOTA_BIDS)
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
@@ -709,10 +713,10 @@ class AuctionSniper(Worker):
             page = self._recent_page.pop(rarity, 1)
             if page == 1:
                 self._sweep_started[rarity] = now
-                elapsed = (now - previous).total_seconds() if previous else None
+                elapsed = self._sweep_elapsed[rarity] = (now - previous).total_seconds() if previous else None
             else:
                 self._catchup_reads += 1
-                elapsed = None
+                elapsed = self._sweep_elapsed.get(rarity)
             auctions, more = await self.api.market_page(sort="recent", rarity=rarity, limit=MARKET_LIMIT, page=page)
             done = self._check_gap(rarity, auctions, more, now, elapsed, page=page)
             await self._remember(auctions, now)  # ventes en cours : la concurrence d'une revente (_against_rivals)
@@ -808,13 +812,19 @@ class AuctionSniper(Worker):
 
     def _check_gap(self, rarity: str, auctions: list[Auction], more: bool, now: datetime,
                    elapsed: float | None = None, *, page: int = 1) -> bool:
-        """Nouvelles ventes lues jusqu'à retrouver une vente de la lecture précédente : True quand c'est fait (ou
+        """Nouvelles ventes lues jusqu'à retrouver une vente déjà vue (lecture précédente, ou depuis RECENT_MEMORY) :
+        True quand c'est fait (ou
         impossible), False s'il faut lire la page suivante. Arrivé à RECENT_MAX_PAGES sans la retrouver, des ventes ont
         été manquées : l'avertissement n'est écrit qu'une fois par heure ; le récap compte tous les trous."""
         ids = {a.id for a in auctions}
         sweep = (self._sweep_ids.pop(rarity, set()) if page > 1 else set()) | ids
-        previous = self._recent_ids.get(rarity)
-        caught_up = not previous or not more or not auctions or bool(ids & previous)
+        seen = self._recent_seen.setdefault(rarity, {})
+        for aid in [aid for aid, at in seen.items() if now - at > RECENT_MEMORY]:
+            del seen[aid]
+        known = (self._recent_ids.get(rarity) or set()) | seen.keys()
+        caught_up = not known or not more or not auctions or bool(ids & known)
+        for aid in ids:
+            seen[aid] = now
         if not caught_up and page < RECENT_MAX_PAGES:
             self._sweep_ids[rarity] = sweep
             return False
@@ -826,10 +836,13 @@ class AuctionSniper(Worker):
             self._gap_warned_at = now
             # Le délai réel dépasse souvent SNIPER_DISCOVERY_SECONDS : toutes les requêtes du bot se partagent
             # un créneau toutes les HTTP_MIN_SPACING_SECONDS, et relire une cible passe avant le repérage.
-            gap = f"{elapsed:.0f} s" if elapsed is not None else "?"
-            self.log.warning("repérage %s : plus de %d nouvelles ventes en %s entre deux lectures, certaines ont "
-                             "été manquées (visé : %s s ; avertissement suivant dans 1 h au plus tôt)", rarity,
-                             len(sweep), gap, f"{self.settings.sniper_discovery_seconds:g}")
+            gap = f"{elapsed:.0f} s" if elapsed is not None else "? (première lecture)"
+            started = self._sweep_started.get(rarity)
+            pages = f", {page} pages lues en {(now - started).total_seconds():.0f} s" if started else ""
+            self.log.warning("repérage %s : plus de %d nouvelles ventes en %s entre deux lectures%s, aucune vue depuis "
+                             "%d min : certaines ont été manquées (visé : %s s ; avertissement suivant dans 1 h au "
+                             "plus tôt)", rarity, len(sweep), gap, pages, RECENT_MEMORY.total_seconds() // 60,
+                             f"{self.settings.sniper_discovery_seconds:g}")
         return True
 
     async def _ingest(self, auctions: list[Auction], params: SnipeParams, now: datetime) -> None:
@@ -1002,24 +1015,29 @@ class AuctionSniper(Worker):
 
     async def _wish_cap(self, auction: Auction) -> int | None:
         """Plafond d'une carte souhaitée : sa cote dans cette rareté (sans requête : mise en cache par `_prepare`),
-        au plus WISH_MAX_PRICE. Sans cote : pas de mise, signalé une fois par carte et rareté."""
+        au plus WISH_MAX_PRICE. Sans cote : WISH_UNQUOTED_MAX_PRICE (au plus WISH_MAX_PRICE) ; mise minimale au-dessus,
+        ou ce réglage à 0 : pas de mise, signalé une fois par carte et rareté."""
         try:
             quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False)
         except (RateLimited, ApiError):
             quote = Quote(None, 0)
-        if quote.average is None:
-            seen = (auction.catalog_id, auction.rarity, auction.shiny)
-            if seen not in self._wish_unquoted:
-                self._wish_unquoted.add(seen)
-                label = f"{auction.title} ({auction.rarity}{' ✨' if auction.shiny else ''})"
-                self.log.info("carte souhaitée : %s en vente à %d WB, sans cote connue : pas de mise", label,
-                              auction.min_bid)
-                self.notifier.info("Carte souhaitée sans cote", f"{label} est en vente (mise minimale "
-                                   f"{auction.min_bid} WB), mais je n'ai aucune cote pour cette rareté : je ne mise "
-                                   "pas. /snipe la demande à ton prix.", topic=Topic.COLLECTION, important=True,
-                                   url=auction_url(self.settings.wm_base_url, auction.id))
-            return None
-        return min(math.floor(quote.average), self.settings.wish_max_price)
+        if quote.average is not None:
+            return min(math.floor(quote.average), self.settings.wish_max_price)
+        unquoted = min(self.settings.wish_unquoted_max_price, self.settings.wish_max_price)
+        if unquoted > 0 and auction.min_bid <= unquoted:
+            return unquoted
+        seen = (auction.catalog_id, auction.rarity, auction.shiny)
+        if seen not in self._wish_unquoted:
+            self._wish_unquoted.add(seen)
+            label = f"{auction.title} ({auction.rarity}{' ✨' if auction.shiny else ''})"
+            limit = f", au-dessus des {unquoted} WB permis sans cote" if unquoted > 0 else ""
+            self.log.info("carte souhaitée : %s en vente à %d WB, sans cote connue%s : pas de mise", label,
+                          auction.min_bid, limit)
+            self.notifier.info("Carte souhaitée sans cote", f"{label} est en vente (mise minimale "
+                               f"{auction.min_bid} WB{limit}), mais je n'ai aucune cote pour cette rareté : je ne "
+                               "mise pas. /snipe la demande à ton prix.", topic=Topic.COLLECTION, important=True,
+                               url=auction_url(self.settings.wm_base_url, auction.id))
+        return None
 
     def _collection_soon(self, params: SnipeParams, now: datetime) -> float | None:
         """Secondes avant qu'une carte de collection manquante entre dans sa fenêtre de mise (si ≤ la garde)."""
@@ -1514,7 +1532,7 @@ class AuctionSniper(Worker):
         if not self._antibot_since or now < self._antibot_remind_at:
             return
         self._antibot_remind_at = now + ANTIBOT_REMIND
-        if self._antibot_acknowledged:  # signalée faite : l'alerte affiche les refus suivants, sans mention
+        if self._antibot_acknowledged:  # signalée faite : la mise test dira si elle a pris (_antibot_not_taken)
             self.log.info("vérification toujours en attente malgré le signalement de %s : pas de rappel",
                           self._antibot_acknowledged.astimezone(timeutils.PARIS).strftime("%H:%M"))
             return
@@ -1526,6 +1544,21 @@ class AuctionSniper(Worker):
             f"{self._antibot_missed} mise(s) non placée(s) depuis. Fais la vérification dans ton navigateur "
             f"(mise à la main sur le marché, ou page Paquets) : les mises repartent dès qu'elle est faite."
             f"{self._manual_bid_hint()}", actions={"kind": "antibot"})
+
+    def _antibot_not_taken(self, label: str, amount: int) -> None:
+        """Mise refusée après « C'est fait » : la vérification n'a pas pris. Le 20/11, cliqué à 22:26, mise test
+        refusée à 22:32, puis une heure de blocage sans mention (13 mises refusées) : nouvelle alerte qui mentionne,
+        et les rappels de l'heure reprennent jusqu'au prochain « C'est fait »."""
+        since = self._antibot_acknowledged.astimezone(timeutils.PARIS) if self._antibot_acknowledged else None
+        self._antibot_acknowledged = None
+        self._antibot_remind_at = utcnow() + ANTIBOT_REMIND
+        self.log.info("vérification signalée faite à %s mais mise encore refusée : nouvelle alerte",
+                      f"{since:%H:%M}" if since else "?")
+        self.notifier.critical(
+            "Sniper : vérification anti-bot pas prise",
+            f"Mise encore refusée après ton « C'est fait »{f' de {since:%H:%M}' if since else ''} ({label} : "
+            f"{amount} WB). Refais la vérification dans ton navigateur (mise à la main sur le marché, ou page "
+            f"Paquets), puis reclique.{self._manual_bid_hint()}", actions={"kind": "antibot"})
 
     def _manual_bid_hint(self) -> str:
         """La mise à la main de la vérification, sur une vente que le bot vise : elle sert au lieu d'être perdue.
@@ -1554,11 +1587,6 @@ class AuctionSniper(Worker):
     def antibot_missed(self) -> int:
         return self._antibot_missed
 
-    @property
-    def antibot_refused_after_ack(self) -> datetime | None:
-        """Mise encore refusée après « C'est fait » (None : pas encore, ou rien de signalé)."""
-        return self._antibot_refused_after_ack
-
     def verification_done(self) -> bool:
         """Vérification faite dans le navigateur (/verif-faite) : la prochaine mise réelle part sans attendre
         SNIPER_ANTIBOT_RETRY_SECONDS. Acceptée, elle lève le blocage (« vérification levée ») ; refusée, l'attente
@@ -1566,7 +1594,7 @@ class AuctionSniper(Worker):
         if not self._antibot_since:
             return False
         self._antibot_retry_at = _EPOCH
-        self._antibot_acknowledged, self._antibot_refused_after_ack = utcnow(), None
+        self._antibot_acknowledged = utcnow()
         self.log.info("vérification signalée faite : la prochaine mise réelle la teste")
         return True
 
@@ -1661,7 +1689,7 @@ class AuctionSniper(Worker):
             self._balance, self._balance_at = confirmed.bidder_balance, utcnow()
             if self._antibot_since:
                 self._antibot_since, self._antibot_missed = None, 0
-                self._antibot_acknowledged = self._antibot_refused_after_ack = None
+                self._antibot_acknowledged = None
                 # Pas de message : sur Discord, l'alerte « vérification demandée » passe au vert (bot Discord).
                 self.log.info("vérification levée : les mises passent de nouveau")
             if decision.collection and live:
@@ -1685,11 +1713,12 @@ class AuctionSniper(Worker):
             self._antibot_missed += 1
             if self._antibot_since:
                 if self._antibot_acknowledged:
-                    self._antibot_refused_after_ack = utcnow()
-                self._antibot_remind()
+                    self._antibot_not_taken(label, decision.amount)
+                else:
+                    self._antibot_remind()
             else:
                 self._antibot_since = utcnow()
-                self._antibot_acknowledged = self._antibot_refused_after_ack = None
+                self._antibot_acknowledged = None
                 self._antibot_remind_at = self._antibot_since + ANTIBOT_REMIND
                 # La prochaine vérification ouvre un nouveau quota.
                 self._collection_since_check = self._bids_since_check = 0
