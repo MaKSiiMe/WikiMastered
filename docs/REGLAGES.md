@@ -143,6 +143,7 @@ ENABLE_TRADE_WATCH=true               # échanges proposés évalués sur Discor
 TRADE_CHECK_MINUTES=10
 TRADE_FAIR_MARGIN=0.1                 # équitable : chaque côté vaut au moins 90 % de l'autre
 WISH_MAX_PRICE=0                      # cartes de ta liste de souhaits achetées jusqu'à leur cote, au plus N WB ; 0 = désactivé
+WISH_UNQUOTED_MAX_PRICE=0             # carte souhaitée sans cote dans cette rareté : misée jusqu'à N WB quand même ; 0 = pas de mise
 WISH_TAG=Souhait                      # étiquette posée sur la carte obtenue (à créer une fois sur le site) ; vide = aucune
 WISH_CHECK_MINUTES=10                 # lecture de ta liste de souhaits
 ACHIEVEMENTS_TIME=22:50               # une fois par jour, avant le bilan de 23:00
@@ -159,6 +160,7 @@ STATS_MINUTES=15                      # relevé des passages et des requêtes (0
 **Exemples**
 - `TRADE_FAIR_MARGIN=0.1` : on te propose 900 WB de cartes contre 1000 WB des tiennes. 900 fait 90 % de 1000, donc l'échange est jugé équitable. À 850 contre 1000, il est jugé défavorable, et le bot propose une contre-offre sur Discord.
 - `WISH_MAX_PRICE=2000` : une carte de ta liste de souhaits estimée 1500 WB est achetée jusqu'à 1500 WB. Une carte estimée 3000 l'est jusqu'à 2000 WB au plus.
+- `WISH_UNQUOTED_MAX_PRICE=100` : une carte souhaitée jamais vue vendue dans cette rareté, en vente à 10 WB, est misée jusqu'à 100 WB. En vente à 600 WB, elle n'est pas misée et le bot te prévient.
 
 ## Estimation des prix
 

@@ -135,14 +135,38 @@ async def test_missed_new_sales_are_reported(tmp_path, caplog):
     # Sans recoupement, les pages suivantes sont lues jusqu'à RECENT_MAX_PAGES ; la dernière sans recoupement : trou.
     for n in range(1, RECENT_MAX_PAGES + 1):
         later = [Auction.model_validate(sale(f"b{n}-{i}", "T", "UR", 3600)) for i in range(50)]
-        assert sniper._check_gap("UR", later, True, now, page=n) == (n == RECENT_MAX_PAGES)
+        assert sniper._check_gap("UR", later, True, now, 12.0, page=n) == (n == RECENT_MAX_PAGES)
     assert sniper._gaps == 1
-    assert sniper._check_gap("UR", page, True, now, 95.0, page=RECENT_MAX_PAGES)  # 2e trou : pas de 2e avertissement
+    fresh = [Auction.model_validate(sale(f"c{i}", "T", "UR", 3600)) for i in range(50)]
+    assert sniper._check_gap("UR", fresh, True, now, 95.0, page=RECENT_MAX_PAGES)  # 2e trou : pas de 2e avertissement
     assert sniper._gaps == 2
     warned = [r.message for r in caplog.records if "certaines ont été manquées" in r.message]
     assert len(warned) == 1  # une fois par heure
-    assert "en ? entre deux lectures" in warned[0]
+    assert "en 12 s entre deux lectures" in warned[0]
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_new_sales_page_with_sales_seen_earlier_is_no_gap(tmp_path):
+    """19-21/11 : « plus de ~450 nouvelles ventes » une fois par heure, pour ~22 L nées par minute. Une page qui ne
+    recoupe pas la lecture précédente mais montre des ventes vues il y a moins de RECENT_MEMORY n'est pas un trou ;
+    au-delà, elles sont oubliées."""
+    from src.workers.auction_sniper import RECENT_MEMORY
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={"bidding": [], "balance": 0}))
+    ctx = await make_context(tmp_path, client, notifier)
+    sniper = AuctionSniper(ctx)
+    await sniper.setup()
+    now = datetime.now(UTC)
+    first = [Auction.model_validate(sale(f"a{i}", "T", "UR", 3600)) for i in range(50)]
+    second = [Auction.model_validate(sale(f"b{i}", "T", "UR", 3600)) for i in range(50)]
+    assert sniper._check_gap("UR", first, True, now)
+    assert sniper._check_gap("UR", second[:40] + first[:10], True, now)
+    assert sniper._check_gap("UR", first[20:30] + [Auction.model_validate(sale("z", "T", "UR", 3600))], True, now)
+    assert sniper._gaps == 0  # la lecture précédente (b…) n'y est pas, mais a20-a29 ont été vues
+    later = now + RECENT_MEMORY + timedelta(minutes=1)
+    assert not sniper._check_gap("UR", first[30:], True, later)  # vues il y a plus de 30 min : oubliées
+    await ctx.db.close()
 
 
 @pytest.mark.asyncio
