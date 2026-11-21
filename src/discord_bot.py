@@ -25,10 +25,10 @@ from types import ModuleType
 import discord
 from discord import app_commands
 
-from src import backup, pauses, snipes
+from src import backup, pauses, showcases, snipes
 from src.charts import number, profit_bars
 from src.core import colors, timeutils
-from src.core.client import ApiError
+from src.core.client import ApiError, server_message
 from src.core.stats import network_brief
 from src.core.timeutils import utcnow
 from src import friends
@@ -833,6 +833,71 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         embed.set_footer(text="Ajoute ou retire une carte dans ta liste de souhaits du site. /snipe pour un prix "
                               "choisi par toi.")
         await followup(interaction, embed=embed)
+
+    @tree.command(name="vitrines", description="Tes vitrines du profil : disposition et cartes")
+    async def vitrines(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        try:
+            text = showcases.overview(showcases.parse(await ctx.api.showcase()))
+        except ApiError as exc:
+            text = f"Vitrines illisibles : {exc}"
+        embed = discord.Embed(title="🏆 Vitrines", description=text[:4000], color=COLOR)
+        embed.set_footer(text="/vitrine pour en remplir une avec ton meilleur exemplaire de chaque carte.")
+        await followup(interaction, embed=embed)
+
+    @tree.command(name="vitrine", description="Remplir une vitrine avec ton meilleur exemplaire de chaque carte")
+    @app_commands.describe(numero="vitrine à remplir (1 à 10 ; une de plus tous les 5 000 exemplaires)",
+                           disposition="disposition de la vitrine", nom="nom affiché (vide : aucun)",
+                           cartes="titres exacts, dans l'ordre, séparés par des points-virgules",
+                           legendes="Ligne du temps : une date par carte, séparées par des points-virgules")
+    @app_commands.choices(disposition=[app_commands.Choice(name=f"{v.label} ({v.min}" + (f"-{v.max}" if v.max != v.min
+                                                                                           else "") + " cartes)", value=k)
+                                       for k, v in showcases.LAYOUTS.items()])
+    async def vitrine(interaction: discord.Interaction, numero: app_commands.Range[int, 1, 10],
+                      disposition: app_commands.Choice[str], cartes: str, nom: str = "",
+                      legendes: str = "") -> None:
+        titles, captions = showcases.split(cartes), showcases.split(legendes)
+        if problem := showcases.check(disposition.value, titles, captions):
+            await interaction.response.send_message(f"⚠️ {problem}", ephemeral=True)
+            return
+        await interaction.response.defer()
+        copies, missing = [], []
+        for title in titles:
+            if copy := await showcases.best_copy(ctx, title):
+                copies.append(copy)
+            else:
+                missing.append(title)
+        lines = [f"{i}. {c.title} ({c.rarity}{' ✨' if c.is_shiny else ''})" for i, c in enumerate(copies, 1)]
+        if missing:
+            embed = discord.Embed(title="⚠️ Cartes introuvables dans ta collection", color=ORANGE,
+                                  description="\n".join(f"• {t}" for t in missing)
+                                              + "\n\nVérifie le titre exact : rien n'est enregistré.")
+            await interaction.edit_original_response(embed=embed)
+            return
+        label = showcases.LAYOUTS[disposition.value].label
+        embed = discord.Embed(title=f"🏆 Vitrine {numero} : {nom or 'sans nom'} ({label}) ?", color=COLOR,
+                              description="\n".join(lines) + "\n\nElle remplace la vitrine actuelle de ce numéro.")
+        if not s.is_live("showcase_gallery"):
+            embed.description += "\nℹ️ Écritures simulées (DRY_RUN / SIMULATE) : rien ne sera enregistré."
+        view = Confirm(s.discord_owner_id)
+        await interaction.edit_original_response(embed=embed, view=view)
+        await view.wait()
+        if not view.value:
+            embed.title, embed.color = "Vitrine non modifiée", GREY
+            await interaction.edit_original_response(embed=embed, view=None)
+            return
+        try:
+            result = await ctx.api.save_gallery(numero - 1, disposition.value, nom.strip() or None,
+                                                [c.id for c in copies], [c or None for c in captions] or
+                                                [None] * len(copies))
+            ok, why = result.ok or result.dry_run, server_message(result.payload)
+        except ApiError as exc:
+            ok, why = False, str(exc)
+        log.info("Discord : vitrine %d (%s, %d cartes) %s", numero, disposition.value, len(copies),
+                 "enregistrée" if ok else f"refusée ({why})")
+        embed.title = f"🏆 Vitrine {numero} enregistrée" if ok else f"⚠️ Vitrine {numero} refusée : {why}"
+        embed.color = GREEN if ok else ORANGE
+        await interaction.edit_original_response(embed=embed, view=None)
 
     async def snipe_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         return [app_commands.Choice(name=sn.label[:100], value=sn.title[:100])

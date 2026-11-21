@@ -7,6 +7,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Any
 
 import httpx
 
@@ -33,6 +34,7 @@ class Context:
     pauses: dict[str, datetime | None] = field(default_factory=dict)
     last_backup: dict = field(default_factory=dict)  # dernière sauvegarde de la base (src/backup.py), pour /etat
     last_stats: dict = field(default_factory=dict)  # dernier relevé de stats_loop (src/main.py), pour /etat
+    realtime: Any = None  # temps réel du site (src/core/realtime.py, ENABLE_REALTIME), sinon None
 
 
 class Worker:

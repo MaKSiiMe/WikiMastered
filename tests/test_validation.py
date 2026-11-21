@@ -401,7 +401,7 @@ async def test_missing_copy_is_retried_slowly_then_closed(tmp_path):
     await inv.setup()
     await inv.manage_positions()
     await inv.manage_positions()  # pas de nouvelle lecture avant POSITION_COPY_RETRY
-    assert len(reads) == 2  # recherche par titre, puis derniers exemplaires obtenus
+    assert len(reads) == 3  # recherche par titre (rareté achetée, puis toutes), puis derniers exemplaires obtenus
     for _ in range(im.POSITION_MAX_COPY_MISSES - 1):
         inv._copy_retry[bid] = (inv._copy_retry[bid][0], datetime.now(UTC))  # délai écoulé
         await inv.manage_positions()

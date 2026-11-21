@@ -39,13 +39,14 @@ from src import keeps, orders
 from src.account import store_collection
 from src.config import RARITY_RANK, Settings
 from src.core.api import COLLECTION_PAGE_SIZE
-from src.core.client import ApiError, RateLimited, UncertainMutation
+from src.core.client import ApiError, RateLimited, UncertainMutation, server_message
 from src.core.database import MANUAL_SALE_REASON
 from src.core.models import Auction, DiscardResult, MyBids, OwnedCard, parse_items
 from src.core.notifier import Thread, Topic, auction_url, position_thread
 from src.core.pricing import ANY, Quote
 from src.core.text import tag_key
 from src.core.timeutils import local_dt, now_local, random_in_window, utcnow
+from src.workers.settle import nudge_settle
 from src.workers.base import Context, Worker
 
 INVENTORY_PRICE_MAX_AGE = timedelta(days=3)  # la cote d'un doublon bouge peu
@@ -91,6 +92,8 @@ MANUAL_SETTLE = timedelta(minutes=10)
 # retrouver, dès qu'une nouvelle carte étiquetée apparaît, sinon au plus à cet intervalle (carte qui attend la vente
 # d'un autre exemplaire, ou sans cote).
 MANUAL_TAGGED_RETRY = timedelta(minutes=30)
+REPRICE_MIN_LEFT = timedelta(minutes=10)  # POSITION_REPRICE : plus de baisse si la vente finit avant
+REPRICE_PER_PASS = 3
 # Positions que le bot renonce à vendre, dont l'étiquette POSITION_UNSOLD_TAG reste à poser : position -> essais.
 # L'exemplaire invendu revient dans la collection sous un nouvel identifiant, parfois une minute après la fin.
 UNSOLD_TAG_KV = "unsold_to_tag"
@@ -475,6 +478,7 @@ class InventoryManager(Worker):
         await self.reconcile_listings()
         await self.manage_positions()
         await self.post_due_listings()
+        await self.reprice_listings()
         await self.settle_listings()
         s = self.settings
         now = utcnow()
@@ -856,7 +860,7 @@ class InventoryManager(Worker):
         de le vendre : le 16/10, Place publique refusée 3 fois « en favori »). STARRED : tu as mis l'exemplaire
         acheté en favori, tu le gardes. Un favori plus ancien que l'achat ne dit rien : l'exemplaire acheté n'est
         pas encore arrivé, il est recherché de nouveau."""
-        copies = same_copies(await self._owned_copies(row["card_id"], row["title"]), row["rarity"],
+        copies = same_copies(await self._owned_copies(row["card_id"], row["title"], row["rarity"]), row["rarity"],
                              bool(row["is_shiny"]))
         since = datetime.fromisoformat(row["placed_at"]) - timedelta(minutes=1)
         if copies and all(c.starred for c in copies):
@@ -886,7 +890,7 @@ class InventoryManager(Worker):
     def _protected_tags(self) -> set[str]:
         return self.settings.protected_tag_keys
 
-    async def _owned_copies(self, card_id: str, title: str) -> list[OwnedCard]:
+    async def _owned_copies(self, card_id: str, title: str, rarity: str | None = None) -> list[OwnedCard]:
         """Exemplaires de cette carte pas déjà en vente : recherchés par titre sur toutes les pages, sinon parmi les
         derniers obtenus. Le 18/10, 5G (L, achetée 443) restait introuvable 2 h par la seule 1re page de « q=5G »,
         et la revente était abandonnée."""
@@ -895,12 +899,15 @@ class InventoryManager(Worker):
         def mine(page) -> list[OwnedCard]:
             return [r for r in page.rows() if r.catalog_id == card_id and r.id not in taken]
 
-        for number in range(COPY_SEARCH_PAGES):
-            page = await self.api.collection_page(number, sort="rarity", q=title)
-            if copies := mine(page):
-                return copies
-            if len(page.collection) < COLLECTION_PAGE_SIZE:
-                break
+        # D'abord la seule rareté achetée (rarity=…, relevé du 21/11) : moins de pages pour une carte très possédée ;
+        # rien trouvé (filtre sur une autre rareté que celle de l'exemplaire ?) : toutes les raretés.
+        for only in ([rarity, ""] if rarity else [""]):
+            for number in range(COPY_SEARCH_PAGES):
+                page = await self.api.collection_page(number, sort="rarity", q=title, rarity=only)
+                if copies := mine(page):
+                    return copies
+                if len(page.collection) < COLLECTION_PAGE_SIZE:
+                    break
         return mine(await self.api.collection_page(0, sort="added"))
 
     async def warn_stale_positions(self) -> int:
@@ -1061,7 +1068,7 @@ class InventoryManager(Worker):
                     # solaires et Les Feux de l'amour, refusées 2 fois en 5 min, étaient retrouvées 30 s après.
                     try:
                         bid = await self.db.get_bid(row["bid_id"])
-                        copy = newest_sellable(same_copies(await self._owned_copies(row["card_id"], row["title"]),
+                        copy = newest_sellable(same_copies(await self._owned_copies(row["card_id"], row["title"], row["rarity"]),
                                                            row["rarity"], bool(bid and bid["is_shiny"])),
                                                self._protected_tags())
                     except ApiError:
@@ -1189,6 +1196,51 @@ class InventoryManager(Worker):
                                      target_end=target)
         self.log.info("ventes pleines : %s reportée, fin visée %s", row["title"], f"{target:%d/%m %H:%M}")
 
+    async def reprice_listings(self) -> int:
+        """POSITION_REPRICE : revente sans aucune mise à la moitié de sa durée, mise de départ baissée une fois sur
+        place (× POSITION_RELIST_DISCOUNT, jamais sous le plancher). Le site le permet une seule fois par vente
+        (« Baisser le prix » de la fiche, relevé du 21/11). Avant, elle attendait la fin pour repartir à -5 %.
+        Renvoie le nombre de ventes baissées."""
+        s = self.settings
+        if not s.position_reprice:
+            return 0
+        done = 0
+        for row in (await self.db.listings_to_reprice(utcnow(), REPRICE_MIN_LEFT))[:REPRICE_PER_PASS]:
+            bid = await self.db.get_bid(row["bid_id"])
+            try:
+                auction = await self.api.auction(row["auction_id"])
+            except ApiError as exc:
+                self.log.debug("%s : vente illisible pour la baisser (%s)", row["title"], exc)
+                continue
+            await self.db.update_listing(row["id"], repriced_at=utcnow())  # une seule tentative par vente
+            if bid is None or bid["closed"] or auction.status != "active" or auction.current_bid is not None \
+                    or auction.current_bidder_id or (auction.model_extra or {}).get("base_repriced_at"):
+                continue
+            floor = position_floor(bid["amount"], unsold_steps(await self.db.unsold_durations(bid["id"]),
+                                                               s.position_step_minutes), s)
+            price = max(floor, round(auction.base_amount * s.position_relist_discount))
+            label = f"{row['title']} ({row['rarity']})"
+            if price >= auction.base_amount:
+                continue
+            try:
+                result = await self.api.reprice(row["auction_id"], price)
+            except ApiError as exc:
+                self.log.info("%s : baisse à %d WB refusée (%s)", label, price, exc)
+                continue
+            if result.dry_run:
+                continue
+            if not result.ok:
+                self.log.info("%s : baisse à %d WB refusée (%s)", label, price, server_message(result.payload))
+                continue
+            await self.db.update_listing(row["id"], base_amount=price)
+            done += 1
+            self.log.info("%s sans mise à mi-parcours : départ baissé de %d à %d WB", label, auction.base_amount, price)
+            self.notifier.info("Revente baissée", f"{label} : aucune mise à mi-parcours, départ baissé de "
+                               f"{auction.base_amount} à {price} WB (achetée {bid['amount']}).",
+                               thread=position_thread(bid, f"↘️ sans mise à mi-parcours : {auction.base_amount} → "
+                                                           f"{price} WB"))
+        return done
+
     # ------------------------------------------------------------- résultats
     async def settle_listings(self) -> None:
         for row in await self.db.listings_to_settle(utcnow() - timedelta(minutes=2)):
@@ -1218,6 +1270,8 @@ class InventoryManager(Worker):
                 continue
             auction = await self.api.auction(row["auction_id"])
             if auction.status == "active":
+                if row["status"] == "posted":
+                    await nudge_settle(self, auction)
                 await self.db.update_listing(row["id"], target_end=auction.end_at)  # prolongée
                 continue
             if auction.status == "settled_sold":
@@ -1356,7 +1410,7 @@ class InventoryManager(Worker):
             copy = None
             if bid is not None and tag_id is not None:
                 with contextlib.suppress(ApiError):
-                    copy = newest_sellable(same_copies(await self._owned_copies(bid["card_id"], bid["title"]),
+                    copy = newest_sellable(same_copies(await self._owned_copies(bid["card_id"], bid["title"], bid["rarity"]),
                                                        bid["rarity"], bool(bid["is_shiny"])), set())
             posted = False
             if copy:
@@ -1387,7 +1441,7 @@ class InventoryManager(Worker):
         if bid["dry_run"] or row["owned_card_id"].startswith("sim-"):
             return row["owned_card_id"]
         try:
-            copies = same_copies(await self._owned_copies(row["card_id"], row["title"]), row["rarity"],
+            copies = same_copies(await self._owned_copies(row["card_id"], row["title"], row["rarity"]), row["rarity"],
                                  bool(bid["is_shiny"]))
         except ApiError as exc:
             self.log.debug("%s : collection illisible (%s), ancien exemplaire gardé", row["title"], exc)

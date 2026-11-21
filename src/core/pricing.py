@@ -8,6 +8,9 @@ Sources, de la plus fiable à la moins fiable :
 2. Historique du site /api/marketplace/cards/{id}/sales [WP market.js] — refusé (403)
    aux comptes non PRO, donc rarement disponible.
 3. Moyenne ?scope=summary [KZ bridge/prices.js], sans nombre de ventes hors PRO.
+4. Historique des prix /api/marketplace/cards/{id}/price-history (relevé du 21/11) : moyennes par semaine et par
+   rareté. Seulement en secours, pour une carte gardée (souhaitée, de collection) sans autre cote : voir
+   `history_quote`.
 
 Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence ; × PRICE_SITE_MARGIN :
 la moyenne du site suit une hausse avec retard, voir `combine`), sauf pour un
@@ -43,6 +46,10 @@ log = logging.getLogger(__name__)
 
 ANY = "*"
 OUTLIER_FACTOR = 3.0
+HISTORY_WEEKS = 4  # semaines avec ventes retenues pour la cote de l'historique (les plus récentes)
+HISTORY_TTL = timedelta(hours=6)
+HISTORY_OFF = timedelta(hours=1)  # route refusée (compte, panne) : plus essayée pendant ce temps
+HISTORY_CACHE_MAX = 500
 _EPOCH = datetime.min.replace(tzinfo=UTC)
 
 
@@ -115,6 +122,27 @@ def combine(observed: list[int], n_observed: int, site_average: float | None,
     return Quote(site_average, 0)
 
 
+def history_quotes(data: dict) -> dict[str, Quote]:
+    """Cote par rareté tirée de l'historique des prix du site : moyenne des HISTORY_WEEKS dernières semaines avec
+    des ventes, pondérée par leur nombre (le site affiche la moyenne de la dernière semaine). Format relevé le 21/11
+    dans son code : {by_rarity: {"<rareté>": {weekly: [{start, avg, min, max, count}]}}}. Inattendu : aucune cote."""
+    quotes: dict[str, Quote] = {}
+    by_rarity = data.get("by_rarity") if isinstance(data, dict) else None
+    if not isinstance(by_rarity, dict):
+        return quotes
+    for rarity, series in by_rarity.items():
+        weekly = series.get("weekly") if isinstance(series, dict) else None
+        if rarity not in RARITIES or not isinstance(weekly, list):
+            continue
+        points = sorted((p for p in weekly if isinstance(p, dict) and isinstance(p.get("avg"), int | float)
+                         and isinstance(p.get("count"), int) and p["count"] > 0 and p["avg"] > 0),
+                        key=lambda p: str(p.get("start", "")))[-HISTORY_WEEKS:]
+        total = sum(p["count"] for p in points)
+        if total:
+            quotes[rarity] = Quote(sum(p["avg"] * p["count"] for p in points) / total, total)
+    return quotes
+
+
 def advised_bid(resale: float, fee: float) -> tuple[int, float]:
     """Mise conseillée pour revendre une carte (`deterrent_bid` : qui surenchérit paie plus que la revente) et bénéfice
     si elle gagne à ce prix (commandes /top et /prix)."""
@@ -143,6 +171,8 @@ class PriceService:
         self.recent_n = recent_n
         self.site_margin = site_margin  # le plafond de l'estimation est la moyenne du site × cette marge
         self.pro = False  # compte PRO, d'après la dernière cote lue (isPro)
+        self._history: dict[str, tuple[datetime, dict[str, Quote]]] = {}  # historique du site, par carte
+        self._history_off_until = _EPOCH
 
     async def _fetch(self, card_id: str, wait: bool,
                      background: bool = False) -> dict[str, tuple[float | None, int | None]]:
@@ -224,6 +254,37 @@ class PriceService:
     async def is_cached(self, card_id: str) -> bool:
         cached = await self.db.price_get(card_id)
         return bool(cached and utcnow() - cached[0] <= self.default_ttl)
+
+    async def history_quote(self, card_id: str, rarity: str | None, *, shiny: bool = False, fetch: bool = True,
+                            wait: bool = False) -> Quote | None:
+        """Cote de secours d'après l'historique des prix du site (`history_quotes`), pour une carte gardée sans autre
+        cote : le 20/11, 27 cartes souhaitées en vente ignorées faute de cote. Jamais pour un shiny (l'historique ne
+        les distingue pas). Gardée HISTORY_TTL ; `fetch=False` : sans requête. Route refusée : coupée HISTORY_OFF."""
+        if shiny or not rarity:
+            return None
+        now = utcnow()
+        cached = self._history.get(card_id)
+        if cached and now - cached[0] <= HISTORY_TTL:
+            return cached[1].get(rarity)
+        if not fetch or now < self._history_off_until:
+            return None
+        try:
+            data = await self.api.price_history(card_id, wait=wait)
+        except RateLimited:
+            return None
+        except ApiError as exc:
+            if exc.status in (401, 403, 404):
+                self._history_off_until = now + HISTORY_OFF
+                log.info("historique des prix refusé (HTTP %s) : plus essayé pendant %d min", exc.status,
+                         HISTORY_OFF.seconds // 60)
+            return None
+        quotes = history_quotes(data)
+        if len(self._history) >= HISTORY_CACHE_MAX:
+            self._history = {k: v for k, v in self._history.items() if now - v[0] <= HISTORY_TTL}
+        self._history[card_id] = (now, quotes)
+        log.debug("historique des prix de %s : %s", card_id,
+                  ", ".join(f"{r} {q.average:.0f} ({q.count})" for r, q in quotes.items()) or "aucune vente")
+        return quotes.get(rarity)
 
     async def quote(self, card_id: str, rarity: str | None, *, max_age: timedelta | None = None,
                     wait: bool = True, shiny: bool = False, fetch: bool = True) -> Quote:
