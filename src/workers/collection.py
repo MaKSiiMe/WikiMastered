@@ -73,7 +73,9 @@ def collection_key(title: str) -> str:
     return re.sub(r"^1er\b", "1", normalize_title(title))
 
 
-SET_ALIASES = {"jour": "jours", "dates": "jours", "date": "jours", "days": "jours", "calendrier": "jours", "gif": "gifs"}
+SET_ALIASES = {"jour": "jours", "dates": "jours", "date": "jours", "days": "jours", "calendrier": "jours", "gif": "gifs",
+               # 21/11 : COLLECTION_SETS=jours,element,pays laissait les éléments de côté (« ensemble inconnu »).
+               "element": "elements", "country": "pays", "countries": "pays"}
 
 
 @dataclass(frozen=True)

@@ -793,3 +793,13 @@ async def test_quoted_collection_is_bid_below_its_quote_and_never_resold(tmp_pat
     assert sniper._outcomes["it"] == "collection : sans cote, pas de mise"
     assert {a.id: cap for a, cap, _ in sniper.watched()}.get("it", None) is None
     await db.close()
+
+
+def test_collection_names_accept_singular_and_accents():
+    """21/11 : COLLECTION_SETS=jours,element,pays donnait « ensemble inconnu » et laissait les éléments de côté."""
+    from src.config import Settings
+    from src.workers.collection import collections
+
+    active, unknown = collections(Settings(_env_file=None, collection_sets=["jours", "Élément", "countries", "gif"]))
+    assert set(active) == {"jours", "elements", "pays", "gifs"} and unknown == []
+    assert collections(Settings(_env_file=None, collection_sets=["planetes"]))[1] == ["planetes"]
