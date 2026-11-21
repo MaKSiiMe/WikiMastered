@@ -18,6 +18,7 @@
 #                ne retire pas un thème trouvé par la description ou le métier (une personne les cumule)
 #   seul         seulement si la carte n'a aucun autre thème
 #   retirer      retiré d'une carte qui n'a plus ce thème, une fois un autre de ses thèmes posé
+#   emoji, couleur  pour créer l'étiquette sur le site (/etiquettes creer) ; sans effet sur une étiquette existante
 # Modifier natures, taxons ou metiers fait relire Wikidata pour toutes les cartes au passage suivant.
 
 themes:
@@ -354,6 +355,8 @@ themes:
 
   # Pages sans sujet propre, qui restaient sans thème (relevé du 21/11 : ~1 400 cartes).
   Année:
+    emoji: "🗓️"
+    couleur: "#94a3b8"
     natures:
       - Q577       # année (« 1194 »)
       - Q29964144  # année avant Jésus-Christ
@@ -363,46 +366,69 @@ themes:
       - Q39911     # décennie
 
   Liste:
+    emoji: "📋"
+    couleur: "#a1a1aa"
     natures: [Q13406463]  # page de liste de Wikimédia (discographies, bibliographies…)
     sauf: [Année]  # un article chronologique est aussi une liste
 
   Nom:
+    emoji: "🏷️"
+    couleur: "#c4b5fd"
     natures:
       - Q101352    # nom de famille
       - Q202444    # prénom
       - Q8436      # famille (« Famille Barberini », maisons nobles)
 
   Homonymie:
+    emoji: "🔀"
+    couleur: "#9ca3af"
     natures: [Q4167410]  # page d'homonymie de Wikimédia
 
   # Sous-thèmes, en plus du thème large (un film garde « Cinéma / Série ») : des familles de cartes assez grandes pour
   # les échanges.
   Football:
+    emoji: "⚽"
+    couleur: "#22c55e"
     natures:
       - Q476028    # club de football
       - Q26887310  # saison d'une équipe de football
     description: [footballeu]  # footballeur, footballeuse (pas « joueur de football américain »)
 
   Film:
+    emoji: "🎬"
+    couleur: "#f87171"
     natures: [Q11424]  # film (téléfilms, courts métrages, films d'animation compris)
 
   Plante:
+    emoji: "🌿"
+    couleur: "#4ade80"
     taxons: [Q756]  # plantes
 
   Insecte / Araignée:
+    emoji: "🕷️"
+    couleur: "#a3e635"
     taxons: [Q1360]  # arthropodes : insectes, araignées, scorpions, mille-pattes, crustacés
 
   Royauté / Noblesse:
+    emoji: "👑"
+    couleur: "#fbbf24"
     description: [roi, reine, empereur, impératrice, pharaon, prince, monarque, sultan, tsar, souverain, régent,
                   calife, khan, shah, duc, duchesse, archiduc, comte, vicomte, marquis, baron, noble, aristocrate,
                   seigneur, landgrave, margrave]
 
   Personnage de fiction:
+    emoji: "🦸"
+    couleur: "#f472b6"
     natures:
       - Q95074     # personnage de fiction
       - Q4271324   # personnage mythologique
 
 # Babie : posée à la main sur le site, le bot ne la pose pas (et n'enlève jamais un thème).
+
+# Émoji et couleur des étiquettes qui ne sont pas des thèmes, pour /etiquettes creer (les thèmes ont `emoji` et
+# `couleur` dans leur règle). Sans couleur : celle de la palette de l'extension.
+autres:
+  Vitrine: {emoji: "🏛️", couleur: "#60a5fa"}
 
 # Corrections à la main, prioritaires sur Wikidata : titre exact de la carte -> ses thèmes (remplacent ceux trouvés ;
 # [] : aucun thème).
