@@ -26,7 +26,9 @@ RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
 WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "sniper": ("place_bid",),            # mises des positions (achat pour revendre)
     "collection": ("collection_bid",),   # mises du mode collection (cartes gardées)
-    "ventes": ("create_listing",), "inventory": ("create_listing", "bulk_discard"),
+    "ventes": ("create_listing", "reprice_listing"), "inventory": ("create_listing", "reprice_listing", "bulk_discard"),
+    "reglements": ("settle_auction",),   # enchères finies que le site tarde à régler
+    "vitrines": ("showcase_gallery",),   # vitrines du profil (/vitrine)
     "defausse": ("bulk_discard",), "tags": ("tag_card",), "themes": ("theme_tag",),
     "succes": ("achievements_check", "claim_achievement"),
     "souhaits": ("wishlist_write", "mark_notifications_read"),     # liste de souhaits du site, pour les cartes de collection manquantes
@@ -172,6 +174,10 @@ class Settings(BaseSettings):
     # Carte souhaitée sans cote dans la rareté en vente (jamais vue vendue) : misée jusqu'à N WB quand même, au plus
     # WISH_MAX_PRICE (le 20/11, 27 ventes ignorées faute de cote, dont la moitié entre 10 et 100 WB). 0 = pas de mise.
     wish_unquoted_max_price: int = 0
+    # Carte gardée (souhaitée, collection misée à la cote) sans cote dans la rareté en vente : cote de secours tirée de
+    # l'historique des prix du site (moyenne des 4 dernières semaines avec des ventes). Une requête par carte, à
+    # l'avance, gardée 6 h.
+    price_history_fallback: bool = True
     wish_tag: str = "Souhait"
     wish_check_minutes: float = 10.0
     trade_check_minutes: float = 10.0
@@ -296,6 +302,13 @@ class Settings(BaseSettings):
     # 0 = une étape par vente sans acheteur ; vide = 360.
     position_step_minutes: int = 360
     position_relist_discount: float = 0.95 # étape franchie : remise en vente à prix × cette valeur
+    # Revente sans aucune mise à mi-parcours : mise de départ baissée une fois de POSITION_RELIST_DISCOUNT sur place
+    # (jamais sous le plancher), au lieu d'attendre la fin pour la remettre en vente. Le site ne le permet qu'une fois
+    # par vente, sans mise, après la moitié de la durée (relevé du 21/11).
+    position_reprice: bool = False
+    # Enchère finie depuis plus d'une minute mais pas encore réglée par le site (« Finalisation… ») : le bot la
+    # finalise lui-même, comme le lien de la fiche, une fois (sa mise en tête, ou sa vente). Écritures : « reglements ».
+    settle_stuck_auctions: bool = True
     position_max_relists: int = 3         # puis au prix d'achat, tant qu'une place de vente est libre
     # Après POSITION_LOSS_AFTER étapes sans acheteur, la revente peut descendre jusqu'à POSITION_MAX_LOSS
     # sous le prix d'achat : une carte qui ne part pas bloque une des 5 places (~900 WB par revente qui tourne) et son

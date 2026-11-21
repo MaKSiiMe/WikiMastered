@@ -29,8 +29,8 @@ endpoints:
   collection_page:              # [WR api.js, KZ bridge/collection.js] page de 50 exemplaires, page>=0
     method: GET                 # -> { collection: [ { id, card_id, card{...}, is_shiny, starred,
     path: /api/my-collection    #       snapshot_rarity, user_id, tags } ], total? }
-    params: {sort: "{sort}", page: "{page}", stats: "0", q: "{q}"}
-    defaults: {sort: added, q: ""}
+    params: {sort: "{sort}", page: "{page}", stats: "0", q: "{q}", rarity: "{rarity}"}
+    defaults: {sort: added, q: "", rarity: ""}  # rarity : une rareté ou une liste (paramètre répété, relevé du 21/11)
 
   collection_tagged:            # mes exemplaires qui portent une étiquette (URL relevée le 21/11 sur le site), page>=0
     method: GET
@@ -59,7 +59,8 @@ endpoints:
     params: {sort: "{sort}"}
     defaults: {sort: added}
 
-  market_page:                  # [WR market-api.js] page>=1, sort: ending_soon | recent ; rarity=UR (relevé
+  market_page:                  # [WR market-api.js] page>=1, sort: ending_soon | recent | price_asc | price_desc ;
+                                #   rarity=UR, ou une liste (paramètre répété : rarity=L&rarity=UR, relevé du 21/11) (relevé
     method: GET                 #   du 15/10/2026, limit 50 max) -> { auctions: [ {id, card{...}, seller_id,
     path: /api/marketplace      #   status, end_at, base_amount, current_bid, current_bidder_id} ], hasMore }
     params: {page: "{page}", limit: "{limit}", sort: "{sort}", q: "{q}", rarity: "{rarity}"}
@@ -77,6 +78,29 @@ endpoints:
   sales_history:                # [WP market.js] historique public des ventes d'une carte
     method: GET                 # -> { recent: [ {final_price, ...} ], sales: [ ... ] }
     path: /api/marketplace/cards/{card_id}/sales
+
+  price_history:                # historique des prix d'une carte (fiche de la carte, relevé du 21/11)
+    method: GET                 # -> { computed_at, by_rarity: { "<rareté>": { weekly: [ {start, avg, min, max,
+    path: /api/marketplace/cards/{card_id}/price-history   # count} ] } } }
+
+  reprice_listing:              # baisse la mise de départ d'une de mes ventes (relevé du 21/11) : une seule fois, sans
+    method: POST                #   mise, après la moitié de la durée, montant < départ -> 200 ou { error }
+    path: /api/marketplace/{auction_id}/reprice
+    json: {new_base_amount: "{amount}"}
+
+  settle_auction:               # finalise une enchère finie mais pas encore réglée (« Finalisation… » sur la fiche,
+    method: POST                #   relevé du 21/11)
+    path: /api/marketplace/{auction_id}/settle
+
+  showcase:                     # mes vitrines (relevé du 21/11) -> { galleries: [ {gallery_index, name, layout} ],
+    method: GET                 #   showcase: [ {position, gallery_index, caption, user_card: {id, card{...}, ...}} ] }
+    path: /api/showcase
+
+  showcase_gallery:             # enregistre une vitrine (relevé du 21/11)
+    method: PUT
+    path: /api/showcase/gallery
+    json: {gallery_index: "{gallery_index}", layout: "{layout}", name: "{name}", user_card_ids: "{user_card_ids}",
+           captions: "{captions}"}
 
   my_listings:                  # [KZ bridge/marketplace.js] -> { sellingCount, maxConcurrentAuctions }
     method: GET                 #   (relevé réel du 14/10/2026 : 5 ventes simultanées max)

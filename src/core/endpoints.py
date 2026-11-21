@@ -41,7 +41,7 @@ class BuiltRequest:
     name: str
     method: str
     url: str
-    params: dict[str, str]
+    params: dict[str, str | list[str]]
     json: Any
     headers: dict[str, str]
     is_mutation: bool
@@ -124,12 +124,13 @@ class Endpoints:
         merged = {**ep.defaults, **values}
         path = _render_str(ep.path, merged, encode=True)
         url = path if path.startswith(("http://", "https://")) else f"{self.base_url}{path}"
-        params: dict[str, str] = {}
+        params: dict[str, str | list[str]] = {}
         for key, template in ep.params.items():
             rendered = render_value(template, merged)
-            if rendered is None or rendered == "":
+            if rendered is None or rendered == "" or rendered == []:
                 continue
-            params[key] = str(rendered)
+            # Liste : paramètre répété (rarity=L&rarity=UR), comme le site.
+            params[key] = [str(v) for v in rendered] if isinstance(rendered, list | tuple) else str(rendered)
         body = render_value(ep.json, merged) if ep.json is not None else None
         headers = {k: _render_str(v, merged, encode=False) for k, v in ep.headers.items()}
         return BuiltRequest(name, ep.method, url, params, body, headers, ep.is_mutation)

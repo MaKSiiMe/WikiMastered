@@ -175,6 +175,7 @@ SNIPER_SHINY_MIN_SALES=8              # … pour un shiny, estimé sur ses seule
 SNIPER_MIN_CONTESTED_SALES=4          # parmi elles, ventes disputées (plus d'une mise) minimum pour acheter
 SNIPER_MAX_PRICE_SPREAD=1.5           # et la plus haute ≤ 1,5 × la plus basse (0 = sans limite)
 PRICE_CACHE_TTL_MINUTES=180            # cache de la moyenne du site (route limitée)
+PRICE_HISTORY_FALLBACK=true           # carte souhaitée ou de collection sans cote : cote tirée de l'historique des prix du site
 ```
 
 **Exemple** : les 5 dernières ventes observées d'une carte UR sont 700, 800, 820, 900 et 950 WB, dont 4 disputées (plus d'une mise).
@@ -213,6 +214,8 @@ POSITION_LIST_LONG_BELOW=0            # 0 = toujours POSITION_LIST_DURATION_MINU
 POSITION_AVOID_END_HOURS=11,12,13,18,19,20,21,22  # heures de fin évitées par la revente de 12 h : 6 h si elle finit hors de ces heures (6 h jamais allongée)
 POSITION_STEP_MINUTES=360             # une étape toutes les 6 h en vente sans acheteur (0 = une par vente)
 POSITION_RELIST_DISCOUNT=0.95         # étape franchie : remise en vente à -5 % (même prix entre deux étapes)
+POSITION_REPRICE=false                # aucune mise à mi-parcours : départ baissé une fois sur place, de ce même pourcentage
+SETTLE_STUCK_AUCTIONS=true            # enchère finie depuis 1 min mais pas encore réglée par le site : finalisée par le bot
 POSITION_MAX_RELISTS=3                # puis au prix d'achat tant qu'une place est libre
 POSITION_MAX_LOSS=0                   # après POSITION_LOSS_AFTER étapes : jusqu'à cette part sous le prix d'achat (0 = non)
 POSITION_LOSS_AFTER=2
@@ -296,6 +299,7 @@ La carte est mise en vente à **375 WB pour 6 h** (`POSITION_LIST_DURATION_MINUT
 
 **6. Personne n'achète.** Sans acheteur, la carte avance d'une étape toutes les 6 h en vente (`POSITION_STEP_MINUTES`).
 - **Étapes 1 à 3 :** la carte est remise en vente 5 % moins cher à chaque fois (`POSITION_RELIST_DISCOUNT`, `POSITION_MAX_RELISTS=3`) : 375 → 356 → 338 → 321.
+- **Baisse à mi-parcours :** avec `POSITION_REPRICE=true`, une vente à 375 sans aucune mise au bout de 3 h (sur 6 h) passe à 356 sur place, sans attendre la fin. Le site ne permet qu'une baisse par vente.
 - **Ensuite :** elle est remise en vente au prix d'achat + 1 (241) tant qu'une place de vente est libre. Si les 5 places sont prises, le bot la garde dans ta collection.
 - **Limite de perte :** `POSITION_MAX_LOSS=0` interdit de vendre sous le prix d'achat. Avec `POSITION_MAX_LOSS=0.1` et `POSITION_LOSS_AFTER=2`, le prix pourrait descendre jusqu'à 217 (241 − 10 %) à partir de la 2e étape.
 - **Abandon :** `POSITION_GIVE_UP_AFTER=4` arrête après 4 étapes. La carte reste dans ta collection avec l'étiquette `Invendue`.

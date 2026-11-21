@@ -668,3 +668,18 @@ async def test_unquoted_wish_is_bid_up_to_its_own_cap(tmp_path):
     sniper.settings.wish_unquoted_max_price = 0  # coupé : jamais de mise sans cote
     assert await sniper._wish_cap(cheap) is None
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_unquoted_wish_takes_the_site_price_history(tmp_path):
+    """21/11 : une carte souhaitée sans cote du bot prend celle de l'historique des prix du site (lue à l'avance par
+    `_prepare`), avant le plafond fixe WISH_UNQUOTED_MAX_PRICE."""
+    from src.core.pricing import Quote
+
+    sniper, db, notifier = await start(tmp_path, {}, [], wish_max_price=5000, wish_unquoted_max_price=100)
+    khufu = Auction.model_validate(sale("k", "Pyramide de Khéops", 600, base=634))
+    sniper.ctx.prices._history[khufu.catalog_id] = (datetime.now(UTC), {khufu.rarity: Quote(820.0, 3)})
+    assert await sniper._wish_cap(khufu) == 820
+    sniper.settings.price_history_fallback = False
+    assert await sniper._wish_cap(khufu) is None  # 634 > 100 sans cote : pas de mise
+    await db.close()

@@ -50,6 +50,7 @@ from src.snipes import Snipe
 from src.snipes import load as load_snipes
 from src.snipes import remove as remove_snipe
 from src.workers.base import Worker
+from src.workers.settle import nudge_settle
 from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers import wishes, wishlist
 from src.workers.collection import PriceRule, collection_key, price_rules, record_win, targets as collection_targets
@@ -508,7 +509,8 @@ class AuctionSniper(Worker):
         self._bids_since_check = 0  # mises réelles acceptées depuis la dernière vérification (ou CHECK_QUOTA_BIDS)
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
-        self._wishlist_covered: set[str] = set()  # le site annonce leurs ventes : plus de recherche par titre
+        self._wishlist_covered: set[str] = set()
+        self._history_logged: set[tuple[str, str | None]] = set()  # cartes cotées par l'historique, écrites une fois  # le site annonce leurs ventes : plus de recherche par titre
         # Cartes possédées à monter en rareté (COLLECTION_UPGRADE) : clé -> rang de la meilleure rareté possédée.
         self._collection_best: dict[str, int] = {}
         # Plafonds propres aux collections (COLLECTION_SET_MAX_PRICE, COLLECTION_SET_QUOTE_RATIO), par clé de titre.
@@ -1001,8 +1003,7 @@ class AuctionSniper(Worker):
                 caps.append(rule.cap if rule.cap is not None else self.settings.collection_max_price)
                 continue
             try:
-                quote = await self._against_rivals(auction, await self.ctx.prices.quote(
-                    auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False))
+                quote = await self._against_rivals(auction, await self._kept_quote(auction))
             except (RateLimited, ApiError):
                 continue
             if quote.average is not None:
@@ -1013,12 +1014,28 @@ class AuctionSniper(Worker):
             return None
         return max(caps)
 
+    async def _kept_quote(self, auction: Auction) -> Quote:
+        """Cote d'une carte gardée (souhaitée, collection misée à la cote), sans requête : celle du bot, sinon celle de
+        l'historique des prix du site (PRICE_HISTORY_FALLBACK, lue à l'avance par `_prepare`)."""
+        quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False)
+        if quote.average is None and self.settings.price_history_fallback:
+            history = await self.ctx.prices.history_quote(auction.catalog_id, auction.rarity, shiny=auction.shiny,
+                                                          fetch=False)
+            if history is not None:
+                key = (auction.catalog_id, auction.rarity)
+                if key not in self._history_logged:
+                    self._history_logged.add(key)
+                    self.log.info("%s (%s) : cote de l'historique du site, %.0f WB sur %d vente(s)", auction.title,
+                                  auction.rarity, history.average, history.count)
+                return history
+        return quote
+
     async def _wish_cap(self, auction: Auction) -> int | None:
         """Plafond d'une carte souhaitée : sa cote dans cette rareté (sans requête : mise en cache par `_prepare`),
         au plus WISH_MAX_PRICE. Sans cote : WISH_UNQUOTED_MAX_PRICE (au plus WISH_MAX_PRICE) ; mise minimale au-dessus,
         ou ce réglage à 0 : pas de mise, signalé une fois par carte et rareté."""
         try:
-            quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, shiny=auction.shiny, fetch=False)
+            quote = await self._kept_quote(auction)
         except (RateLimited, ApiError):
             quote = Quote(None, 0)
         if quote.average is not None:
@@ -1092,8 +1109,13 @@ class AuctionSniper(Worker):
         quoted = snipe is None and self._collection_wants(auction) and self._quoted_collection(auction)
         if wish or quoted or (auction.rarity in self.settings.sniper_resale_rarities and not self._wanted(auction)
                     and target.room >= 0):
+            quote = Quote(None, 0)
             with contextlib.suppress(RateLimited, ApiError):
-                await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False, shiny=auction.shiny)
+                quote = await self.ctx.prices.quote(auction.catalog_id, auction.rarity, wait=False,
+                                                    shiny=auction.shiny)
+            if (wish or quoted) and quote.average is None and self.settings.price_history_fallback:
+                # Carte gardée sans cote : celle de l'historique du site, lue maintenant pour miser sans requête.
+                await self.ctx.prices.history_quote(auction.catalog_id, auction.rarity, shiny=auction.shiny)
 
     async def _refresh_target(self, target: Target) -> None:
         aid = target.auction.id
@@ -1765,6 +1787,8 @@ class AuctionSniper(Worker):
             if auction is None:
                 continue
             if auction.status == "active":
+                if row["status"] != "simulated" and me and (auction.current_bidder_id or "").lower() == me:
+                    await nudge_settle(self, auction)
                 await self.db.update_bid(row["id"], end_at=auction.end_at)  # prolongée
                 continue
             simulated = row["status"] == "simulated"

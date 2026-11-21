@@ -96,6 +96,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("listings", "sale_price", "INTEGER"),
     ("listings", "settled_at", "TEXT"),
     ("listings", "relist_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("listings", "repriced_at", "TEXT"),
     ("auctions_seen", "seller_id", "TEXT"),
     ("auctions_seen", "bidder_id", "TEXT"),
     ("observed_sales", "seller_id", "TEXT"),
@@ -588,6 +589,16 @@ class Database:
             "SELECT * FROM listings WHERE status IN ('posted', 'simulated') AND target_end < ? ORDER BY target_end",
             (iso(before),),
         )
+
+    async def listings_to_reprice(self, now: datetime, min_left: timedelta) -> list[aiosqlite.Row]:
+        """Reventes réelles en cours, jamais baissées, passées à la moitié de leur durée et encore à plus de
+        `min_left` de leur fin."""
+        rows = await self._all(
+            "SELECT * FROM listings WHERE status = 'posted' AND dry_run = 0 AND bid_id IS NOT NULL "
+            "AND repriced_at IS NULL AND auction_id IS NOT NULL AND posted_at IS NOT NULL AND target_end > ? "
+            "ORDER BY target_end", (iso(now + min_left),))
+        return [r for r in rows if now >= (posted := datetime.fromisoformat(r["posted_at"]))
+                + (datetime.fromisoformat(r["target_end"]) - posted) / 2]
 
     async def uncertain_listings(self, before: datetime) -> list[aiosqlite.Row]:
         return await self._all(

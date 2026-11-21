@@ -35,9 +35,10 @@ class WikiMastersAPI:
         return CollectionStats.model_validate(await self.client.get("collection_stats"))
 
     async def collection_page(self, page: int, sort: str = "added", q: str = "",
-                              background: bool = False) -> CollectionPage:
+                              background: bool = False, rarity: str | list[str] = "") -> CollectionPage:
+        """Une page de ma collection ; `rarity` : seulement cette rareté (ou ces raretés)."""
         return CollectionPage.model_validate(await self.client.get("collection_page", page=page, sort=sort, q=q,
-                                                                   background=background))
+                                                                   rarity=rarity, background=background))
 
     async def iter_collection(self, q: str = "", background: bool = False) -> AsyncIterator[OwnedCard]:
         """Parcourt toute la collection (pages de 50 à partir de 0) [WR api.js loadCollection].
@@ -110,13 +111,38 @@ class WikiMastersAPI:
                 break
         return list(rows.values()), pending
 
-    async def market_page(self, *, page: int = 1, sort: str = "ending_soon", q: str = "",
-                          limit: int = 50, rarity: str = "", background: bool = False) -> tuple[list[Auction], bool]:
+    async def market_page(self, *, page: int = 1, sort: str = "ending_soon", q: str = "", limit: int = 50,
+                          rarity: str | list[str] = "", background: bool = False) -> tuple[list[Auction], bool]:
+        """Une page du marché ; `rarity` : une rareté ou une liste (une seule requête pour L et UR)."""
         result = MarketPage.model_validate(
             await self.client.get("market_page", page=page, sort=sort, q=q, limit=limit, rarity=rarity,
                                   background=background)
         )
         return result.items(), result.hasMore
+
+    async def price_history(self, card_id: str, *, wait: bool = True, background: bool = False) -> dict[str, Any]:
+        """Historique des prix d'une carte, par rareté et par semaine (fiche de la carte) : réponse brute."""
+        data = await self.client.get("price_history", card_id=card_id, wait=wait, background=background)
+        return data if isinstance(data, dict) else {}
+
+    async def reprice(self, auction_id: str, amount: int) -> MutationResult:
+        """Baisse la mise de départ d'une de mes ventes (une fois, sans mise, après la moitié de la durée)."""
+        return await self.client.mutate("reprice_listing", auction_id=auction_id, amount=amount)
+
+    async def settle(self, auction_id: str) -> MutationResult:
+        """Finalise une enchère finie que le site n'a pas encore réglée."""
+        return await self.client.mutate("settle_auction", auction_id=auction_id)
+
+    async def showcase(self) -> dict[str, Any]:
+        """Mes vitrines : {galleries: [...], showcase: [...]} (réponse brute)."""
+        data = await self.client.get("showcase")
+        return data if isinstance(data, dict) else {}
+
+    async def save_gallery(self, index: int, layout: str, name: str, copy_ids: list[str],
+                           captions: list[str | None]) -> MutationResult:
+        """Enregistre une vitrine : disposition, nom, exemplaires dans l'ordre, légendes (frise : dates)."""
+        return await self.client.mutate("showcase_gallery", gallery_index=index, layout=layout, name=name,
+                                        user_card_ids=copy_ids, captions=captions)
 
     async def auction(self, auction_id: str, *, urgent: bool = False) -> Auction:
         return AuctionDetail.model_validate(
