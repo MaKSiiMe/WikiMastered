@@ -134,6 +134,7 @@ SESSION_RECHECK_MINUTES=15            # après un 401/403, re-test de la session
 
 ```sh
 ENABLE_SNIPER=true
+ENABLE_REALTIME=false                 # temps réel du site : mises sur tes enchères (relues aussitôt surenchéries) et notifications (carte souhaitée en vente lue sans attendre)
 ENABLE_INVENTORY=true                 # publie les ventes programmées ; scans auto via AUTO_*
 ENABLE_ACHIEVEMENTS=true              # réclame les succès débloqués (SUPABASE_ANON_KEY requise)
 ENABLE_PROFILE_GUARD=true             # une sanction du site arrête tout le bot (SUPABASE_ANON_KEY requise)

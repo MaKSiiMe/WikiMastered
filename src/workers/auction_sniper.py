@@ -171,6 +171,9 @@ def min_sales(s: Settings, shiny: bool) -> int:
     return max(s.price_min_sales, s.sniper_shiny_min_sales) if shiny else s.price_min_sales
 
 
+LISTEN_AFTER_END = timedelta(minutes=3)  # temps réel : enchère écoutée encore ce temps après sa fin
+
+
 def rarity_param(group: str) -> str | list[str]:
     """Clé d'une source de repérage (« L » ou « L,UR ») : la valeur du paramètre rarity du marché."""
     return group.split(",") if "," in group else group
@@ -514,8 +517,13 @@ class AuctionSniper(Worker):
         self._bids_since_check = 0  # mises réelles acceptées depuis la dernière vérification (ou CHECK_QUOTA_BIDS)
         # Collection à compléter (module G) : clés des cartes manquantes, relues en base chaque minute.
         self._collection_missing: set[str] = set()
-        self._wishlist_covered: set[str] = set()
-        self._history_logged: set[tuple[str, str | None]] = set()  # cartes cotées par l'historique, écrites une fois  # le site annonce leurs ventes : plus de recherche par titre
+        self._wishlist_covered: set[str] = set()  # le site annonce leurs ventes : plus de recherche par titre
+        self._history_logged: set[tuple[str, str | None]] = set()  # cartes cotées par l'historique, écrites une fois
+        # Temps réel (ENABLE_REALTIME) : enchères où le bot a misé, écoutées jusqu'à leur fin (id -> fin) ; surenchéries
+        # d'après le site, à relire en priorité.
+        self._listened: dict[str, datetime] = {}
+        self._pushed: list[str] = []
+        self._pushed_rereads = 0
         # Cartes possédées à monter en rareté (COLLECTION_UPGRADE) : clé -> rang de la meilleure rareté possédée.
         self._collection_best: dict[str, int] = {}
         # Plafonds propres aux collections (COLLECTION_SET_MAX_PRICE, COLLECTION_SET_QUOTE_RATIO), par clé de titre.
@@ -536,6 +544,7 @@ class AuctionSniper(Worker):
         await self._refresh_win_model()
         await self._load_collection()
         await self.reload_snipes()
+        self._listen_notifications()
         await self._recover_vanished()
         await self._refresh_engaged()
         await self._check_config()
@@ -620,7 +629,10 @@ class AuctionSniper(Worker):
         self._prune(now)
         await self._drop_hopeless(params, now)
         target = self._next_due(params, now)
-        if target is not None and (target.recheck or self._wanted(target.auction)):
+        if (pushed := self._pushed_target()) is not None:
+            self._phase(f"relecture {pushed.auction.title} (surenchérie)")
+            await self._read_target(pushed, params, now)
+        elif target is not None and (target.recheck or self._wanted(target.auction)):
             self._phase(f"relecture {target.auction.title}")
             await self._read_target(target, params, now)
         elif guard:
@@ -895,8 +907,64 @@ class AuctionSniper(Worker):
         return math.floor(quote.average * params.deal_ratio)  # type: ignore[operator]
 
     # ------------------------------------------------------------ cibles
+    # ------------------------------------------------------------ temps réel
+    def _listen(self, auction: Auction) -> None:
+        """Temps réel : les mises sur cette enchère (canal `auction:<id>` du site) jusqu'à sa fin."""
+        if self.ctx.realtime is None:
+            return
+        self._listened[auction.id] = auction.end_at
+        self.ctx.realtime.subscribe(f"auction:{auction.id}",
+                                    lambda event, payload, aid=auction.id: self._on_bid(aid, event, payload))
+
+    def _on_bid(self, aid: str, event: str, payload: dict) -> None:
+        """Mise d'un autre joueur poussée par le site : l'enchère est relue au prochain passage, avant tout le reste,
+        au lieu d'attendre sa relecture de fin (prolongée, elle est rejouée aussitôt)."""
+        bid = payload.get("bid") if isinstance(payload.get("bid"), dict) else {}
+        if event != "BID" or str(bid.get("bidder_id") or "").lower() == (self.api.user_id or "").lower():
+            return
+        with contextlib.suppress(ValueError, TypeError):
+            if payload.get("end_at"):
+                self._listened[aid] = datetime.fromisoformat(str(payload["end_at"]).replace("Z", "+00:00"))
+        if aid not in self._pushed:
+            self._pushed.append(aid)
+        self.log.debug("temps réel : mise de %s WB sur %s par un autre joueur", bid.get("amount"), aid)
+
+    def _pushed_target(self) -> Target | None:
+        """Prochaine cible misée signalée surenchérie par le temps réel (une par passage)."""
+        while self._pushed:
+            target = self._targets.get(self._pushed.pop(0))
+            if target is not None and target.recheck:
+                self._pushed_rereads += 1
+                return target
+        return None
+
+    def _forget_listened(self, now: datetime) -> None:
+        """Plus d'écoute des enchères finies depuis quelques minutes."""
+        for aid, end in list(self._listened.items()):
+            if now > end + LISTEN_AFTER_END:
+                del self._listened[aid]
+                if self.ctx.realtime is not None:
+                    self.ctx.realtime.unsubscribe(f"auction:{aid}")
+
+    def _listen_notifications(self) -> None:
+        """Temps réel : tes notifications (canal `notifications:<id>`). Une carte souhaitée ou de collection mise en
+        vente fait lire tout de suite les annonces de la liste de souhaits, au lieu d'attendre jusqu'à
+        COLLECTION_WISHLIST_SECONDS."""
+        me = self.api.user_id
+        if self.ctx.realtime is None or not me:
+            return
+
+        def on_notification(event: str, payload: dict) -> None:
+            record = payload.get("record") if isinstance(payload.get("record"), dict) else {}
+            if event == "INSERT" and record.get("type") == wishlist.LISTED:
+                self._last_read[("wishlist", "")] = _EPOCH
+                self.log.debug("temps réel : carte de la liste de souhaits en vente, annonces lues maintenant")
+
+        self.ctx.realtime.subscribe(f"notifications:{me}", on_notification)
+
     def _prune(self, now: datetime) -> None:
         """Oublie les cibles passées ; une cible jamais relue dans sa fenêtre de mise est comptée."""
+        self._forget_listened(now)
         for aid, t in list(self._targets.items()):
             if t.recheck or t.auction.seconds_left(now) > self.settings.sniper_min_seconds_left:
                 continue
@@ -1645,6 +1713,11 @@ class AuctionSniper(Worker):
             found += f", {self._catchup_reads} page(s) de rattrapage des nouvelles ventes"
         if self._gaps:
             found += f", {self._gaps} trou(s) dans les nouvelles ventes"
+        if (rt := self.ctx.realtime) is not None:
+            state = "coupé (" + rt.disabled + ")" if rt.disabled else ("connecté" if rt.connected else "déconnecté")
+            found += (f", temps réel {state} : {rt.events} événement(s), {self._pushed_rereads} relecture(s) de mises "
+                      f"surenchéries, {len(self._listened)} enchère(s) écoutée(s)")
+            rt.events, self._pushed_rereads = 0, 0
         if self._unread_winnable:
             found += f", {self._unread_winnable} vente(s) gagnable(s) jamais relue(s) (plafond estimé ≥ prix final)"
         if self._deep_reads:
@@ -1731,6 +1804,7 @@ class AuctionSniper(Worker):
                     self._bids_since_check = self._collection_since_check = 0
             self._engaged[auction.id] = auction.end_at
             self._bot_engaged.add(auction.id)
+            self._listen(auction)
             self._report_bid("Enchère placée", f"{summary}, solde {confirmed.bidder_balance}")
             return True
 

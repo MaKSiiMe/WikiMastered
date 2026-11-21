@@ -309,6 +309,9 @@ class Settings(BaseSettings):
     # Enchère finie depuis plus d'une minute mais pas encore réglée par le site (« Finalisation… ») : le bot la
     # finalise lui-même, comme le lien de la fiche, une fois (sa mise en tête, ou sa vente). Écritures : « reglements ».
     settle_stuck_auctions: bool = True
+    # Temps réel du site (src/core/realtime.py) : le bot écoute les mises sur les enchères où il est engagé (relecture
+    # aussitôt surenchéri) et tes notifications (carte souhaitée ou de collection en vente : lue sans attendre).
+    enable_realtime: bool = False
     position_max_relists: int = 3         # puis au prix d'achat, tant qu'une place de vente est libre
     # Après POSITION_LOSS_AFTER étapes sans acheteur, la revente peut descendre jusqu'à POSITION_MAX_LOSS
     # sous le prix d'achat : une carte qui ne part pas bloque une des 5 places (~900 WB par revente qui tourne) et son

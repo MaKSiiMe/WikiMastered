@@ -141,6 +141,10 @@ async def build_context(settings: Settings):
     api = WikiMastersAPI(client)
     ctx = Context(settings, client, api, db, notifier, PriceService(api, db, settings.price_cache_ttl_minutes, settings.price_recent_sales,
                                                                     settings.price_site_margin))
+    if settings.enable_realtime:
+        from src.core.realtime import Realtime  # websockets chargé seulement avec le temps réel
+
+        ctx.realtime = Realtime(client)
     try:
         yield ctx
     finally:
@@ -689,6 +693,8 @@ async def run_bot(settings: Settings) -> None:
             jobs.append(("stats", lambda: stats_loop(ctx, workers)))
         if settings.kuma_push_url:
             jobs.append(("kuma", lambda: kuma_loop(ctx, workers)))
+        if ctx.realtime is not None:
+            jobs.append(("temps-reel", ctx.realtime.run))
         if settings.enable_sniper and settings.sniper_report_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
         if (settings.enable_backup and settings.backup_keep > 0) or settings.observed_keep_days > 0:
