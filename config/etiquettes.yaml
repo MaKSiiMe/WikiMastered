@@ -352,6 +352,29 @@ themes:
       - Q839954    # site archéologique
       - Q852190    # épave (confirmé en Histoire)
 
+  # Pages sans sujet propre, qui restaient sans thème (relevé du 21/11 : ~1 400 cartes).
+  Année:
+    natures:
+      - Q577       # année (« 1194 »)
+      - Q29964144  # année avant Jésus-Christ
+      - Q18340514  # article chronologique (« 1916 en France », « 1490 en philosophie »)
+      - Q47150325  # date calendaire d'une année donnée (« 12 avril 1964 »)
+      - Q47018478  # mois calendaire d'une année donnée (« Mars 1766 »)
+      - Q39911     # décennie
+
+  Liste:
+    natures: [Q13406463]  # page de liste de Wikimédia (discographies, bibliographies…)
+    sauf: [Année]  # un article chronologique est aussi une liste
+
+  Nom:
+    natures:
+      - Q101352    # nom de famille
+      - Q202444    # prénom
+      - Q8436      # famille (« Famille Barberini », maisons nobles)
+
+  Homonymie:
+    natures: [Q4167410]  # page d'homonymie de Wikimédia
+
 # Babie : posée à la main sur le site, le bot ne la pose pas (et n'enlève jamais un thème).
 
 # Corrections à la main, prioritaires sur Wikidata : titre exact de la carte -> ses thèmes (remplacent ceux trouvés ;
