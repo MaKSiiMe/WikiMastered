@@ -69,7 +69,7 @@ def test_description_words():
     (Facts("Q1", {"Q39546"}), ["Objet"]),
     (Facts("Q4", {"Q16970", "Q41176", "Q811979", "Q8205328"}), ["Lieu", "Religion"]),  # une église reste un lieu
     (Facts("Q5", {"Q55488", "Q41176", "Q811979", "Q8205328"}), ["Lieu", "Transport"]),  # une gare aussi
-    (Facts("Q6", {"Q1114461", "Q95074"}), ["Littérature / BD"]),  # un personnage de BD, pas de cinéma
+    (Facts("Q6", {"Q1114461", "Q95074"}), ["Littérature / BD", "Personnage de fiction"]),  # un personnage de BD, pas de cinéma
     (Facts("Q7", {"Q177597", "Q11446", "Q8205328"}), ["Militaire"]),  # un navire de guerre, pas le transport
     (Facts("Q2", {"Q178561", "Q13418847"}), ["Histoire"]),
     (Facts("Q3", {"Q14795564"}), []),  # un jour de l'année

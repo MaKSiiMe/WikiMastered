@@ -375,6 +375,33 @@ themes:
   Homonymie:
     natures: [Q4167410]  # page d'homonymie de Wikimédia
 
+  # Sous-thèmes, en plus du thème large (un film garde « Cinéma / Série ») : des familles de cartes assez grandes pour
+  # les échanges.
+  Football:
+    natures:
+      - Q476028    # club de football
+      - Q26887310  # saison d'une équipe de football
+    description: [footballeu]  # footballeur, footballeuse (pas « joueur de football américain »)
+
+  Film:
+    natures: [Q11424]  # film (téléfilms, courts métrages, films d'animation compris)
+
+  Plante:
+    taxons: [Q756]  # plantes
+
+  Insecte / Araignée:
+    taxons: [Q1360]  # arthropodes : insectes, araignées, scorpions, mille-pattes, crustacés
+
+  Royauté / Noblesse:
+    description: [roi, reine, empereur, impératrice, pharaon, prince, monarque, sultan, tsar, souverain, régent,
+                  calife, khan, shah, duc, duchesse, archiduc, comte, vicomte, marquis, baron, noble, aristocrate,
+                  seigneur, landgrave, margrave]
+
+  Personnage de fiction:
+    natures:
+      - Q95074     # personnage de fiction
+      - Q4271324   # personnage mythologique
+
 # Babie : posée à la main sur le site, le bot ne la pose pas (et n'enlève jamais un thème).
 
 # Corrections à la main, prioritaires sur Wikidata : titre exact de la carte -> ses thèmes (remplacent ceux trouvés ;
@@ -387,3 +414,10 @@ corrections:
   Analyse PESTEL: [Entreprise / Marque]
   Ballon d'or 2021: [Sport]
   (505476) 2013 UL15: [Astéroïde]
+  # Description qui cite un roi, un calife ou un empereur sans en être un (« Royauté / Noblesse » écartée).
+  Julia Kourotchkina: [Personne]  # reine de beauté
+  Nedeljko Čabrinović: [Personne]
+  Kikkuli: [Personne]
+  Yuán Chónghuàn: [Personne, Militaire]
+  Umm Hakim bint Abdul Muttalib: [Personne, Religion]
+  Arwa bint Kurayz: [Personne, Religion]
