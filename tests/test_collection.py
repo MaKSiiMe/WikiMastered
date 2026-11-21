@@ -803,3 +803,61 @@ def test_collection_names_accept_singular_and_accents():
     active, unknown = collections(Settings(_env_file=None, collection_sets=["jours", "Élément", "countries", "gif"]))
     assert set(active) == {"jours", "elements", "pays", "gifs"} and unknown == []
     assert collections(Settings(_env_file=None, collection_sets=["planetes"]))[1] == ["planetes"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("showcase_ok", [True, False])
+async def test_showcase_tag_follows_showcases_and_kept_collection_copies(tmp_path, showcase_ok):
+    import json as jsonlib
+
+    from src.workers.collection import refresh
+    from tests.test_session import cookie_for
+
+    calls = []
+
+    def row(oid, title, rarity, tags=()):
+        out = copy(oid, f"card-{title}", title)
+        out.update(snapshot_rarity=rarity, tags=[{"id": 9, "name": t} for t in tags])
+        return out
+
+    def handler(request):
+        if request.url.host.endswith("supabase.co"):
+            if request.method == "GET":
+                return httpx.Response(200, json=[{"id": 9, "name": "🏛️ Vitrine"}])
+            calls.append((request.method, jsonlib.loads(request.content) if request.content
+                          else dict(request.url.params)))
+            return httpx.Response(201 if request.method == "POST" else 204)
+        if request.url.path == "/api/showcase":
+            if not showcase_ok:
+                return httpx.Response(500, json={})
+            return httpx.Response(200, json={"showcase": [
+                {"position": 0, "gallery_index": 0, "user_card": {"id": "s1", "card": {"wikipedia_title": "Khéops"}}}]})
+        if request.url.params.get("tag_id") == "9":
+            # o1 : ancien exemplaire gardé ; x9 : sorti d'une vitrine.
+            return httpx.Response(200, json={"collection": [row("o1", "1er janvier", "R", ["Vitrine"]),
+                                                            row("x9", "Sphinx de Gizeh", "L", ["Vitrine"])]})
+        rows = {"janvier": [row("o1", "1er janvier", "R", ["Vitrine"]), row("o2", "1er janvier", "SR")]}
+        return httpx.Response(200, json={"collection": rows.get(request.url.params.get("q", ""), [])})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, collection_sets=["jours"], collection_tag="",
+                                   showcase_tag="Vitrine", supabase_anon_key="anon-key",
+                                   wm_cookie=cookie_for("a1", "r1", 3600))
+    ctx = await make_context(tmp_path, client, notifier)
+    state = await refresh(ctx)
+    posted = [("POST", {"user_card_id": "o2", "tag_id": 9})]
+    if showcase_ok:
+        # Le SR gardé et la carte exposée la reçoivent ; l'ancien R et la carte sortie de la vitrine la perdent.
+        assert calls == [("POST", {"user_card_id": "o2", "tag_id": 9}), ("POST", {"user_card_id": "s1", "tag_id": 9}),
+                         ("DELETE", {"user_card_id": "eq.o1", "tag_id": "eq.9"}),
+                         ("DELETE", {"user_card_id": "eq.x9", "tag_id": "eq.9"})]
+        assert state["showcase"] == {"tag": "Vitrine", "tagged": 2, "untagged": 2, "to_tag": 0}
+    else:
+        assert calls == posted and "rien n'est retiré" in state["showcase"]["error"]
+    await ctx.db.close()
+
+
+def test_showcase_copy_ids():
+    from src import showcases
+
+    data = {"showcase": [{"user_card": {"id": "a"}}, {"user_card": None}, "?", {"user_card": {"id": 7}}]}
+    assert showcases.copy_ids(data) == {"a", "7"} and showcases.copy_ids({}) == set()
