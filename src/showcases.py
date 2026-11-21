@@ -76,6 +76,12 @@ def parse(data: dict[str, Any]) -> list[Gallery]:
     return [galleries[i] for i in range(MAX_GALLERIES)]
 
 
+def copy_ids(data: dict[str, Any]) -> set[str]:
+    """Exemplaires exposés dans les vitrines (réponse de GET /api/showcase)."""
+    return {str(card["id"]) for item in data.get("showcase") or [] if isinstance(item, dict)
+            and isinstance(card := item.get("user_card"), dict) and card.get("id")}
+
+
 def overview(galleries: list[Gallery]) -> str:
     """Texte de /vitrines : chaque vitrine remplie, sa disposition et ses cartes."""
     lines = []

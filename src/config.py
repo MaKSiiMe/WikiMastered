@@ -418,6 +418,9 @@ class Settings(BaseSettings):
     collection_bids_per_check: int = 2
     collection_tag: str = "date"           # étiquette des jours et de COLLECTION_TITLES ("" = non)
     collection_tag_max_per_run: int = 60   # étiquettes posées par passage (requêtes espacées)
+    # Étiquette posée sur les cartes de tes vitrines du profil et sur l'exemplaire gardé de chaque carte des collections
+    # actives, retirée quand la carte en sort. Le bot la gère seul : ne la pose pas à la main. "" = non.
+    showcase_tag: str = ""
 
     # --- Étiquettes de thème (worker « etiquettes ») ---------------------------------------
     # Thème de chaque carte (Personne, Pays, Musique…) lu sur Wikidata selon config/etiquettes.yaml, posé sur

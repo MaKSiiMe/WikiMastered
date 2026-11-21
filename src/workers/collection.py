@@ -192,6 +192,8 @@ async def refresh(ctx: Context) -> dict:
              "first_owned": first_owned(previous, owned, utcnow()),
              "best": {k: r for k, rows in sorted(copies.items()) if (r := best_rarity(rows))}}
     state.update(await tag_owned(ctx, copies, active.values()))
+    if ctx.settings.showcase_tag.strip():
+        state["showcase"] = await tag_showcase(ctx, copies, active.values())
     await ctx.db.kv_set(KV_KEY, state)
     return state
 
@@ -320,6 +322,72 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: It
     return out
 
 
+async def tag_showcase(ctx: Context, copies: dict[str, list[OwnedCard]], active: Iterable[Collection]) -> dict:
+    """SHOWCASE_TAG sur les cartes des vitrines du profil et sur l'exemplaire gardé de chaque carte des collections
+    actives ; retirée des exemplaires qui n'en sont plus (sortis d'une vitrine, remplacés par une rareté plus haute).
+    Rien n'est retiré si les vitrines n'ont pas pu être lues."""
+    from src import showcases  # import local : showcases.py importe ce module
+    from src.workers.inventory_manager import keep_order
+
+    tag = ctx.settings.showcase_tag.strip()
+    out: dict = {"tag": tag, "tagged": 0, "untagged": 0, "to_tag": 0}
+    keys = {collection_key(t) for c in active for t in c.titles}
+    kept = {key: min(rows, key=keep_order) for key, rows in copies.items() if key in keys and rows}
+    try:
+        shown, shown_ok = showcases.copy_ids(await ctx.api.showcase()), True
+    except ApiError as exc:
+        shown, shown_ok = set(), False
+        out["error"] = f"vitrines illisibles ({exc}) : rien n'est retiré"
+    try:
+        status, data = await ctx.client.supabase("GET", "tags", params={"select": "id,name",
+                                                                          "user_id": f"eq.{ctx.api.user_id}"})
+        ids = {tag_key(str(t.get("name", ""))): t["id"] for t in data or []
+               if isinstance(t, dict)} if status == 200 else {}
+        if tag_key(tag) not in ids:
+            out["error"] = f"étiquette « {tag} » introuvable (HTTP {status}) : crée-la une fois sur le site"
+            return out
+        tag_id = ids[tag_key(tag)]
+        current = {row.id: row for row in await ctx.api.load_tagged(str(tag_id))}
+    except ApiError as exc:
+        out["error"] = str(exc)
+        return out
+    wanted = {row.id for row in kept.values()} | shown
+    missing = sorted(wanted - set(current))
+    out["to_tag"] = len(missing)
+    live = ctx.settings.is_live("tag_card")
+    done = set(current)  # exemplaires étiquetés, ceux de ce passage compris
+    for copy_id in missing[: ctx.settings.collection_tag_max_per_run]:
+        if not live:
+            log.info("[DRY RUN] étiquette « %s » sur l'exemplaire %s", tag, copy_id)
+            continue
+        status, data = await ctx.client.supabase("POST", "user_card_tags", prefer="return=minimal",
+                                                 json_body={"user_card_id": copy_id, "tag_id": tag_id})
+        if status not in (200, 201, 204, 409):  # 409 : déjà étiquetée
+            out["error"] = f"ajout refusé (HTTP {status}) : {str(data)[:200]}"
+            return out
+        out["tagged"] += 1
+        done.add(copy_id)
+    out["to_tag"] -= out["tagged"]
+    if not shown_ok:
+        return out
+    for copy_id, row in current.items():
+        if copy_id in wanted:
+            continue
+        # Une carte de collection ne perd l'étiquette qu'une fois son exemplaire gardé étiqueté.
+        if (key := collection_key(row.title)) in kept and kept[key].id not in done:
+            continue
+        if not live:
+            log.info("[DRY RUN] étiquette « %s » retirée de %s (%s)", tag, row.title, row.rarity)
+            continue
+        status, data = await ctx.client.supabase("DELETE", "user_card_tags", prefer="return=minimal",
+                                                 params={"user_card_id": f"eq.{copy_id}", "tag_id": f"eq.{tag_id}"})
+        if status not in (200, 204):
+            out["error"] = f"retrait refusé (HTTP {status}) : {str(data)[:200]}"
+            break
+        out["untagged"] += 1
+    return out
+
+
 def progress_text(state: dict) -> list[str]:
     """« Jours de l'année : 366/366 ✅ », « Jours de l'année : 33/366 » : une par collection."""
     progress = state.get("sets") or {"Collection": [len(state["owned"]), state["total"]]}
@@ -361,6 +429,12 @@ class CollectionWorker(Worker):
             self.notifier.info("Collection : étiquettes ajoutées",
                                f"« {state['tag']} » ajoutée(s) à {state['tagged']} carte(s){moved} ; "
                                f"reste {state['to_tag']}.")
+        if (shown := state.get("showcase") or {}).get("tagged") or shown.get("untagged"):
+            self.notifier.info("Collection : étiquette des vitrines",
+                               f"« {shown['tag']} » ajoutée à {shown['tagged']} carte(s), retirée de "
+                               f"{shown['untagged']} ; reste {shown['to_tag']}.")
+        if shown.get("error"):
+            self.log.warning("étiquette des vitrines : %s", shown["error"])
         if state.get("tag_error"):
             self.log.warning("étiquettes de collection : %s", state["tag_error"])
         if self.settings.collection_wishlist:

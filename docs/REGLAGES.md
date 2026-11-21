@@ -392,6 +392,7 @@ COLLECTION_BIDS_PER_CHECK=2           # mises de collection par vérification an
 COLLECTION_REFRESH_MINUTES=360        # relecture de la collection
 COLLECTION_TAG=date                   # étiquette des jours et de COLLECTION_TITLES (vide = non)
 COLLECTION_TAG_MAX_PER_RUN=60
+SHOWCASE_TAG=                         # étiquette des cartes en vitrine et des exemplaires gardés des collections (vide = non)
 ```
 
 **Exemple**, avec `COLLECTION_SETS=jours` et `COLLECTION_MAX_PRICE=50` : il te manque la carte « 14 juillet ». Une enchère sur cette carte, à n'importe quelle rareté, arrive à sa fin avec une mise minimale de 30 WB. Le bot mise 30 et garde la carte, sans la revendre. À 60 WB, il ne mise pas.
