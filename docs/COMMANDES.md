@@ -43,6 +43,7 @@ Les ventes observées, les prix et le marché suivi demandent une revente active
 | `/snipes` | Voir les cartes demandées |
 | `/souhaits` | Cartes de ta liste de souhaits suivies par le sniper (`WISH_MAX_PRICE`), la rareté que tu possèdes et le plafond de chaque rareté encore à prendre |
 | `/annuler <titre>` | Ne plus demander une carte |
+| `/etiquettes [creer]` | Tes étiquettes du site avec leur couleur, et celles que le bot pose mais qui manquent. `creer` : les crée sur le site avec l'émoji et la couleur de `config/etiquettes.yaml` (palette de l'extension sinon). Confirmée par un bouton |
 | `/vitrines` | Tes vitrines du profil : nom, disposition, cartes |
 | `/vitrine <numero> <disposition> <cartes> [nom] [legendes]` | Remplir une vitrine : `cartes` = titres exacts dans l'ordre, séparés par des `;`. Le bot prend ton meilleur exemplaire de chaque carte (plus haute rareté, shiny d'abord). Ligne du temps : une date par carte dans `legendes`. Remplace la vitrine de ce numéro ; confirmée par un bouton |
 | `/vendre <carte> <prix> [rarete]` | Vendre ton exemplaire le plus récent (hors favori, shiny, gardé) à ce prix, à la première place libre, avant les autres ventes. Confirmée par un bouton |

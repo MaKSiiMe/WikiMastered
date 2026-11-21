@@ -25,7 +25,7 @@ from types import ModuleType
 import discord
 from discord import app_commands
 
-from src import backup, pauses, showcases, snipes
+from src import backup, pauses, showcases, snipes, tags
 from src.charts import number, profit_bars
 from src.core import colors, timeutils
 from src.core.client import ApiError, server_message
@@ -897,6 +897,55 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                  "enregistrée" if ok else f"refusée ({why})")
         embed.title = f"🏆 Vitrine {numero} enregistrée" if ok else f"⚠️ Vitrine {numero} refusée : {why}"
         embed.color = GREEN if ok else ORANGE
+        await interaction.edit_original_response(embed=embed, view=None)
+
+    @tree.command(name="etiquettes", description="Tes étiquettes du site (couleur, émoji) ; créer celles que le bot pose")
+    @app_commands.describe(creer="créer sur le site les étiquettes que le bot pose et qui manquent (confirmation)")
+    async def etiquettes(interaction: discord.Interaction, creer: bool = False) -> None:
+        await interaction.response.defer()
+        try:
+            status, found = await tags.site_tags(ctx)
+        except ApiError as exc:
+            status, found = 0, []
+            log.warning("Discord : étiquettes illisibles : %s", exc)
+        if status != 200:
+            await interaction.edit_original_response(content=f"⚠️ Étiquettes illisibles (HTTP {status}) : "
+                                                             "SUPABASE_ANON_KEY et la session sont nécessaires.")
+            return
+        todo = tags.missing(found, tags.wanted(ctx))
+        todo_text = "\n".join(f"• {t.label} · `{t.color}`" for t in todo)
+        embed = discord.Embed(title=f"🏷️ Étiquettes du site ({len(found)})", color=COLOR,
+                              description=tags.overview(found)[:3000])
+        if todo:
+            embed.add_field(name=f"Posées par le bot, absentes du site ({len(todo)})", value=todo_text[:1000],
+                            inline=False)
+        if not creer or not todo:
+            embed.set_footer(text="/etiquettes creer:True pour créer celles qui manquent. Émoji et couleur : "
+                                  "config/etiquettes.yaml ; tu peux les changer ensuite sur le site.")
+            await interaction.edit_original_response(embed=embed)
+            return
+        embed.title = f"🏷️ Créer {len(todo)} étiquette(s) sur le site ?"
+        if not s.is_live("tag_card"):
+            embed.description = "ℹ️ Écritures simulées (DRY_RUN / SIMULATE) : rien ne sera créé.\n\n" + embed.description
+        view = Confirm(s.discord_owner_id)
+        await interaction.edit_original_response(embed=embed, view=view)
+        await view.wait()
+        if not view.value:
+            embed.title, embed.color = "Aucune étiquette créée", GREY
+            await interaction.edit_original_response(embed=embed, view=None)
+            return
+        done, errors = [], []
+        for tag in todo:
+            try:
+                ok, why = await tags.create(ctx, tag)
+            except ApiError as exc:
+                ok, why = False, str(exc)
+            (done if ok else errors).append(tag.label if ok else f"{tag.label} : {why}")
+        log.info("Discord : %d étiquette(s) créée(s), %d refusée(s)", len(done), len(errors))
+        embed = discord.Embed(title=f"🏷️ {len(done)} étiquette(s) créée(s)", color=ORANGE if errors else GREEN,
+                              description="\n".join(f"• {t}" for t in done)[:3000] or "Aucune.")
+        if errors:
+            embed.add_field(name="Refusées", value="\n".join(errors)[:1000], inline=False)
         await interaction.edit_original_response(embed=embed, view=None)
 
     async def snipe_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

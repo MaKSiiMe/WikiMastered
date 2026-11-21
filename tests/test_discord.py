@@ -130,7 +130,7 @@ async def test_discord_commands_are_registered(tmp_path):
                      "sauvegarde",
                      "vendre", "plafond-collection", "carte", "opportunites", "top", "defausse", "doublons",
                      "valeur", "echange", "echanges", "souhaits", "collection-joueur", "shiny", "amis",
-                     "vitrines", "vitrine"}
+                     "vitrines", "vitrine", "etiquettes"}
     assert src.main.roi_status  # les fonctions appelées par les commandes existent
     # Boutons de /etat et /valeur : persistants, branchés même après un redémarrage.
     assert {"etat", "etatverif", "etatpause", "etatreprise", "recount", "valuehist", "stalefire", "stalekeep",
