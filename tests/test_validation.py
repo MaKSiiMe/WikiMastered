@@ -961,3 +961,34 @@ async def test_expensive_unsold_position_waits_for_a_slot_instead_of_being_kept(
     assert outcomes[(8110, 5000)] == (0, [8111])  # chère : attend une place, au plancher (prix d'achat + 1)
     assert outcomes[(900, 5000)] == (1, [])       # sous le seuil : gardée
 
+
+
+@pytest.mark.asyncio
+async def test_kept_bot_purchase_gives_its_price_to_a_resale_tag(tmp_path):
+    """18/11 : Hermann Göring ✨, gagnée 12 526 par le bot puis mise en favori (position close), étiquetée « revente » :
+    reprise à 0 WB (« carte d'un paquet »), et sa vente à 33 333 comptée en bénéfice entier. L'achat du bot gardé
+    compte comme ton achat ; les reprises déjà faites à 0 sont corrigées au démarrage, une seule fois."""
+    db = Database(tmp_path / "t.db")
+    await db.connect()
+    end = datetime(2026, 11, 16, 19, 15, tzinfo=UTC)
+    bot = await db.record_bid(auction_id="a-gor", card_id="c-gor", title="Hermann Göring", rarity="L", is_shiny=True,
+                              amount=12526, reference_price=21706.0, reason="revente ~21706 WB, bénéfice ~9180",
+                              night=False, dry_run=False, status="won", end_at=end)
+    await db.update_bid(bot, closed=1)  # en favori : gardée, position close sans vente
+    await db.db.execute("INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at, "
+                        "buyer_id) VALUES ('a-gor', 'c-gor', 'Hermann Göring', 'L', 1, 12526, ?, 'ME')", (end.isoformat(),))
+    await db.db.commit()
+    buy = await db.my_purchase("c-gor", "L", True, "me", end - timedelta(hours=1), end + timedelta(hours=1))
+    assert buy is not None and buy["price"] == 12526
+
+    await db.record_manual_position(auction_id="paquet-x", card_id="c-gor", title="Hermann Göring", rarity="L",
+                                    is_shiny=True, amount=0, reference_price=17542.0, bought_at=end + timedelta(seconds=1))
+    assert await db.reprice_manual_positions() == [("Hermann Göring", 12526)]
+    assert await db.reprice_manual_positions() == []
+    held = await db._one("SELECT amount FROM bids WHERE auction_id = 'paquet-x'")
+    assert held["amount"] == 12526
+    # Reprise en cours : l'achat n'est plus proposé pour une 2e reprise.
+    await db.record_manual_position(auction_id="a-gor", card_id="c-gor", title="Hermann Göring", rarity="L",
+                                    is_shiny=True, amount=12526, reference_price=None, bought_at=end)
+    assert await db.my_purchase("c-gor", "L", True, "me", end - timedelta(hours=1), end + timedelta(hours=1)) is None
+    await db.close()

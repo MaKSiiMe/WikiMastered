@@ -141,6 +141,8 @@ HELD = "status IN ('won', 'sim_won') AND closed = 0"
 # hors des chiffres du sniper (mises, gagnées, dépenses du jour).
 MANUAL_REASON = "achat manuel"
 NOT_MANUAL = f"reason NOT LIKE '{MANUAL_REASON}%'"
+# Carte gagnée par le bot et gardée sans vente (favori, collection, /snipe, souhait) : son achat peut être repris.
+KEPT_BY_BOT = f"closed = 1 AND sale_price IS NULL AND dry_run = 0 AND reason NOT LIKE '{MANUAL_REASON}%'"
 # Motif des reventes à 1 WB, retirées le 10/11 : celles qui restaient programmées sont annulées au démarrage.
 OLD_FIRE_SALE_REASON = "liquidation"
 # Vente demandée sur Discord (/vendre) : publiée à la première place libre, avant les autres.
@@ -518,11 +520,14 @@ class Database:
     async def my_purchase(self, card_id: str, rarity: str | None, shiny: bool, buyer_id: str,
                           since: datetime, until: datetime) -> aiosqlite.Row | None:
         """Ta dernière vente observée de cette carte (même rareté, shiny ou non), finie entre `since` et `until`, et
-        pas déjà une position (du bot ou un achat manuel repris)."""
+        pas déjà une position (du bot ou un achat manuel repris) en cours ou vendue. Une carte gagnée par le bot puis
+        gardée (favori, collection, /snipe) compte : le 18/11, Hermann Göring ✨ (achetée 12 526 par le bot, mise en
+        favori, puis étiquetée « revente ») était reprise à 0 WB, et sa vente à 33 333 comptée en bénéfice entier."""
         return await self._one(
             "SELECT auction_id, title, price, ended_at FROM observed_sales WHERE card_id = ? AND rarity IS ? "
             "AND is_shiny = ? AND lower(buyer_id) = ? AND ended_at >= ? AND ended_at <= ? AND auction_id NOT IN "
-            "(SELECT auction_id FROM bids WHERE status = 'won') ORDER BY ended_at DESC LIMIT 1",
+            f"(SELECT auction_id FROM bids WHERE status = 'won' AND NOT ({KEPT_BY_BOT})) "
+            "ORDER BY ended_at DESC LIMIT 1",
             (card_id, rarity, int(shiny), buyer_id.lower(), iso(since), iso(until)))
 
     async def holds_position(self, card_id: str, rarity: str | None, shiny: bool) -> bool:
@@ -626,6 +631,23 @@ class Database:
         row = await self._one("SELECT COUNT(*) AS n FROM listings WHERE status = 'simulated' AND target_end > ?",
                               (iso(now),))
         return int(row["n"]) if row else 0
+
+    async def reprice_manual_positions(self) -> list[tuple[str, int]]:
+        """Achats manuels repris à 0 WB (« carte d'un paquet ») alors que le bot avait gagné cette carte (même rareté,
+        shiny ou non) puis l'avait gardée : le prix payé par le bot, le plus récent gagné avant la reprise. Du 27/10
+        au 18/11 : FC Barcelone, Ana de Armas, Coupe du monde 1994 (×2), Vatican, Hermann Göring ✨. Renvoie
+        (titre, prix) des positions corrigées."""
+        rows = await self._all(
+            f"SELECT m.id, m.title, (SELECT b.amount FROM bids b WHERE b.card_id = m.card_id AND b.rarity IS m.rarity "
+            f"AND b.is_shiny = m.is_shiny AND b.status = 'won' AND b.closed = 1 AND b.sale_price IS NULL "
+            f"AND b.dry_run = 0 AND b.reason NOT LIKE '{MANUAL_REASON}%' "
+            f"AND b.end_at <= m.placed_at ORDER BY b.end_at DESC LIMIT 1) AS paid FROM bids m "
+            f"WHERE m.reason LIKE '{MANUAL_REASON}%' AND m.amount = 0 AND m.auction_id LIKE 'paquet-%'")
+        fixed = [(r["title"], int(r["paid"])) for r in rows if r["paid"]]
+        for r in rows:
+            if r["paid"]:
+                await self.update_bid(r["id"], amount=int(r["paid"]), final_price=int(r["paid"]))
+        return fixed
 
     async def reopen_antibot_positions(self) -> int:
         """Positions closes après des refus « Vérification anti-bot requise » (01/11 : 16 cartes, 17 162 WB, abandonnées

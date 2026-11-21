@@ -455,6 +455,9 @@ class InventoryManager(Worker):
         # (lire la collection coûte ~175 requêtes), consommés à chaque place libérée.
         self._sale_queue: list[SaleCandidate] = []
         self._queue_at: datetime | None = None
+        if repriced := await self.db.reprice_manual_positions():
+            self.log.info("%d carte(s) « revente » reprise(s) à 0 WB alors que le bot les avait achetées : prix "
+                          "corrigé (%s)", len(repriced), ", ".join(f"{t} {p} WB" for t, p in repriced))
         reopened = await self.db.reopen_antibot_positions()
         if reopened:
             self.log.info("%d revente(s) abandonnée(s) à cause de la vérification anti-bot : reprise(s)", reopened)
