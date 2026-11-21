@@ -649,13 +649,14 @@ async def test_tagged_purchase_becomes_a_position_at_the_price_paid(tmp_path):
 @pytest.mark.asyncio
 async def test_tag_on_an_older_card_is_found_in_the_whole_collection(tmp_path):
     """10/11 : Katseye ✨ achetée le 05/11 et étiquetée « revente » cinq jours après n'était jamais reprise : elle
-    n'était plus parmi les 100 dernières cartes arrivées, et la collection entière n'était lue qu'avec la défausse."""
+    n'était plus parmi les 100 dernières cartes arrivées, et la collection entière n'était lue qu'avec la défausse.
+    21/11 : elle est lue par la collection filtrée sur l'étiquette, plus par toute la collection (20 min)."""
     from tests.test_session import cookie_for
 
     arrived = (datetime.now(UTC) - timedelta(days=5)).isoformat()
     old = {**owned("kat", "ckat", "Katseye"), "obtained_at": arrived, "tags": [{"name": "revente"}]}
     newer = [{**owned(f"n{i}", f"cn{i}", f"Carte {i}"), "obtained_at": arrived} for i in range(100)]
-    reads = {"pages": 0, "tags": 0}
+    reads = {"pages": 0, "tags": 0, "tagged": 0}
 
     def handler(request):
         path = request.url.path
@@ -666,8 +667,12 @@ async def test_tag_on_an_older_card_is_found_in_the_whole_collection(tmp_path):
             assert path == "/rest/v1/user_card_tags" and request.url.params["tag_id"] == "eq.t-rev"
             return httpx.Response(200, json=[{"user_card_id": "kat"}])
         if path == "/api/my-collection":
-            reads["pages"] += 1
             page = int(request.url.params["page"])
+            if request.url.params.get("tag_id"):  # 21/11 : la collection filtrée par l'étiquette, une page
+                assert request.url.params["tag_id"] == "t-rev"
+                reads["tagged"] += 1
+                return httpx.Response(200, json={"collection": [old] if page == 0 else []})
+            reads["pages"] += 1
             return httpx.Response(200, json={"collection": (newer + [old])[page * 50:page * 50 + 50]})
         return httpx.Response(404, json={})
 
@@ -678,12 +683,13 @@ async def test_tag_on_an_older_card_is_found_in_the_whole_collection(tmp_path):
     inv = InventoryManager(ctx)
     recent = await inv._recent_copies()
     assert len(recent) == 100 and await inv.adopt_manual(recent) == 0  # avant : jamais vue
+    pages = reads["pages"]
     found = await inv._older_tagged(recent)
     assert [c.id for c in found] == ["kat"] and await inv.adopt_manual(recent + found) == 1
+    assert reads["tagged"] == 1 and reads["pages"] == pages  # une page filtrée, pas toute la collection
     assert (await ctx.db.positions_to_list())[0]["auction_id"] == "paquet-kat"
     # Reprise : plus aucune lecture de la collection, seulement la liste des cartes étiquetées.
-    pages = reads["pages"]
-    assert await inv._older_tagged(recent) == [] and reads["pages"] == pages
+    assert await inv._older_tagged(recent) == [] and reads["pages"] == pages and reads["tagged"] == 1
     await ctx.db.close()
 
 

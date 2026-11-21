@@ -66,6 +66,18 @@ class WikiMastersAPI:
     async def load_collection(self, q: str = "", background: bool = False) -> list[OwnedCard]:
         return [row async for row in self.iter_collection(q, background)]
 
+    async def load_tagged(self, tag_id: str, background: bool = True) -> list[OwnedCard]:
+        """Mes exemplaires qui portent cette étiquette (/api/my-collection?tag_id=…), page après page : une requête
+        pour quelques cartes, au lieu de relire toute la collection (18 000 exemplaires, 20 min le 21/11)."""
+        rows: dict[str, OwnedCard] = {}
+        for page in range(MAX_COLLECTION_PAGES):
+            result = CollectionPage.model_validate(await self.client.get(
+                "collection_tagged", tag_id=tag_id, page=page, background=background))
+            rows.update({row.id: row for row in result.rows()})
+            if len(result.collection) < COLLECTION_PAGE_SIZE:
+                break
+        return list(rows.values())
+
     async def load_player_collection(self, username: str, tag_id: str = "") -> tuple[list[OwnedCard], dict[str, Any]]:
         """Collection publique d'un joueur, en requêtes de fond : (exemplaires, autres clés de la première réponse)."""
         rows: dict[str, OwnedCard] = {}

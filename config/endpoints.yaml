@@ -32,6 +32,11 @@ endpoints:
     params: {sort: "{sort}", page: "{page}", stats: "0", q: "{q}"}
     defaults: {sort: added, q: ""}
 
+  collection_tagged:            # mes exemplaires qui portent une étiquette (URL relevée le 21/11 sur le site), page>=0
+    method: GET
+    path: /api/my-collection
+    params: {sort: rarity, tag_id: "{tag_id}", page: "{page}", stats: "0"}
+
   player_collection:            # collection publique d'un joueur (profil d'un joueur, relevé du 02/11), page>=0, page de 50
     method: GET
     path: /api/profile/{username}/collection
