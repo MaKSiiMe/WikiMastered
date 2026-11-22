@@ -418,6 +418,20 @@ WISH_CHECK_MINUTES=10                   # lecture de ta liste de souhaits
 - `WISH_MAX_PRICE=2000` : une carte de ta liste de souhaits estimée 1500 WB est achetée jusqu'à 1500 WB. Une carte estimée 3000 l'est jusqu'à 2000 WB au plus.
 - `WISH_UNQUOTED_MAX_PRICE=100` : une carte souhaitée jamais vue vendue dans cette rareté, en vente à 10 WB, est misée jusqu'à 100 WB. En vente à 600 WB, elle n'est pas misée et le bot te prévient.
 
+## Favoris à monter
+
+Le worker `favorites` rachète chaque carte que tu mets en favori dans une rareté plus haute que ton meilleur exemplaire, jusqu'à L, au plus à sa cote dans la rareté en vente : jamais plus que le prix du marché, et pas de mise sans cote. Aucune recherche par titre : le bot met ces cartes dans ta liste de souhaits (le site annonce leurs ventes) et le sniper voit déjà toutes les ventes de `SNIPER_RESALE_RARITIES`. Une fois la carte montée, le favori passe au nouvel exemplaire et l'ancien redevient vendable.
+
+```sh
+FAVORITES_UPGRADE=false                 # monter tes cartes en favori (écritures : groupe « favorites »)
+FAVORITES_CHECK_MINUTES=60              # lecture de tes favoris
+```
+
+**Exemples**
+- « Khéops » en favori, ton meilleur exemplaire est une R : une SR en vente, cotée 120 WB, est misée jusqu'à 120 WB. Gagnée, la SR passe en favori, la R en sort et peut être vendue ; le bot vise ensuite l'UR et la L.
+- Une carte en favori dont tu as un shiny, ou déjà en L : plus rien à acheter.
+- Ces mises comptent dans `COLLECTION_BIDS_PER_CHECK`, comme celles des collections.
+
 ## Thèmes
 
 Règles des thèmes dans [`config/themes.yaml`](../config/themes.yaml). Détail : [Fonctionnement](FONCTIONNEMENT.md#étiquettes-de-thème).
@@ -437,7 +451,7 @@ Noms des tags du site que le bot pose ou lit. Chacun est à créer une fois sur 
 TAG_PROTECTED=                          # étiquettes du site jamais vendues ni défaussées ; ex. date,GIF
 TAG_DAYS=date                           # étiquette des jours et de COLLECTION_TITLES (vide = non)
 TAG_COLLECTION_MAX_PER_RUN=60
-TAG_SHOWCASE=                           # étiquette des cartes en vitrine et des exemplaires gardés des collections (vide = non)
+TAG_SHOWCASE=                           # étiquette des cartes en vitrine (vide = non)
 TAG_WISH=Souhait                        # étiquette posée sur la carte obtenue (à créer une fois sur le site) ; vide = aucune
 TAG_UNSOLD=Invendue                     # étiquette d'une carte que le bot renonce à vendre (à créer sur le site ; vide = aucune)
 TAG_MANUAL_RESALE=revente               # tes achats portant cette étiquette : revendus par le bot (vide = non)

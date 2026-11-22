@@ -123,9 +123,10 @@ async def sync(ctx: Context, missing: list[str], titles: dict[str, str]) -> dict
     return result
 
 
-def _of_collection(ctx: Context, rows: list[dict], by_id: dict[str, str]) -> list[str]:
-    """Notifications des cartes suivies par les collections : celles des autres cartes restent non lues."""
-    keys = set(targets(ctx))
+def _of_collection(ctx: Context, rows: list[dict], by_id: dict[str, str], quiet: set[str] = frozenset()) -> list[str]:
+    """Notifications des cartes suivies par les collections (et des clés `quiet` : favoris à monter) : celles des
+    autres cartes restent non lues."""
+    keys = set(targets(ctx)) | quiet
     out = []
     for row in rows:
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
@@ -177,7 +178,7 @@ async def covered(ctx: Context) -> set[str]:
 
 
 async def new_listings(ctx: Context, wanted: set[str], now: datetime | None = None,
-                       extra: dict[str, str] | None = None) -> list[str]:
+                       extra: dict[str, str] | None = None, quiet: set[str] = frozenset()) -> list[str]:
     """Ventes annoncées depuis la dernière lecture, pour les cartes de `wanted`. Le curseur est gardé en base : un
     redémarrage ne perd pas les annonces arrivées entre-temps. `extra` : id de carte -> clé de titre des cartes
     souhaitées (src/workers/wishes.py), que l'état des collections ne connaît pas."""
@@ -196,7 +197,7 @@ async def new_listings(ctx: Context, wanted: set[str], now: datetime | None = No
         key = by_id.get(str(data.get("card_id"))) or collection_key(str(data.get("card_title") or ""))
         if row.get("type") == LISTED and key in wanted and data.get("auction_id"):
             auctions.append(str(data["auction_id"]))
-    await _mark_read(ctx, _of_collection(ctx, rows, by_id))
+    await _mark_read(ctx, _of_collection(ctx, rows, by_id, quiet))
     if rows:
         cursor = str(rows[-1]["created_at"])
     if cursor != known:

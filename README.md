@@ -19,6 +19,7 @@ Par défaut, `DRY_RUN=true` : rien n'est envoyé au site, le bot annonce seuleme
 | [`themes`](src/workers/themes.py) | Range la collection par thème (Personne, Pays, Musique…) grâce à Wikidata | coupé (`THEMES_ENABLED`) |
 | [`achievements`](src/workers/achievements.py) | Réclame les récompenses de succès, chaque soir à 22:50 | actif |
 | [`wishes`](src/workers/wishes.py) | Achète les cartes que tu ajoutes toi-même à ta liste de souhaits du site, jusqu'à leur cote, et les étiquette | coupé (`WISH_MAX_PRICE`) |
+| [`favorites`](src/workers/favorites.py) | Monte tes cartes en favori dans une rareté plus haute, jusqu'à L, au plus à leur cote ; le favori passe au nouvel exemplaire | coupé (`FAVORITES_UPGRADE`) |
 | [`trades`](src/workers/trade_watch.py) | Évalue les échanges qu'on te propose et suggère une contre-offre ; ne répond jamais à ta place | actif |
 | [`value_scan`](src/workers/value_scan.py) | Cote toute la collection toutes les 12 h, pour la défausse des derniers exemplaires | actif |
 | [`account_value`](src/workers/account_value.py) | Calcule la valeur du compte (`/compte valeur`) toutes les 6 h | actif |

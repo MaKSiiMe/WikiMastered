@@ -792,7 +792,9 @@ def test_collection_names_accept_singular_and_accents():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("showcase_ok", [True, False])
-async def test_showcase_tag_follows_showcases_and_kept_collection_copies(tmp_path, showcase_ok):
+async def test_showcase_tag_follows_showcases_only(tmp_path, showcase_ok):
+    """22/11 : « Vitrine » seulement sur les cartes exposées, plus sur les centaines de cartes des collections
+    (elles ont l'étiquette de leur collection, et les favoris les protègent)."""
     import json as jsonlib
 
     from src.workers.collection import refresh
@@ -829,15 +831,14 @@ async def test_showcase_tag_follows_showcases_and_kept_collection_copies(tmp_pat
                                    wm_cookie=cookie_for("a1", "r1", 3600))
     ctx = await make_context(tmp_path, client, notifier)
     state = await refresh(ctx)
-    posted = [("POST", {"user_card_id": "o2", "tag_id": 9})]
     if showcase_ok:
-        # Le SR gardé et la carte exposée la reçoivent ; l'ancien R et la carte sortie de la vitrine la perdent.
-        assert calls == [("POST", {"user_card_id": "o2", "tag_id": 9}), ("POST", {"user_card_id": "s1", "tag_id": 9}),
+        # La carte exposée la reçoit ; la carte de collection (o1) et la carte sortie de la vitrine la perdent.
+        assert calls == [("POST", {"user_card_id": "s1", "tag_id": 9}),
                          ("DELETE", {"user_card_id": "eq.o1", "tag_id": "eq.9"}),
                          ("DELETE", {"user_card_id": "eq.x9", "tag_id": "eq.9"})]
-        assert state["showcase"] == {"tag": "Vitrine", "tagged": 2, "untagged": 2, "to_tag": 0}
+        assert state["showcase"] == {"tag": "Vitrine", "tagged": 1, "untagged": 2, "to_tag": 0}
     else:
-        assert calls == posted and "rien n'est retiré" in state["showcase"]["error"]
+        assert calls == [] and "rien n'est retiré" in state["showcase"]["error"]
     await ctx.db.close()
 
 

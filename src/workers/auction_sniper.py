@@ -47,13 +47,14 @@ from src.core.timeutils import in_window, local_dt, now_local, utcnow
 from src.core.winmodel import CONTROL_MARK, WinModel, fit
 from src.snipes import REASON as SNIPE_REASON
 from src.workers.wishes import REASON as WISH_REASON
+from src.workers.favorites import REASON as FAVORITE_REASON
 from src.snipes import Snipe
 from src.snipes import load as load_snipes
 from src.snipes import remove as remove_snipe
 from src.workers.base import Worker
 from src.workers.settle import nudge_settle
 from src.workers.collection import KV_KEY as COLLECTION_KV
-from src.workers import wishes, wishlist
+from src.workers import favorites, wishes, wishlist
 from src.workers.collection import PriceRule, collection_key, price_rules, record_win, targets as collection_targets
 from src.workers.inventory_manager import ANTIBOT_HINT, RIVAL_MIN_SHARE
 
@@ -540,6 +541,9 @@ class AuctionSniper(Worker):
         self._wishes: dict[str, Snipe] = {}
         self._wish_ids: dict[str, str] = {}  # id de carte -> clé de titre, pour les ventes annoncées par le site
         self._wish_unquoted: set[tuple[str, str | None, bool]] = set()  # sans cote : prévenu une fois
+        # Cartes en favori à monter en rareté (worker favorites), jusqu'à leur cote ; jamais cherchées par leur titre.
+        self._favorites: dict[str, Snipe] = {}
+        self._favorite_ids: dict[str, str] = {}
         self._win_model: WinModel | None = None  # valeur d'une mise, d'après les mises réglées
         self._win_model_at = _EPOCH
         await self._refresh_win_model()
@@ -714,7 +718,7 @@ class AuctionSniper(Worker):
                    if group]
         if self._searched() or self._collection_best:
             sources.append((("day", ""), self.settings.collection_search_seconds))
-        if (self.settings.collection_wishlist and self._collection_missing) or self._wishes:
+        if (self.settings.collection_wishlist and self._collection_missing) or self._wishes or self._favorites:
             sources.append((("wishlist", ""), self.settings.collection_wishlist_seconds))
         return [((now - self._last_read.get(key, _EPOCH)).total_seconds() - every, every, key)
                 for key, every in sources]
@@ -785,8 +789,8 @@ class AuctionSniper(Worker):
     async def _read_wishlist(self, params: SnipeParams, now: datetime) -> None:
         """Ventes de cartes manquantes annoncées par le site : chacune est relue, puis suivie comme les autres."""
         try:
-            ids = await wishlist.new_listings(self.ctx, self._collection_missing | set(self._wishes), now,
-                                              self._wish_ids)
+            ids = await wishlist.new_listings(self.ctx, self._collection_missing | set(self._wishes) | set(self._favorites),
+                                              now, {**self._favorite_ids, **self._wish_ids}, quiet=set(self._favorites))
         except ApiError as exc:
             self.log.warning("annonces de la liste de souhaits illisibles : %s", exc)
             return
@@ -1037,7 +1041,8 @@ class AuctionSniper(Worker):
             if a.seconds_left(now) <= 0:
                 continue
             if snipe := self._snipe_for(a):
-                out.append((a, snipe.max_price, "souhaitée" if snipe.wish else "demandée"))
+                out.append((a, None if snipe.favorite else snipe.max_price,
+                            "favori, à sa cote" if snipe.favorite else "souhaitée" if snipe.wish else "demandée"))
             elif self._collection_wants(a):
                 have = self._upgrade_from(a)
                 out.append((a, self._fixed_collection_cap(a),
@@ -1049,8 +1054,11 @@ class AuctionSniper(Worker):
     def _snipe_for(self, auction: Auction) -> Snipe | None:
         """Demande qui vaut pour cette vente : carte demandée sur Discord, sinon carte de ta liste de souhaits."""
         key = collection_key(auction.title)
-        snipe = self._snipes.get(key) or self._wishes.get(key)
-        return snipe if snipe is not None and snipe.matches(auction) else None
+        for source in (self._snipes, self._wishes, self._favorites):
+            snipe = source.get(key)
+            if snipe is not None and snipe.matches(auction):
+                return snipe
+        return None
 
     async def reload_snipes(self) -> None:
         """Relit les cartes demandées sur Discord (aussi appelé par /sniper demander et /sniper annuler, sans attendre) et les cartes
@@ -1058,6 +1066,8 @@ class AuctionSniper(Worker):
         self._snipes = await load_snipes(self.db)
         self._wishes = await wishes.load(self.db, self.settings.wish_max_price)
         self._wish_ids = await wishes.card_ids(self.db) if self._wishes else {}
+        self._favorites = await favorites.load(self.db) if self.settings.favorites_upgrade else {}
+        self._favorite_ids = await favorites.card_ids(self.db) if self._favorites else {}
 
     def _rules(self, auction: Auction) -> list[PriceRule]:
         return self._price_rules.get(collection_key(auction.title)) or [PriceRule()]
@@ -1107,6 +1117,22 @@ class AuctionSniper(Worker):
                                   auction.rarity, history.average, history.count)
                 return history
         return quote
+
+    async def _favorite_cap(self, auction: Auction) -> int | None:
+        """Plafond d'un favori à monter : sa cote dans cette rareté, jamais plus que le prix du marché ; sans cote :
+        pas de mise (dans les logs seulement, une fois par carte et rareté : des centaines de favoris)."""
+        try:
+            quote = await self._kept_quote(auction)
+        except (RateLimited, ApiError):
+            quote = Quote(None, 0)
+        if quote.average is not None:
+            return math.floor(quote.average)
+        seen = (auction.catalog_id, auction.rarity, auction.shiny)
+        if seen not in self._wish_unquoted:
+            self._wish_unquoted.add(seen)
+            self.log.info("favori à monter : %s (%s) en vente à %d WB, sans cote connue : pas de mise", auction.title,
+                          auction.rarity, auction.min_bid)
+        return None
 
     async def _wish_cap(self, auction: Auction) -> int | None:
         """Plafond d'une carte souhaitée : sa cote dans cette rareté (sans requête : mise en cache par `_prepare`),
@@ -1183,7 +1209,7 @@ class AuctionSniper(Worker):
         Pas de cote non plus pour une cible déjà au-dessus de son plafond estimé : la cote ne ferait que le baisser."""
         await self.portfolio(now)
         auction = target.auction
-        wish = (snipe := self._snipe_for(auction)) is not None and snipe.wish  # son plafond est sa cote
+        wish = (snipe := self._snipe_for(auction)) is not None and (snipe.wish or snipe.favorite)  # plafond : sa cote
         quoted = snipe is None and self._collection_wants(auction) and self._quoted_collection(auction)
         if wish or quoted or (auction.rarity in self.settings.sniper_resale_rarities and not self._wanted(auction)
                     and target.room >= 0):
@@ -1468,6 +1494,8 @@ class AuctionSniper(Worker):
         engaged = await self.db.collection_auctions_engaged(auction.catalog_id)
         if engaged - {auction.id}:
             return None  # une autre vente de la même carte est déjà en cours pour le bot
+        if snipe is not None and snipe.favorite:
+            return await self._favorite_cap(auction)
         if snipe is not None and snipe.wish:
             return await self._wish_cap(auction)
         return snipe.max_price if snipe else await self._set_cap(auction)
@@ -1545,8 +1573,8 @@ class AuctionSniper(Worker):
                           collection_cap=collection_cap,
                           resale=resale and snipe is None and not self._collection_wants(auction), push=push)
         if decision is not None and snipe is not None:
-            decision = replace(decision, reason=f"{WISH_REASON if snipe.wish else SNIPE_REASON} "
-                                                f"≤ {decision.ceiling}")
+            motive = FAVORITE_REASON if snipe.favorite else WISH_REASON if snipe.wish else SNIPE_REASON
+            decision = replace(decision, reason=f"{motive} ≤ {decision.ceiling}")
         elif decision is not None and decision.collection and (have := self._upgrade_from(auction)):
             decision = replace(decision, reason=f"{COLLECTION_PREFIX} : rareté {have} → {auction.rarity} "
                                                 f"≤ {decision.ceiling}")
@@ -1966,7 +1994,8 @@ class AuctionSniper(Worker):
         if not simulated and (not closed or self.settings.discord_wikinsider_kept):
             reason = str(row["reason"] or "")
             kept = "" if not closed else ("carte demandée" if reason.startswith(SNIPE_REASON) else
-                                          "souhaitée" if reason.startswith(WISH_REASON) else "collection")
+                                          "souhaitée" if reason.startswith(WISH_REASON) else
+                                          "favori" if reason.startswith(FAVORITE_REASON) else "collection")
             wikinsider.note_buy(self.notifier, self.settings.wm_base_url, bid_id=row["id"], title=row["title"],
                                 price=amount, shiny=bool(row["is_shiny"]), rarity=row["rarity"],
                                 auction_id=row["auction_id"], kept=kept)
@@ -1996,6 +2025,11 @@ class AuctionSniper(Worker):
                     await wishes.record_win(self.db, row["title"], row["rarity"])
                     await self.reload_snipes()
                 title = "Carte souhaitée obtenue (simulé)" if simulated else "Carte souhaitée obtenue !"
+            elif str(row["reason"]).startswith(FAVORITE_REASON):  # rareté au-dessus visée ensuite, jusqu'à L
+                if not simulated:
+                    await favorites.record_win(self.db, row["title"], row["rarity"])
+                    await self.reload_snipes()
+                title = "Favori monté en rareté (simulé)" if simulated else "Favori monté en rareté !"
             notify(title, f"{name}, gardée dans la collection", topic=Topic.COLLECTION, **look,
                    rareté=row["rarity"] or "?", prix=f"{amount} WB")
             return
