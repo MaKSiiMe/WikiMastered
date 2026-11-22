@@ -44,7 +44,7 @@ Une session reste valable tant qu'elle n'est pas révoquée : déconnexion de to
 
 Salon voulu > ⚙️ *Modifier le salon* > *Intégrations* > *Webhooks* > *Nouveau webhook* > *Copier l'URL du webhook*.
 
-Un seul salon suffit pour commencer. Tu pourras [répartir les messages par salon](#un-salon-par-catégorie) plus tard. Un second webhook dans un salon réservé aux alertes rouges (`DISCORD_ALERT_WEBHOOK_URL`) est vite utile : c'est le seul salon à laisser sonner.
+Un seul salon suffit pour commencer. Tu pourras [répartir les messages par salon](#un-salon-par-catégorie) plus tard. Un second webhook dans un salon réservé aux alertes rouges (`DISCORD_WEBHOOK_ALERTS`) est vite utile : c'est le seul salon à laisser sonner.
 
 ## 3. Lancer le bot
 
@@ -69,7 +69,7 @@ git clone https://github.com/MaKSiiMe/WikiMastered.git && cd WikiMastered
 cp .env.example .env
 ```
 
-Dans `.env`, remplis `WM_COOKIE` et `WM_USER_AGENT` (entre apostrophes), et `DISCORD_WEBHOOK_URL`. Laisse `DRY_RUN=true`. Puis :
+Dans `.env`, remplis `WM_COOKIE` et `WM_USER_AGENT` (entre apostrophes), et `DISCORD_WEBHOOK_MAIN`. Laisse `DRY_RUN=true`. Puis :
 
 ```bash
 mkdir -p backups && sudo chown -R 1000:1000 data backups   # le conteneur tourne sous l'UID 1000
@@ -103,7 +103,7 @@ Dans *Environment variables*, clique sur **Advanced mode** et colle, une variabl
 DRY_RUN=true
 WM_COOKIE=<le cookie de la fenêtre privée>
 WM_USER_AGENT=<le user-agent>
-DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+DISCORD_WEBHOOK_MAIN=https://discord.com/api/webhooks/...
 ```
 
 Puis **Deploy the stack** : Portainer clone le dépôt et construit l'image (une à deux minutes la première fois).
@@ -136,12 +136,12 @@ Ce sont les réglages les plus utiles au départ. Pour en changer un, ajoute ou 
 | `SNIPER_DAILY_BUDGET` | `0` (aucun) | Un budget trop petit bloque presque tous les achats : il doit dépasser le prix d'une position |
 | `COLLECTION_SETS` | vide | Collections à compléter, ex. `ma_liste` ([détail](FONCTIONNEMENT.md#collections)). Vide : aucune |
 | `COLLECTION_MAX_PRICE` | `10` | Mise maximale pour une carte de collection, en WB |
-| `COLLECTION_TAG` | `date` | Étiquette des jours. Crée-la une fois sur le site |
-| `PROTECTED_TAGS` | vide | Étiquettes jamais vendues ni défaussées, ex. `date,GIF` |
-| `AUTO_LIST` | `false` | Vente automatique des doublons cotés au moins `SELL_MIN_VALUE` (15 WB) |
-| `AUTO_DISCARD` | `false` | Défausse des doublons sans valeur. Demande aussi `ACHIEVEMENT_MILESTONES` (`0` si tu n'as aucun palier à protéger) |
-| `ENABLE_THEME_TAGS` | `false` | Étiquettes de thème ([détail](FONCTIONNEMENT.md#étiquettes-de-thème)) |
-| `MANUAL_RESALE_TAG` | `revente` | Une carte que tu étiquettes ainsi est revendue par le bot |
+| `TAG_DAYS` | `date` | Étiquette des jours. Crée-la une fois sur le site |
+| `TAG_PROTECTED` | vide | Étiquettes jamais vendues ni défaussées, ex. `date,GIF` |
+| `DUPLICATES_SELL` | `false` | Vente automatique des doublons cotés au moins `DUPLICATES_MIN_VALUE` (15 WB) |
+| `DISCARD_ENABLED` | `false` | Défausse des doublons sans valeur. Demande aussi `ACHIEVEMENTS_MILESTONES` (`0` si tu n'as aucun palier à protéger) |
+| `THEMES_ENABLED` | `false` | Étiquettes de thème ([détail](FONCTIONNEMENT.md#étiquettes-de-thème)) |
+| `TAG_MANUAL_RESALE` | `revente` | Une carte que tu étiquettes ainsi est revendue par le bot |
 
 **Réel ou simulé**, écriture par écriture :
 
@@ -159,7 +159,7 @@ Groupes : `sniper`, `collection`, `ventes`, `defausse`, `tags`, `themes`, `succe
 Par étapes, car le bot dépense alors de vrais WB. Après chaque changement, redémarre : `docker compose up -d` avec Compose, **Pull and redeploy** avec Portainer.
 
 1. **Choisis tes raretés** (`SNIPER_RESALE_RARITIES`) et observe quelques jours en simulation : le bot doit d'abord voir assez de ventes pour estimer les cartes. Regarde les messages `[DRY RUN]`, le bilan du soir et le récap des enchères de 08:00. `python -m src.main inventory scan` montre ce que l'inventaire ferait.
-2. **`DRY_RUN=false` et `SIMULATE=sniper`** : ventes, collection et étiquettes deviennent réelles ; seules les mises des positions du sniper restent simulées. Ajoute `AUTO_LIST=true` pour vendre les doublons.
+2. **`DRY_RUN=false` et `SIMULATE=sniper`** : ventes, collection et étiquettes deviennent réelles ; seules les mises des positions du sniper restent simulées. Ajoute `DUPLICATES_SELL=true` pour vendre les doublons.
 3. **Retire `SIMULATE`** quand le bloc « Validation de la simulation » du bilan dit que le passage en réel est envisageable : au moins 10 reventes simulées, et un bilan positif même en comptant les invendues comme perdues.
 
 À la première écriture réelle de chaque type, Discord affiche « Première réponse réelle : … ». Les 3 premières réponses sont gardées dans `data/inspect/writes/` pour vérifier leur format.
@@ -188,12 +188,12 @@ Crée un salon et son webhook pour chaque catégorie voulue, puis ajoute son URL
 
 | Variable | Le salon reçoit |
 |---|---|
-| `DISCORD_ALERT_WEBHOOK_URL` | Les alertes, à laisser sonner. Les alertes critiques y restent toujours |
+| `DISCORD_WEBHOOK_ALERTS` | Les alertes, à laisser sonner. Les alertes critiques y restent toujours |
 | `DISCORD_WEBHOOK_SNIPER` | Récap des enchères de 08:00, budget, mises à vérifier |
-| `DISCORD_WEBHOOK_VENTES` | Un message par position (achetée → en vente → vendue), ventes, échanges |
+| `DISCORD_WEBHOOK_RESALE` | Un message par position (achetée → en vente → vendue), ventes, échanges |
 | `DISCORD_WEBHOOK_COLLECTION` | Cartes de collection, étiquettes, succès |
-| `DISCORD_WEBHOOK_BILAN` | Bilan de 23:00, récap des workers toutes les 4 h |
-| `DISCORD_WEBHOOK_SYSTEME` | Démarrage, session, réseau, sauvegardes |
+| `DISCORD_WEBHOOK_REPORT` | Bilan de 23:00, récap des workers toutes les 4 h |
+| `DISCORD_WEBHOOK_SYSTEM` | Démarrage, session, réseau, sauvegardes |
 
 `DISCORD_MENTION=@here` ajoute une mention aux alertes critiques. Les commandes répondent dans le salon où tu les tapes : un salon `#commandes` n'a pas besoin de webhook.
 
@@ -223,7 +223,7 @@ Pour le relancer malgré tout : `rm data/HALT` dans la console du conteneur, pui
 
 ### Sauvegardes
 
-Chaque nuit à 04:30 (`BACKUP_TIME`), le bot copie la base à chaud, vérifie la copie, la compresse et garde les 7 plus récentes (`BACKUP_KEEP`), dans un dossier séparé des données. `/sauvegarde` sur Discord en fait une tout de suite, et `/etat` montre la dernière.
+Chaque nuit à 04:30 (`BACKUP_TIME`), le bot copie la base à chaud, vérifie la copie, la compresse et garde les 7 plus récentes (`BACKUP_KEEP_COUNT`), dans un dossier séparé des données. `/sauvegarde` sur Discord en fait une tout de suite, et `/etat` montre la dernière.
 
 Elles restent sur la même machine. Pour en garder une ailleurs : `docker cp wikimastered:/app/backups/<archive> .`
 
@@ -261,7 +261,7 @@ Tout est dans `data/` : base SQLite, journal, session. Avec Portainer, c'est le 
 | « Session : renouvellement refusé » | Le navigateur et le bot partagent la même session. Reprends un cookie dans une fenêtre privée, [étape 1](#1-récupérer-la-session-du-bot) |
 | « Commandes Discord inactives » | `DISCORD_OWNER_ID` manquant ou pas un nombre : il faut ton identifiant, pas ton pseudo |
 | Pas de commande `/…` dans Discord | Sans `DISCORD_GUILD_ID`, jusqu'à une heure d'attente |
-| Aucun message Discord | Vérifie `DISCORD_WEBHOOK_URL` et lis les logs (`docker logs wikimastered`) : sans webhook, les messages y sont seulement recopiés |
+| Aucun message Discord | Vérifie `DISCORD_WEBHOOK_MAIN` et lis les logs (`docker logs wikimastered`) : sans webhook, les messages y sont seulement recopiés |
 | Le bot ne mise pas | `SNIPER_RESALE_RARITIES` est vide par défaut. Sinon, regarde `/etat` : vérification anti-bot en attente, route en pause, sniper en pause. Sinon, `python -m src.main sniper-report --breakdown`. Il faut aussi quelques jours de ventes observées avant que le bot sache estimer les cartes |
 | Aucune collection dans le récap | `COLLECTION_SETS` est vide |
 | Une étiquette n'est pas posée | Elle doit d'abord être créée sur le site. `python -m src.main etiquettes` liste celles qui manquent |

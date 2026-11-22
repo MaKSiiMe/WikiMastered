@@ -108,8 +108,8 @@ Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'
 | Bénéfice si la position doit attendre une place | ≥ 100 % du budget, sauf si elle rapporte plus que les ventes en attente : elle passe alors devant elles |
 | Mise / estimation | entre 25 % et 50 % |
 | Revente estimée | ≤ la vente concurrente la moins chère, encore en cours 1 h après la fin de l'enchère et affichée à au moins 50 % de l'estimation |
-| Solde | jamais sous 50 WB (`SNIPER_MIN_BALANCE_RESERVE`) |
-| Positions | 5 au plus (`PORTFOLIO_MAX_POSITIONS`, 0 = aucun plafond) |
+| Solde | jamais sous 50 WB (`SNIPER_BALANCE_RESERVE`) |
+| Positions | 5 au plus (`RESALE_MAX_POSITIONS`, 0 = aucun plafond) |
 
 **Valeur d'une mise** (`SNIPER_MIN_BID_VALUE`, coupé par défaut) : la vérification anti-bot ne laisse passer qu'un petit nombre de mises, et le bénéfice attendu ne dit pas la chance de gagner. Une mise très sous l'estimation promet beaucoup et gagne rarement : les autres joueurs font monter l'enchère. Le bot calcule donc ce qu'une mise rapporte en moyenne :
 
@@ -121,17 +121,17 @@ valeur = chance de gagner × (revente attendue − mise)
 - Revente attendue : l'estimation × ce que tes reventes ont vraiment donné par rapport à leur estimation.
 - Le calcul se refait chaque heure sur les mises réelles des `SNIPER_BID_VALUE_DAYS` derniers jours. Sous 200 mises réglées, aucun seuil ne s'applique.
 
-Une première mise dont la valeur est sous le seuil est sautée (« valeur de la mise trop faible ») : le quota va aux meilleures, et le bot reste moins longtemps bloqué. `NIGHT_MIN_BID_VALUE` fixe un seuil plus haut pour les heures où tu ne peux pas faire la vérification. `python -m src.main sniper-value` montre, seuil par seuil, ce que tes occasions des derniers jours auraient rapporté.
+Une première mise dont la valeur est sous le seuil est sautée (« valeur de la mise trop faible ») : le quota va aux meilleures, et le bot reste moins longtemps bloqué. `SNIPER_NIGHT_MIN_BID_VALUE` fixe un seuil plus haut pour les heures où tu ne peux pas faire la vérification. `python -m src.main sniper-value` montre, seuil par seuil, ce que tes occasions des derniers jours auraient rapporté.
 
-**Enchères déjà disputées** (`SNIPER_MAX_RISE`, coupé par défaut) : quand plusieurs joueurs ont déjà misé, souvent des bots de revente, l'enchère part le plus souvent au-dessus de ton plafond. Une mise y gagne rarement et use une place du quota anti-bot. Chaque mise fait passer la mise minimale à 1,1 × la précédente : `SNIPER_MAX_RISE=1.5` saute une carte non shiny dont l'enchère a déjà monté de plus de 50 % (environ 5 mises), « enchère déjà montée de plus de 50% ». `NIGHT_MAX_RISE=1.2` est plus strict la nuit (une mise déjà faite au plus) : les quelques mises de ta dernière vérification du soir tiennent plus longtemps. Règle la nuit (`NIGHT_START`, `NIGHT_END`) sur les heures où tu ne peux pas faire la vérification. La collection, `/snipe` et les souhaits ne sont pas concernés.
+**Enchères déjà disputées** (`SNIPER_MAX_RISE`, coupé par défaut) : quand plusieurs joueurs ont déjà misé, souvent des bots de revente, l'enchère part le plus souvent au-dessus de ton plafond. Une mise y gagne rarement et use une place du quota anti-bot. Chaque mise fait passer la mise minimale à 1,1 × la précédente : `SNIPER_MAX_RISE=1.5` saute une carte non shiny dont l'enchère a déjà monté de plus de 50 % (environ 5 mises), « enchère déjà montée de plus de 50% ». `SNIPER_NIGHT_MAX_RISE=1.2` est plus strict la nuit (une mise déjà faite au plus) : les quelques mises de ta dernière vérification du soir tiennent plus longtemps. Règle la nuit (`SNIPER_NIGHT_START`, `SNIPER_NIGHT_END`) sur les heures où tu ne peux pas faire la vérification. La collection, `/snipe` et les souhaits ne sont pas concernés.
 
-**Mise** : le minimum du site. `SNIPER_BID_PUSH` la pousse vers le plafond, et `SNIPER_ALLOW_REBID=true` remise au plafond, une seule fois, si elle est surenchérie. Le bot ignore toute carte sur laquelle tu mises toi-même. Pour savoir si pousser la mise rapporte plus qu'il ne coûte, `SNIPER_BID_PUSH_CONTROL_SHARE=0.3` laisse 30 % des mises au minimum : `python -m src.main sniper-report --breakdown` compare ensuite les deux groupes.
+**Mise** : le minimum du site. `SNIPER_BID_PUSH_RATIO` la pousse vers le plafond, et `SNIPER_ALLOW_REBID=true` remise au plafond, une seule fois, si elle est surenchérie. Le bot ignore toute carte sur laquelle tu mises toi-même. Pour savoir si pousser la mise rapporte plus qu'il ne coûte, `SNIPER_BID_PUSH_CONTROL_RATIO=0.3` laisse 30 % des mises au minimum : `python -m src.main sniper-report --breakdown` compare ensuite les deux groupes.
 
 ## Positions : revendre
 
-Une carte gagnée est mise en vente dès son arrivée, pour 6 h (`POSITION_LIST_DURATION_MINUTES`). Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher. Une concurrente affichée sous 50 % de l'estimation ne compte pas : c'est un prix de départ, qui montera. Un seul exemplaire d'une carte est en vente à la fois. Pour un shiny, le message de la position et les logs donnent la page de l'achat, puis celle de chaque mise en vente.
+Une carte gagnée est mise en vente dès son arrivée, pour 6 h (`RESALE_DURATION_MINUTES`). Au moment de publier, le bot se place juste sous la vente concurrente la moins chère, jamais sous le plancher. Une concurrente affichée sous 50 % de l'estimation ne compte pas : c'est un prix de départ, qui montera. Un seul exemplaire d'une carte est en vente à la fois. Pour un shiny, le message de la position et les logs donnent la page de l'achat, puis celle de chaque mise en vente.
 
-Le prix baisse avec le temps passé en vente sans acheteur, d'une étape toutes les 6 h (`POSITION_STEP_MINUTES`). L'attente d'une place de vente ne compte pas. Le bot ne descend jamais sous le prix d'achat.
+Le prix baisse avec le temps passé en vente sans acheteur, d'une étape toutes les 6 h (`RESALE_STEP_MINUTES`). L'attente d'une place de vente ne compte pas. Le bot ne descend jamais sous le prix d'achat.
 
 ```mermaid
 stateDiagram-v2
@@ -149,14 +149,14 @@ stateDiagram-v2
     V3 --> [*]: vendue
 ```
 
-- **Carte invendue** : le bot ne brade jamais. Quand il renonce (après `POSITION_GIVE_UP_AFTER` étapes, coupé par défaut, ou quand toutes les places de vente sont prises), la carte reste dans ta collection, la position est close, et l'exemplaire reçoit l'étiquette `POSITION_UNSOLD_TAG` (« Invendue », à créer une fois sur le site) : tu la retrouves d'un clic pour la vendre autrement. Ajoute cette étiquette à `PROTECTED_TAGS` pour que la vente des doublons ne la reprenne pas.
-- **Perte permise** (coupée par défaut, `POSITION_MAX_LOSS`) : après `POSITION_LOSS_AFTER` étapes, le prix peut passer sous le prix d'achat.
-- **Carte chère sans place de vente** (`POSITION_WAIT_SLOT_FROM`, coupé par défaut) : une position achetée à partir de ce prix n'est pas gardée quand toutes les places sont prises ; elle attend une place, au prix plancher.
+- **Carte invendue** : le bot ne brade jamais. Quand il renonce (après `RESALE_GIVE_UP_AFTER_STEPS` étapes, coupé par défaut, ou quand toutes les places de vente sont prises), la carte reste dans ta collection, la position est close, et l'exemplaire reçoit l'étiquette `TAG_UNSOLD` (« Invendue », à créer une fois sur le site) : tu la retrouves d'un clic pour la vendre autrement. Ajoute cette étiquette à `TAG_PROTECTED` pour que la vente des doublons ne la reprenne pas.
+- **Perte permise** (coupée par défaut, `RESALE_MAX_LOSS_RATIO`) : après `RESALE_LOSS_AFTER_STEPS` étapes, le prix peut passer sous le prix d'achat.
+- **Carte chère sans place de vente** (`RESALE_WAIT_SLOT_FROM`, coupé par défaut) : une position achetée à partir de ce prix n'est pas gardée quand toutes les places sont prises ; elle attend une place, au prix plancher.
 - **Position chère** (coupée par défaut, `POSITION_EXPENSIVE_*`) : moins de baisses, et le bot renonce plus tôt, pour une carte achetée à partir de ce prix.
-- **Position qui traîne** : détenue depuis plus de 48 h (`POSITION_STALE_HOURS`), elle déclenche une alerte avec des boutons.
-- **Reventes plus longues** : avec `POSITION_LIST_LONG_BELOW=N`, une revente dure `POSITION_LIST_LONG_MINUTES` tant que moins de N positions sont détenues, sauf si elle finirait à une heure de `POSITION_AVOID_END_HOURS`.
+- **Position qui traîne** : détenue depuis plus de 48 h (`RESALE_STALE_HOURS`), elle déclenche une alerte avec des boutons.
+- **Reventes plus longues** : avec `RESALE_LONG_BELOW_POSITIONS=N`, une revente dure `RESALE_LONG_DURATION_MINUTES` tant que moins de N positions sont détenues, sauf si elle finirait à une heure de `RESALE_AVOID_END_HOURS`.
 
-**Étiquette « revente »** (`MANUAL_RESALE_TAG`) : une carte que tu achètes ou tires toi-même et que tu étiquettes est reprise comme une position, avec les mêmes règles. Sans achat retrouvé (carte d'un paquet), son prix d'achat est 0 et elle part à sa cote.
+**Étiquette « revente »** (`TAG_MANUAL_RESALE`) : une carte que tu achètes ou tires toi-même et que tu étiquettes est reprise comme une position, avec les mêmes règles. Sans achat retrouvé (carte d'un paquet), son prix d'achat est 0 et elle part à sa cote.
 
 ## Inventaire : doublons et défausse
 
@@ -169,18 +169,18 @@ flowchart LR
     B --> C["3. La plus ancienne"]
 ```
 
-**Doublons** (`AUTO_LIST`) : toutes les 10 min, les doublons les mieux cotés, à partir de 15 WB (`SELL_MIN_VALUE`), rejoignent cette file, 5 en attente au plus.
+**Doublons** (`DUPLICATES_SELL`) : toutes les 10 min, les doublons les mieux cotés, à partir de 15 WB (`DUPLICATES_MIN_VALUE`), rejoignent cette file, 5 en attente au plus.
 
 **Jamais vendu ni défaussé**
 
 | Protégé | Exception |
 |---|---|
-| Dernier exemplaire de chaque carte | raretés de `SELL_LAST_COPY_RARITIES` (jamais une carte achetée par le bot) |
+| Dernier exemplaire de chaque carte | raretés de `DUPLICATES_LAST_COPY_RARITIES` (jamais une carte achetée par le bot) |
 | Favoris, shiny | — |
-| Étiquettes de `PROTECTED_TAGS` | — |
+| Étiquettes de `TAG_PROTECTED` | — |
 | Engagé dans un échange, déjà en vente | — |
 
-**Défausse** (`AUTO_DISCARD`) : les doublons, plus les derniers exemplaires des raretés de `DISCARD_LAST_COPY_RARITIES` (ex. `C,PC`) s'ils sont déjà cotés et ne se sont jamais vendus au-dessus de `DISCARD_MAX_VALUE` (2 WB). Elle ne fait jamais repasser la collection sous un palier de succès atteint (`ACHIEVEMENT_MILESTONES`). Sans paliers renseignés, aucune défausse n'a lieu, par prudence ; `ACHIEVEMENT_MILESTONES=0` indique qu'il n'y en a aucun à protéger.
+**Défausse** (`DISCARD_ENABLED`) : les doublons, plus les derniers exemplaires des raretés de `DISCARD_LAST_COPY_RARITIES` (ex. `C,PC`) s'ils sont déjà cotés et ne se sont jamais vendus au-dessus de `DISCARD_MAX_VALUE` (2 WB). Elle ne fait jamais repasser la collection sous un palier de succès atteint (`ACHIEVEMENTS_MILESTONES`). Sans paliers renseignés, aucune défausse n'a lieu, par prudence ; `ACHIEVEMENTS_MILESTONES=0` indique qu'il n'y en a aucun à protéger.
 
 ## Collections
 
@@ -194,7 +194,7 @@ Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur 
 | `pays` | Les 193 membres de l'ONU, le Vatican, la Palestine, le Kosovo et Taïwan ([liste](../config/pays.txt)), sans étiquette de collection : le worker etiquettes pose « Pays » |
 | la tienne | À décrire dans [config/collections.yaml](../config/collections.yaml) : un nom, une étiquette, les titres |
 
-`COLLECTION_TITLES` ajoute des titres isolés. Pour protéger les cartes gagnées, ajoute leur étiquette à `PROTECTED_TAGS`.
+`COLLECTION_TITLES` ajoute des titres isolés. Pour protéger les cartes gagnées, ajoute leur étiquette à `TAG_PROTECTED`.
 
 Une collection peut avoir son propre plafond (`COLLECTION_SET_MAX_PRICE`), ou être misée comme une revente, jusqu'à sa cote dans la rareté en vente × `COLLECTION_SET_QUOTE_RATIO`. Dans ce cas, la cote est relue avant la mise et ramenée au prix de la vente concurrente la moins chère. Sans cote connue, le bot ne mise pas. Une carte de collection voulue n'est jamais achetée pour être revendue.
 
@@ -212,9 +212,9 @@ flowchart TD
 - Liste de souhaits (`COLLECTION_WISHLIST`, coupé par défaut, avec la clé publique du site) : à chaque lecture de la collection, le bot met les cartes manquantes dans ta liste de souhaits du site et retire celles qu'il y avait mises et que tu possèdes maintenant, jamais les tiennes. Le site annonce alors chaque mise en vente, et le sniper lit ces annonces toutes les `COLLECTION_WISHLIST_SECONDS` au lieu de chercher ces cartes par leur titre. Les notifications de tes cartes de collection (annonces, surenchères, enchères gagnées) sont marquées comme lues ; celles de tes autres cartes restent non lues. Si tu coupes l'option, ce que le bot a ajouté reste dans ta liste.
 - Rareté (`COLLECTION_UPGRADE`, coupé par défaut) : une carte possédée est aussi misée quand une vente propose une rareté plus haute que ta meilleure (R → SR, SR → UR…), au même plafond `COLLECTION_MAX_PRICE`. Les recherches alternent : une carte manquante, puis une carte à monter.
 - L'étiquette passe sur le nouvel exemplaire, puis est retirée de l'ancien, qui n'est plus protégé : il peut être vendu ou défaussé.
-- Étiquette des vitrines (`SHOWCASE_TAG`, vide par défaut) : à chaque lecture de la collection, le bot pose cette étiquette sur les cartes exposées dans les vitrines de ton profil et sur l'exemplaire gardé de chaque carte des collections actives. Il la retire d'une carte sortie d'une vitrine, et d'un exemplaire remplacé par une rareté plus haute une fois le nouveau étiqueté. Le bot gère seul cette étiquette : une carte où tu la poses à la main la perd au passage suivant. Si les vitrines ne peuvent pas être lues, il n'en retire aucune. Ajoute-la à `PROTECTED_TAGS` pour que ces cartes ne soient jamais vendues ni défaussées. Au plus `COLLECTION_TAG_MAX_PER_RUN` ajouts par passage : augmente-le pour une première pose sur beaucoup de cartes.
-- Temps réel (`ENABLE_REALTIME`, coupé par défaut) : le bot s'abonne, comme les pages du site, aux canaux privés de ses enchères (`auction:<id>`, une mise d'un autre joueur la fait relire au passage suivant, avant tout le reste) et de tes notifications (une carte souhaitée ou de collection en vente fait lire les annonces tout de suite). Il n'existe pas de canal des nouvelles ventes : le repérage par pages continue. Si le temps réel tombe, le bot retombe sur ses lectures habituelles ; le récap du sniper donne son état et le nombre d'événements reçus.
-- Cartes souhaitées (`WISH_MAX_PRICE`, coupé par défaut, avec la clé publique du site) : une carte que tu ajoutes toi-même à ta liste de souhaits du site est achetée par le sniper, sans commande. Le worker « souhaits » relit ta liste toutes les `WISH_CHECK_MINUTES` ; les cartes que le bot y a mises pour les collections ne comptent pas. Le sniper mise au minimum, jusqu'à la cote de la carte dans la rareté en vente et jamais au-dessus de `WISH_MAX_PRICE` ; sans cote connue, il mise jusqu'à `WISH_UNQUOTED_MAX_PRICE` (0 par défaut : pas de mise) et te prévient une fois quand la mise minimale le dépasse. Il prend toute rareté plus haute que celle que tu possèdes déjà : une carte obtenue en R peut encore être rachetée en SR. La carte gagnée est gardée et reçoit l'étiquette `WISH_TAG`, à créer une fois sur le site. Le bot ne retire rien de ta liste : retire la carte toi-même pour arrêter. Pour un prix choisi par toi, `/snipe` passe avant.
+- Étiquette des vitrines (`TAG_SHOWCASE`, vide par défaut) : à chaque lecture de la collection, le bot pose cette étiquette sur les cartes exposées dans les vitrines de ton profil et sur l'exemplaire gardé de chaque carte des collections actives. Il la retire d'une carte sortie d'une vitrine, et d'un exemplaire remplacé par une rareté plus haute une fois le nouveau étiqueté. Le bot gère seul cette étiquette : une carte où tu la poses à la main la perd au passage suivant. Si les vitrines ne peuvent pas être lues, il n'en retire aucune. Ajoute-la à `TAG_PROTECTED` pour que ces cartes ne soient jamais vendues ni défaussées. Au plus `TAG_COLLECTION_MAX_PER_RUN` ajouts par passage : augmente-le pour une première pose sur beaucoup de cartes.
+- Temps réel (`REALTIME_ENABLED`, coupé par défaut) : le bot s'abonne, comme les pages du site, aux canaux privés de ses enchères (`auction:<id>`, une mise d'un autre joueur la fait relire au passage suivant, avant tout le reste) et de tes notifications (une carte souhaitée ou de collection en vente fait lire les annonces tout de suite). Il n'existe pas de canal des nouvelles ventes : le repérage par pages continue. Si le temps réel tombe, le bot retombe sur ses lectures habituelles ; le récap du sniper donne son état et le nombre d'événements reçus.
+- Cartes souhaitées (`WISH_MAX_PRICE`, coupé par défaut, avec la clé publique du site) : une carte que tu ajoutes toi-même à ta liste de souhaits du site est achetée par le sniper, sans commande. Le worker « souhaits » relit ta liste toutes les `WISH_CHECK_MINUTES` ; les cartes que le bot y a mises pour les collections ne comptent pas. Le sniper mise au minimum, jusqu'à la cote de la carte dans la rareté en vente et jamais au-dessus de `WISH_MAX_PRICE` ; sans cote connue, il mise jusqu'à `WISH_UNQUOTED_MAX_PRICE` (0 par défaut : pas de mise) et te prévient une fois quand la mise minimale le dépasse. Il prend toute rareté plus haute que celle que tu possèdes déjà : une carte obtenue en R peut encore être rachetée en SR. La carte gagnée est gardée et reçoit l'étiquette `TAG_WISH`, à créer une fois sur le site. Le bot ne retire rien de ta liste : retire la carte toi-même pour arrêter. Pour un prix choisi par toi, `/snipe` passe avant.
 - Cartes chez tes amis : `/amis`, à la demande, lit ta liste de souhaits dans le catalogue du site, qui donne les amis possédant chaque carte. Lecture seule : le bot ne peut pas proposer d'échange.
 - Seuls les titres exacts comptent : « 14 octobre », pas « 14 octobre 1066 ».
 - Jamais deux enchères sur la même carte, jamais sur une carte que tu cherches toi-même.
@@ -232,12 +232,12 @@ flowchart TD
     R --> T["Thèmes et « GIF » (carte animée) sur l'exemplaire gardé<br/>« Doublon » sur les autres"]
 ```
 
-- Désactivé par défaut : `ENABLE_THEME_TAGS=true`. Écritures du groupe `themes` : `SIMULATE=themes` pour voir dans les logs ce qui serait posé (`[SIMULÉ]`), sans rien écrire.
+- Désactivé par défaut : `THEMES_ENABLED=true`. Écritures du groupe `themes` : `SIMULATE=themes` pour voir dans les logs ce qui serait posé (`[SIMULÉ]`), sans rien écrire.
 - Une carte peut avoir plusieurs thèmes (Personne + Musique). Pour les personnes, la description Wikidata fait foi (« actrice et chanteuse »), pas la liste complète des métiers. `sauf` ne retire pas un thème trouvé par la description ou le métier : une « actrice et écrivaine » a les deux.
 - Le bot ne retire que « Doublon », de l'exemplaire gardé quand son doublon est parti, « GIF » (ligne suivante) et les thèmes marqués `retirer` dans le fichier (« Objet ») : d'une carte qui n'a plus ce thème, seulement une fois un autre de ses thèmes posé.
-- « GIF » (`THEME_GIF_TAG`) va sur l'exemplaire gardé d'une carte vraiment animée (plus d'une image, nombre lu sur Wikipédia) et est retirée de tous les autres. Avec `PROTECTED_TAGS`, la carte de la collection `gifs` est protégée et ses doublons restent à vendre.
+- « GIF » (`TAG_GIF`) va sur l'exemplaire gardé d'une carte vraiment animée (plus d'une image, nombre lu sur Wikipédia) et est retirée de tous les autres. Avec `TAG_PROTECTED`, la carte de la collection `gifs` est protégée et ses doublons restent à vendre.
 - La vente et la défausse prennent toujours l'exemplaire le plus récent, et l'exemplaire gardé est le plus ancien : un exemplaire « Doublon » part avant l'exemplaire gardé.
-- Chaque étiquette est à créer une fois sur le site. Les noms sont comparés sans émojis ni casse, partout dans le bot (`PROTECTED_TAGS`, `MANUAL_RESALE_TAG`, `COLLECTION_TAG`) : « 📅 Jour » correspond à `Jour`.
+- Chaque étiquette est à créer une fois sur le site. Les noms sont comparés sans émojis ni casse, partout dans le bot (`TAG_PROTECTED`, `TAG_MANUAL_RESALE`, `TAG_DAYS`) : « 📅 Jour » correspond à `Jour`.
 - Aucune mise, aucun paquet : rien ne compte pour la vérification anti-bot. Wikidata est un autre site.
 - `python -m src.main etiquettes` montre le classement, les cartes sans thème et les étiquettes à créer, sans rien écrire.
 
@@ -256,13 +256,13 @@ flowchart TD
 
 **Échanges** : toutes les 10 min, le bot relit les échanges en cours. Chaque échange qu'on te propose (contre-offres comprises) est annoncé une fois dans le salon principal : valeur de chaque carte (médiane des ventes observées sur 7 jours, même rareté, shiny à part), nombre de ventes de la semaine, verdict (équitable à 10 % près) et, s'il est défavorable, la contre-offre à envoyer : des WB en plus, une carte de la bonne valeur qui part vite, ou une de tes cartes retirée. Le bot ne répond jamais à ta place. `/echange` fait la même évaluation pour un échange que tu envisages. Chaque échange en attente, reçu ou proposé par toi, est aussi gardé avec la valeur de chaque côté, puis son statut final quand il n'est plus en cours : la base du rendement de tes échanges. Au premier passage, tes échanges terminés que le site donne encore sont repris une fois (marqués ↩︎ dans `/echanges`), à la valeur des cartes à la date de l'échange quand les ventes de l'époque sont encore en base.
 
-**Garde du profil** (avec la clé publique, sinon une alerte le signale au démarrage) : toutes les 15 min, le bot relit ton profil. Au premier avertissement de triche ou à la première sanction, il s'arrête net, même après un redémarrage, jusqu'à `rm data/HALT`. La même lecture prévient quand `PACKS_ALERT_AT` paquets attendent d'être ouverts (stock calculé depuis la dernière régénération, message unique jusqu'à ce qu'il redescende) ; le bot ne les ouvre jamais.
+**Garde du profil** (avec la clé publique, sinon une alerte le signale au démarrage) : toutes les 15 min, le bot relit ton profil. Au premier avertissement de triche ou à la première sanction, il s'arrête net, même après un redémarrage, jusqu'à `rm data/HALT`. La même lecture prévient quand `GUARD_PACKS_ALERT_AT` paquets attendent d'être ouverts (stock calculé depuis la dernière régénération, message unique jusqu'à ce qu'il redescende) ; le bot ne les ouvre jamais.
 
 ## Discord
 
 ```mermaid
 flowchart LR
-    B["Bot"] -->|"alertes 🔴 + mention"| AL["Salon d'alertes<br/>DISCORD_ALERT_WEBHOOK_URL"]
+    B["Bot"] -->|"alertes 🔴 + mention"| AL["Salon d'alertes<br/>DISCORD_WEBHOOK_ALERTS"]
     B -->|"achats, ventes réelles,<br/>bilan, récap des enchères"| PR["Salon principal<br/>à laisser sonner"]
     B -->|"collection, succès, résumés,<br/>récaps, simulé"| AC["Salon d'activité<br/>à mettre en sourdine"]
 ```
@@ -273,7 +273,7 @@ Avec `DISCORD_WEBHOOK_SNIPER`, `_VENTES`, `_COLLECTION`, `_BILAN` et `_SYSTEME`,
 
 **Code couleur**, le même pour tous les messages (salons, commandes, graphiques ; `src/core/colors.py`) : 🔵 information, 🟢 tout va bien, gain ou réglage activé, 🟠 à surveiller, 🔴 problème ou perte, ⚪ réglage coupé, annulé ou rien à faire.
 
-Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, prix, revente visée), modifié à chaque étape (en vente, sans acheteur et remise en vente, gardée…), et republié en bas du salon quand elle est vendue ou qu'un problème demande ton attention (Discord ne signale pas une modification). Les boutons (changer le prix, brader, garder) sont ceux de la dernière étape. Les mises du sniper n'ont pas de message propre : le récap des enchères de 08:00 et `/sniper` en donnent le détail (`NOTIFY_EACH_BID=true` : un message par mise).
+Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, prix, revente visée), modifié à chaque étape (en vente, sans acheteur et remise en vente, gardée…), et republié en bas du salon quand elle est vendue ou qu'un problème demande ton attention (Discord ne signale pas une modification). Les boutons (changer le prix, brader, garder) sont ceux de la dernière étape. Les mises du sniper n'ont pas de message propre : le récap des enchères de 08:00 et `/sniper` en donnent le détail (`DISCORD_NOTIFY_EACH_BID=true` : un message par mise).
 
 | Message | Quand | Contenu |
 |---|---|---|
@@ -286,8 +286,8 @@ Chaque position a **un seul message**, dans #ventes : créé à l'achat (carte, 
 | Où | Contenu | Lecture |
 |---|---|---|
 | Console (logs du conteneur) | une ligne courte par événement, au niveau `LOG_LEVEL` ; source courte (`sniper`, `reseau`, `discord`…) ; les messages Discord y sont recopiés sans mise en forme | `docker logs --since 2h wikimastered` |
-| Relevé `stats` | toutes les 15 min (`STATS_MINUTES`) : passages de chaque worker (nombre, durée moyenne, p95, max, erreurs), temps du sniper par étape, requêtes au site (débit, échecs, attente d'un créneau par worker, latence des routes les plus appelées) ; le dernier est aussi dans `/etat` | console |
-| Journal `data/logs/journal.jsonl` | tout, DEBUG compris, une ligne JSON par entrée ; plus les événements `stats` (détail par route) et `enchere` (chaque nouvelle issue d'une enchère examinée par le sniper : mise minimale, estimation, ventes, issue) ; un fichier par jour, `JOURNAL_KEEP_DAYS` gardés | `python -m src.main journal --since 6h [--ev stats,enchere] [--events]` |
+| Relevé `stats` | toutes les 15 min (`LOG_STATS_MINUTES`) : passages de chaque worker (nombre, durée moyenne, p95, max, erreurs), temps du sniper par étape, requêtes au site (débit, échecs, attente d'un créneau par worker, latence des routes les plus appelées) ; le dernier est aussi dans `/etat` | console |
+| Journal `data/logs/journal.jsonl` | tout, DEBUG compris, une ligne JSON par entrée ; plus les événements `stats` (détail par route) et `enchere` (chaque nouvelle issue d'une enchère examinée par le sniper : mise minimale, estimation, ventes, issue) ; un fichier par jour, `LOG_JOURNAL_KEEP_DAYS` gardés | `python -m src.main journal --since 6h [--ev stats,enchere] [--events]` |
 
 ## Routes et données
 

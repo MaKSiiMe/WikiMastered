@@ -113,7 +113,7 @@ async def test_packs_alert_can_be_turned_off_or_lowered(tmp_path):
     for threshold, titles in ((0, []), (5, ["6 paquets à ouvrir"])):
         (tmp_path / str(threshold)).mkdir()
         client, notifier = make_client(tmp_path / str(threshold), handler, supabase_anon_key="anon-key",
-                                       wm_cookie=cookie_for("a1", "r1", 3600), packs_alert_at=threshold)
+                                       wm_cookie=cookie_for("a1", "r1", 3600), guard_packs_alert_at=threshold)
         ctx = await make_context(tmp_path / str(threshold), client, notifier)
         guard = ProfileGuard(ctx)
         await guard.setup()

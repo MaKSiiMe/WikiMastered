@@ -1,6 +1,6 @@
 """Module I : cotes de toute la collection, pour la défausse des derniers exemplaires.
 
-La vente automatique (AUTO_LIST) ne cote que les doublons. La défausse des derniers exemplaires
+La vente automatique (DUPLICATES_SELL) ne cote que les doublons. La défausse des derniers exemplaires
 (DISCARD_LAST_COPY_RARITIES) a besoin de la cote de chaque carte, derniers exemplaires compris
 (Database.known_values). Toutes les VALUE_SCAN_HOURS heures, ce worker, sans aucun message :
 1. lit toute la collection ;
@@ -13,7 +13,7 @@ La vente automatique (AUTO_LIST) ne cote que les doublons. La défausse des dern
 3. fige pour toujours la cote d'une carte sous VALUE_SCAN_FREEZE_BELOW WB (toutes ses raretés possédées) : elle n'est
    plus jamais redemandée, ni ici ni par la vente des doublons.
 
-Un exemplaire protégé (favori, étiquette PROTECTED_TAGS, en échange, déjà en vente) ne compte pas. Les cartes de
+Un exemplaire protégé (favori, étiquette TAG_PROTECTED, en échange, déjà en vente) ne compte pas. Les cartes de
 valeur ne sont plus signalées, surveillées sur le marché ni vendues : le 25/10, 15 mises en vente à 60 % de leur cote,
 aucune vendue ni même misée (abandonné le 26/10).
 """

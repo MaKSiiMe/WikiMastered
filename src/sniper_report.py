@@ -194,7 +194,7 @@ def render(blocks: dict[str, Block], since: datetime, until: datetime, *,
 # vérification anti-bot (~10 mises) ; le 20/10, 16 L gagnées sur 153 misées en 72 h, les perdues parties à ~2 fois
 # notre mise. Si un critère sépare les gagnables des autres, le bot peut sauter celles-ci et garder le quota.
 # Mise minimale avant la nôtre, pour les mises d'avant la colonne min_bid : recalculée depuis la mise et le plafond
-# (mise = minimum + SNIPER_BID_PUSH × l'écart jusqu'au plafond : 0,5 depuis la PR #67, le minimum seul avant).
+# (mise = minimum + SNIPER_BID_PUSH_RATIO × l'écart jusqu'au plafond : 0,5 depuis la PR #67, le minimum seul avant).
 PUSH_SINCE = datetime(2026, 10, 17, 15, 36, tzinfo=UTC)
 HISTORY_PUSH = 0.5
 
@@ -254,8 +254,8 @@ def _time_left(r) -> str:
 
 
 def _push(r) -> str:
-    """Mise poussée au-dessus du minimum (SNIPER_BID_PUSH), ou laissée au minimum : à dessein (groupe témoin,
-    SNIPER_BID_PUSH_CONTROL_SHARE), ou parce que le minimum touchait déjà le plafond."""
+    """Mise poussée au-dessus du minimum (SNIPER_BID_PUSH_RATIO), ou laissée au minimum : à dessein (groupe témoin,
+    SNIPER_BID_PUSH_CONTROL_RATIO), ou parce que le minimum touchait déjà le plafond."""
     if str(r["reason"] or "").endswith(CONTROL_MARK):
         return "au minimum (témoin)"
     if r["first_amount"] is None or r["first_min"] is None:

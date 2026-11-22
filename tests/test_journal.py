@@ -117,7 +117,7 @@ async def test_client_counts_each_request_by_route(tmp_path):
             return httpx.Response(429, headers={"Retry-After": "0"})
         return httpx.Response(200, json={"balance": 42})
 
-    client, _ = make_client(tmp_path, handler, backoff_rate_limit_base_seconds=0.01)
+    client, _ = make_client(tmp_path, handler, http_backoff_rate_limit_seconds=0.01)
     await client.get("balance")
     routes = client.net.take()["routes"]
     assert routes["balance"]["n"] == 2 and routes["balance"]["codes"] == {"429": 1, "200": 1}

@@ -100,8 +100,8 @@ async def test_position_without_bid_at_half_time_is_repriced_once(tmp_path):
             return httpx.Response(200, json={"ok": True})
         return httpx.Response(200, json={"auction": auction["a"]})
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False, position_reprice=True,
-                                   position_relist_discount=0.95, wm_cookie=cookie_for("a1", "r1", 3600))
+    client, notifier = make_client(tmp_path, handler, dry_run=False, resale_midway_reprice=True,
+                                   resale_step_price_ratio=0.95, wm_cookie=cookie_for("a1", "r1", 3600))
     ctx = await make_context(tmp_path, client, notifier)
     listing = await _posted_position(ctx, 375, posted_hours_ago=4, hours_left=2)
     inv = InventoryManager(ctx)
@@ -122,8 +122,8 @@ async def test_reprice_waits_half_time_skips_a_bid_and_never_goes_below_the_floo
             return httpx.Response(200, json={})
         return httpx.Response(200, json={"auction": auction["a"]})
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False, position_reprice=True,
-                                   position_relist_discount=0.95, wm_cookie=cookie_for("a1", "r1", 3600))
+    client, notifier = make_client(tmp_path, handler, dry_run=False, resale_midway_reprice=True,
+                                   resale_step_price_ratio=0.95, wm_cookie=cookie_for("a1", "r1", 3600))
     ctx = await make_context(tmp_path, client, notifier)
     inv = InventoryManager(ctx)
     listing = await _posted_position(ctx, 250, posted_hours_ago=1, hours_left=5)
@@ -145,7 +145,7 @@ class _Worker:
         import logging
         self.log = logging.getLogger("test")
         self.calls: list[str] = []
-        self.settings = type("S", (), {"settle_stuck_auctions": live})()
+        self.settings = type("S", (), {"sniper_settle_stuck": live})()
         worker = self
 
         class _Api:

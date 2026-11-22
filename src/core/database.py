@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS observed_sales (
     is_shiny INTEGER NOT NULL DEFAULT 0, price INTEGER NOT NULL, ended_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_observed_card ON observed_sales (card_id, ended_at);
--- Plus haut prix observé de chaque carte parmi les ventes purgées (OBSERVED_KEEP_DAYS) : la défausse ne doit pas
+-- Plus haut prix observé de chaque carte parmi les ventes purgées (QUOTE_OBSERVED_KEEP_DAYS) : la défausse ne doit pas
 -- oublier qu'une carte s'est déjà vendue cher.
 CREATE TABLE IF NOT EXISTS observed_max (card_id TEXT PRIMARY KEY, price INTEGER NOT NULL);
 -- Ce que Wikidata dit de l'article de chaque carte (étiquettes de thème) ; `rules` : empreinte des classes cherchées
@@ -133,12 +133,12 @@ REPAIRS = ["UPDATE bids SET amount = final_price WHERE status = 'won' AND dry_ru
            "ON CONFLICT(card_id) DO UPDATE SET price = MAX(observed_max.price, excluded.price)",
            f"DELETE FROM observed_sales WHERE rarity <> 'L' AND ended_at < '{NON_L_PURGE_BEFORE}'"]
 # Ventes observées gardées N jours (estimations, ventes factices, commandes hours et gifs).
-OBSERVED_KEEP_DAYS = 60
+QUOTE_OBSERVED_KEEP_DAYS = 60
 # Une paire vendeur -> acheteur vue au moins autant de fois est suspecte (ventes factices entre comptes).
 WASH_PAIR_MIN = 2
 
 HELD = "status IN ('won', 'sim_won') AND closed = 0"
-# Tes propres achats repris par le bot pour la revente (MANUAL_RESALE_TAG) : des positions comme les autres, mais
+# Tes propres achats repris par le bot pour la revente (TAG_MANUAL_RESALE) : des positions comme les autres, mais
 # hors des chiffres du sniper (mises, gagnées, dépenses du jour).
 MANUAL_REASON = "achat manuel"
 NOT_MANUAL = f"reason NOT LIKE '{MANUAL_REASON}%'"
@@ -1077,7 +1077,7 @@ class Database:
 
         Enchères, ventes et défausses sont gardés (comptabilité). Les ventes observées récentes suffisent à
         l'estimation (médiane des 5 dernières) : ~26 000 par jour le 24/10, 1,2 Go en 120 jours. Celles de plus de
-        OBSERVED_KEEP_DAYS partent, leur plus haut prix par carte est gardé (observed_max) pour la défausse."""
+        QUOTE_OBSERVED_KEEP_DAYS partent, leur plus haut prix par carte est gardé (observed_max) pour la défausse."""
         def before(days: int) -> str | None:
             return iso(now - timedelta(days=days))
 
@@ -1085,12 +1085,12 @@ class Database:
             "INSERT INTO observed_max (card_id, price) SELECT card_id, MAX(price) FROM observed_sales "
             "WHERE ended_at < ? GROUP BY card_id "
             "ON CONFLICT(card_id) DO UPDATE SET price = MAX(observed_max.price, excluded.price)",
-            (before(OBSERVED_KEEP_DAYS),))
+            (before(QUOTE_OBSERVED_KEEP_DAYS),))
 
         rules = {
             "price_history": ("observed_at < ?", before(60)),
             "price_cache": ("fetched_at < ?", before(30)),
-            "observed_sales": ("ended_at < ?", before(OBSERVED_KEEP_DAYS)),
+            "observed_sales": ("ended_at < ?", before(QUOTE_OBSERVED_KEEP_DAYS)),
         }
         removed: dict[str, int] = {}
         for table, (where, value) in rules.items():

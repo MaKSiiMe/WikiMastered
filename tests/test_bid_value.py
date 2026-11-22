@@ -123,7 +123,7 @@ async def test_threshold_waits_for_enough_history(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("share, control", [(0.0, False), (1.0, True)])
 async def test_control_group_bids_the_minimum_despite_the_push(tmp_path, share, control):
-    client, notifier = make_client(tmp_path, market(100), sniper_bid_push=0.5, sniper_bid_push_control_share=share)
+    client, notifier = make_client(tmp_path, market(100), sniper_bid_push_ratio=0.5, sniper_bid_push_control_ratio=share)
     ctx = await make_context(tmp_path, client, notifier)
     await seed_observed(ctx.db, "c1", [400, 410, 390])
     sniper = AuctionSniper(ctx)

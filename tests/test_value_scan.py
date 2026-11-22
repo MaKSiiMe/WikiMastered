@@ -59,8 +59,8 @@ async def test_scan_quotes_every_card_silently_and_freezes_cheap_ones(tmp_path):
             return httpx.Response(200, json={"summary": summaries[card]})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, value_scan_lookup_seconds=3, backoff_rate_limit_base_seconds=60,
-                                   sell_min_value=5)
+    client, notifier = make_client(tmp_path, handler, value_scan_lookup_seconds=3, http_backoff_rate_limit_seconds=60,
+                                   duplicates_min_value=5)
     notifier.send = lambda level, title, description="", **kw: messages.append((title, description))
     ctx = await make_context(tmp_path, client, notifier)
     worker = ValueScan(ctx)
@@ -138,7 +138,7 @@ async def test_refused_quote_falls_back_on_the_old_site_average(tmp_path):
 
 def test_settings_defaults():
     s = Settings(_env_file=None)
-    assert (s.enable_value_scan, s.value_scan_hours, s.manual_resale_tag) == (True, 12.0, "revente")
+    assert (s.value_scan_enabled, s.value_scan_hours, s.tag_manual_resale) == (True, 12.0, "revente")
     assert (s.value_scan_lookups, s.value_scan_lookup_seconds, s.value_scan_freeze_below) == (0, 3.0, 50)
 
 
@@ -168,7 +168,7 @@ async def test_server_errors_pause_the_scan_without_slowing_it(tmp_path):
             return httpx.Response(500, json={"error": "boom"})
         return httpx.Response(200, json={"collection": []})
 
-    client, notifier = make_client(tmp_path, handler, value_scan_lookup_seconds=3, backoff_base_seconds=30)
+    client, notifier = make_client(tmp_path, handler, value_scan_lookup_seconds=3, http_backoff_seconds=30)
     ctx = await make_context(tmp_path, client, notifier)
     worker = ValueScan(ctx)
     await worker.setup()

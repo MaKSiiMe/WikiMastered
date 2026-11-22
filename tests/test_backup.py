@@ -58,7 +58,7 @@ def test_backup_refuses_when_there_is_not_enough_room(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_backup_now_records_the_result_for_state(tmp_path):
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(404), backup_dir=tmp_path / "sauvegardes",
-                                   backup_keep=2)
+                                   backup_keep_count=2)
     ctx = await make_context(tmp_path, client, notifier)
     assert "aucune sauvegarde" in backup.describe(ctx.last_backup)
     result = await backup.run_backup(ctx)
@@ -71,7 +71,7 @@ async def test_backup_now_records_the_result_for_state(tmp_path):
 
 @pytest.mark.asyncio
 async def test_old_observed_sales_are_purged_except_shiny_and_rarely_sold_cards(tmp_path):
-    """12/11 : 733 000 ventes observées en 30 jours (320 Mo). OBSERVED_KEEP_DAYS efface les plus anciennes, sauf les
+    """12/11 : 733 000 ventes observées en 30 jours (320 Mo). QUOTE_OBSERVED_KEEP_DAYS efface les plus anciennes, sauf les
     shiny et l'historique d'une carte trop peu vendue depuis pour être estimée sans lui."""
     from datetime import UTC, datetime, timedelta
     from types import SimpleNamespace
@@ -90,9 +90,9 @@ async def test_old_observed_sales_are_purged_except_shiny_and_rarely_sold_cards(
     await db.db.executemany("INSERT INTO observed_sales (auction_id, card_id, title, rarity, is_shiny, price, ended_at)"
                             " VALUES (?, ?, 't', ?, ?, ?, ?)", rows)
     await db.db.commit()
-    ctx = SimpleNamespace(db=db, settings=SimpleNamespace(observed_keep_days=0, price_recent_sales=5))
+    ctx = SimpleNamespace(db=db, settings=SimpleNamespace(quote_observed_keep_days=0, quote_recent_sales=5))
     assert await purge_observed(ctx) == 0  # coupé par défaut
-    ctx.settings.observed_keep_days = 20
+    ctx.settings.quote_observed_keep_days = 20
     assert await purge_observed(ctx) == 6 and await purge_observed(ctx) == 0
     left = {r["card_id"]: r["n"] for r in await db._all(
         "SELECT card_id, COUNT(*) AS n FROM observed_sales GROUP BY card_id")}

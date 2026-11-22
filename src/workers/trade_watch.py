@@ -1,7 +1,7 @@
 """Échanges proposés : chacun est évalué une fois (src/trades.py) et annoncé sur Discord, avec la contre-offre à
 envoyer s'il est défavorable.
 
-Toutes les TRADE_CHECK_MINUTES min, relit les échanges actifs (/api/trades?active=1, requête de fond). Un échange en
+Toutes les TRADES_CHECK_MINUTES min, relit les échanges actifs (/api/trades?active=1, requête de fond). Un échange en
 attente dont tu es le destinataire (on te le propose, contre-offres comprises) est annoncé une seule fois, dans le salon
 principal. Le bot ne répond jamais à ta place : il n'existe pas de route connue pour accepter, refuser ou contrer.
 
@@ -63,7 +63,7 @@ class TradeWatch(Worker):
             await self._backfill(history, me)
         await self.db.kv_set(KV_KEY, sorted(seen & active))
         await self.db.kv_set(LOG_KEY, dict(sorted(history.items(), key=lambda kv: kv[1]["seen"])[-LOG_MAX:]))
-        minutes = self.settings.trade_check_minutes
+        minutes = self.settings.trades_check_minutes
         return random.uniform(0.8, 1.2) * minutes * 60
 
     async def _close_ended(self, history: dict[str, dict], active: set[str], me: str) -> None:

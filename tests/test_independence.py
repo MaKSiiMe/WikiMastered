@@ -28,7 +28,7 @@ async def test_broken_write_route_does_not_pause_other_routes(tmp_path):
             return httpx.Response(500, json={"error": "boom"})
         return httpx.Response(200, json={"balance": 3})
 
-    client, _ = make_client(tmp_path, handler, dry_run=False, backoff_base_seconds=60)
+    client, _ = make_client(tmp_path, handler, dry_run=False, http_backoff_seconds=60)
     api = WikiMastersAPI(client)
     with pytest.raises(UncertainMutation):
         await api.achievements_check()

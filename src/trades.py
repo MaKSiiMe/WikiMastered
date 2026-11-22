@@ -214,7 +214,7 @@ async def counter_offers(ctx: Context, e: Evaluation) -> list[str]:
 
 async def evaluate(ctx: Context, given: list[Priced], received: list[Priced], wb_given: int = 0,
                    wb_received: int = 0, offers: bool = True) -> Evaluation:
-    e = Evaluation(given, received, wb_given, wb_received, ctx.settings.trade_fair_margin)
+    e = Evaluation(given, received, wb_given, wb_received, ctx.settings.trades_fair_margin_ratio)
     if offers:
         e.offers = await counter_offers(ctx, e)
     return e

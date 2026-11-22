@@ -98,20 +98,20 @@ async def restyle(ctx: Context, change: Restyle) -> tuple[bool, str]:
 
 
 def wanted(ctx: Context) -> list[Wanted]:
-    """Étiquettes que le bot pose avec les réglages actuels : thèmes (si ENABLE_THEME_TAGS), Doublon, GIF, collections,
+    """Étiquettes que le bot pose avec les réglages actuels : thèmes (si THEMES_ENABLED), Doublon, GIF, collections,
     vitrines, souhaits, cartes invendues, reventes à la main. Dans l'ordre du fichier, puis des réglages."""
     from src.workers import collection  # import local : collection importe les workers
 
     s = ctx.settings
     known = styles()
     names: list[str] = []
-    if s.enable_theme_tags:
+    if s.themes_enabled:
         rules = load_rules()
         names += [*rules.names, *(t for v in rules.corrections.values() for t in v),
-                  s.theme_duplicate_tag, s.theme_gif_tag]
+                  s.tag_duplicate, s.tag_gif]
     active = collection.collections(s)[0].values() if s.collection_sets or s.collection_titles else ()
     names += [c.tag for c in active]
-    names += [s.showcase_tag, s.wish_tag, s.position_unsold_tag, s.manual_resale_tag]
+    names += [s.tag_showcase, s.tag_wish, s.tag_unsold, s.tag_manual_resale]
     out: dict[str, Wanted] = {}
     for name in (n.strip() for n in names):
         if name and tag_key(name) not in out:

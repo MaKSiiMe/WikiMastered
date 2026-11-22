@@ -30,10 +30,10 @@ def test_tag_names_ignore_emojis_hash_and_case():
 
 
 def test_protected_tags_match_renamed_tags_with_emoji(tmp_path):
-    """« date » renommée « 📅 Jour » sur le site : PROTECTED_TAGS=Jour la protège encore."""
+    """« date » renommée « 📅 Jour » sur le site : TAG_PROTECTED=Jour la protège encore."""
     from src.config import Settings
 
-    s = Settings(_env_file=None, protected_tags="date,Jour")
+    s = Settings(_env_file=None, tag_protected="date,Jour")
     card = OwnedCard.model_validate({"id": "o1", "card": {"id": "c"}, "tags": [{"name": "📅 Jour"}]})
     assert card.tag_names & s.protected_tag_keys
 
@@ -305,7 +305,7 @@ async def test_theme_tags_message_comes_every_six_hours_with_the_total(monkeypat
     monkeypatch.setattr(themes, "run_pass", run_pass)
     sent = []
     worker = themes.ThemeTagger.__new__(themes.ThemeTagger)
-    worker.ctx, worker.settings = None, SimpleNamespace(theme_tags_hours=6.0)
+    worker.ctx, worker.settings = None, SimpleNamespace(themes_interval_hours=6.0)
     worker.log = themes.log
     worker.notifier = SimpleNamespace(info=lambda title, text: sent.append(text.splitlines()[0]))
     await themes.ThemeTagger.setup(worker)

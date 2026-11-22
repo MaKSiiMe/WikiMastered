@@ -97,7 +97,7 @@ async def test_sniper_spots_sales_early_then_rereads_them_to_bid(tmp_path):
 
 
 def test_resale_only_for_watched_rarities():
-    params = snipe_params(Settings(_env_file=None, sniper_min_bid_share=0), night=False)  # 5 pour 400
+    params = snipe_params(Settings(_env_file=None, sniper_min_bid_ratio=0), night=False)  # 5 pour 400
     auction = Auction.model_validate(sale("x", "Ada", "C", 15, base=5))
     quote = Quote(400, 5)
     assert decide(auction, params, quote, 2) is not None
@@ -441,7 +441,7 @@ def test_shiny_needs_more_observed_sales_before_a_resale_purchase():
     """Mark Wahlberg ✨ (24/10) : achetée sur 3 ventes shiny, revendue 1119 WB sous son prix d'achat."""
     from src.workers.auction_sniper import min_sales
 
-    s = Settings(_env_file=None, sniper_min_bid_share=0, sniper_min_contested_sales=0, sniper_max_price_spread=0)
+    s = Settings(_env_file=None, sniper_min_bid_ratio=0, sniper_min_contested_sales=0, sniper_max_spread_ratio=0)
     params = snipe_params(s, night=False)
     shiny = Auction.model_validate({**sale("x", "Mark", "L", 15, base=100), "is_shiny": True})
     plain = Auction.model_validate(sale("y", "Mark", "L", 15, base=100))
@@ -450,4 +450,4 @@ def test_shiny_needs_more_observed_sales_before_a_resale_purchase():
     assert decide(shiny, params, three, min_sales(s, shiny.shiny)) is None
     assert decide(shiny, params, four, min_sales(s, shiny.shiny)) is not None
     assert decide(plain, params, three, min_sales(s, plain.shiny)) is not None  # une carte ordinaire : 2 ventes
-    assert Settings(_env_file=None, sniper_shiny_min_sales=1).sniper_shiny_min_sales == 1
+    assert Settings(_env_file=None, quote_shiny_min_sales=1).quote_shiny_min_sales == 1

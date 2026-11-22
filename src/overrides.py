@@ -5,15 +5,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.config import RENAMED
 from src.workers.base import Context
 
 KV_KEY = "overrides"
-ALLOWED = {"collection_max_price", "auto_discard", "auto_list"}
+ALLOWED = {"collection_max_price", "discard_enabled", "duplicates_sell"}
 
 
 async def load(ctx: Context) -> dict[str, Any]:
     """Applique les réglages enregistrés ; renvoie ceux appliqués."""
-    saved = {k: v for k, v in (await ctx.db.kv_get(KV_KEY, {})).items() if k in ALLOWED}
+    stored = await ctx.db.kv_get(KV_KEY, {})
+    # Réglages enregistrés avant le renommage du 22/11 (auto_list…) : repris sous leur nouveau nom, réécrits une fois.
+    old_names = {old.lower(): new for old, new in RENAMED.items()}
+    migrated = {old_names.get(k, k): v for k, v in stored.items() if k in old_names}
+    if migrated:
+        stored = {**migrated, **{k: v for k, v in stored.items() if k not in old_names}}
+        await ctx.db.kv_set(KV_KEY, stored)
+    saved = {k: v for k, v in stored.items() if k in ALLOWED}
     for name, value in saved.items():
         setattr(ctx.settings, name, value)
     return saved

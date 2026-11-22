@@ -169,10 +169,10 @@ async def test_turning_off_duplicate_sales_cancels_queued_duplicates_only(tmp_pa
     assert await db.cancel_scheduled_duplicates() == 1
     assert (await db.get_listing(dup))["status"] == "cancelled"
     assert (await db.get_listing(manual))["status"] == "scheduled"
-    await overrides.set_value(ctx, "auto_discard", False)
-    ctx.settings.auto_discard = True
+    await overrides.set_value(ctx, "discard_enabled", False)
+    ctx.settings.discard_enabled = True
     await overrides.load(ctx)
-    assert ctx.settings.auto_discard is False
+    assert ctx.settings.discard_enabled is False
     await db.close()
 
 
@@ -277,7 +277,7 @@ async def test_shiny_lists_open_shiny_auctions_with_their_quote(tmp_path):
     first, second = embed.description.splitlines()
     assert first.startswith(f"**Bob** (L) · mise min **{wb(9000)}** · déjà misée · cote ?")  # finit le premier
     s = ctx.settings
-    ceiling = int(min(8000 * s.sniper_deal_ratio_max, 8000 * (1 - s.sale_fee_pct) - s.portfolio_min_profit))
+    ceiling = int(min(8000 * s.sniper_max_deal_ratio, 8000 * (1 - s.market_fee_ratio) - s.resale_min_profit))
     assert second.startswith(f"💰 **Ada** (L) · mise min **{wb(5000)}** · cote {wb(8000)} · snipe ≤ **{wb(ceiling)}**")
     [good], _ = await shiny_embeds(ctx, 25, profitable=True)
     assert good.title == "✨ Shiny rentables en vente (1)" and "Bob" not in good.description

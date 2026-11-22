@@ -10,10 +10,10 @@ from src.config import Settings
 from src.core.database import Database
 from src.sniper_backtest import Case, Combo, cases_from, render, replay
 
-SETTINGS = Settings(_env_file=None, sniper_bid_push=0.5, portfolio_min_profit=30, sniper_max_bid=0,
-                    sniper_min_contested_sales=3, sniper_max_price_spread=2.0, price_min_sales=2,
-                    price_recent_sales=5, sniper_deal_ratio_max=0.70, night_deal_ratio_max=0.80,
-                    portfolio_min_profit_ratio=0.10, sniper_min_bid_share=0.40)
+SETTINGS = Settings(_env_file=None, sniper_bid_push_ratio=0.5, resale_min_profit=30, sniper_max_bid=0,
+                    sniper_min_contested_sales=3, sniper_max_spread_ratio=2.0, quote_min_sales=2,
+                    quote_recent_sales=5, sniper_max_deal_ratio=0.70, sniper_night_max_deal_ratio=0.80,
+                    resale_min_profit_ratio=0.10, sniper_min_bid_ratio=0.40)
 
 
 @pytest.mark.asyncio

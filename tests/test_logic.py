@@ -113,8 +113,8 @@ def test_portfolio_decision_needs_real_profit():
 def test_position_skipped_when_our_bid_is_far_below_the_estimate():
     """17-20/10 : mises sous 40 % de l'estimation, 0 gagnée sur 33 (parties à ~2 fois notre mise). Sautées :
     la place du quota anti-bot sert à une enchère gagnable."""
-    assert settings().sniper_min_bid_share == 0.50  # 31/10-01/11 : sous 50 %, 0 gagnée sur 18
-    s = settings(sniper_min_bid_share=0.40)
+    assert settings().sniper_min_bid_ratio == 0.50  # 31/10-01/11 : sous 50 %, 0 gagnée sur 18
+    s = settings(sniper_min_bid_ratio=0.40)
     params = snipe_params(s, night=False)
     pf = portfolio_state(s, balance=3000, held_count=0, held_real_cost=0, held_sim_cost=0,
                          engaged_real=0, engaged_sim=0, bot_engaged_count=0)
@@ -128,7 +128,7 @@ def test_position_skipped_when_our_bid_is_far_below_the_estimate():
     assert decide(cheap, params, quote, 3, pf, push=1.0).amount == 540
     fair = decide(auction(card=card, base_amount=300), params, quote, 3, pf, push=0.5)
     assert fair and fair.amount == 420  # 300 + 120
-    off = snipe_params(settings(sniper_min_bid_share=0), night=False)
+    off = snipe_params(settings(sniper_min_bid_ratio=0), night=False)
     assert decide(cheap, off, quote, 3, pf, push=0.5).amount == 370
 
 
@@ -136,8 +136,8 @@ def test_cheap_non_shiny_cards_skipped_below_min_estimate():
     """16/11 : revente des seules cartes chères (shiny toujours), pour garder le quota anti-bot aux mises qui
     rapportent le plus."""
     assert settings().sniper_min_estimate == 0  # dépôt public : tout est revendu
-    s = settings(sniper_min_estimate=2000, sniper_deal_ratio_max=0.85, sniper_min_bid_share=0,
-                 portfolio_min_profit_ratio=0, portfolio_min_profit=300)
+    s = settings(sniper_min_estimate=2000, sniper_max_deal_ratio=0.85, sniper_min_bid_ratio=0,
+                 resale_min_profit_ratio=0, resale_min_profit=300)
     params = snipe_params(s, night=False)
     pf = portfolio_state(s, balance=100_000, held_count=0, held_real_cost=0, held_sim_cost=0,
                          engaged_real=0, engaged_sim=0, bot_engaged_count=0)
@@ -156,10 +156,10 @@ def test_cheap_non_shiny_cards_skipped_below_min_estimate():
 
 def test_disputed_auctions_skipped_above_max_rise():
     """Enchère déjà montée au-delà de SNIPER_MAX_RISE × son prix de départ : d'autres joueurs se la disputent, la mise
-    gagne rarement et use une place du quota anti-bot. Plus strict la nuit (NIGHT_MAX_RISE)."""
-    assert settings().sniper_max_rise == 0 and settings().night_max_rise == 0  # dépôt public : aucune limite
-    s = settings(sniper_max_rise=1.5, night_max_rise=1.2, sniper_deal_ratio_max=0.85, sniper_min_bid_share=0,
-                 portfolio_min_profit_ratio=0, portfolio_min_profit=100)
+    gagne rarement et use une place du quota anti-bot. Plus strict la nuit (SNIPER_NIGHT_MAX_RISE)."""
+    assert settings().sniper_max_rise == 0 and settings().sniper_night_max_rise == 0  # dépôt public : aucune limite
+    s = settings(sniper_max_rise=1.5, sniper_night_max_rise=1.2, sniper_max_deal_ratio=0.85, sniper_min_bid_ratio=0,
+                 resale_min_profit_ratio=0, resale_min_profit=100)
     day, night = snipe_params(s, night=False), snipe_params(s, night=True)
     pf = portfolio_state(s, balance=100_000, held_count=0, held_real_cost=0, held_sim_cost=0,
                          engaged_real=0, engaged_sim=0, bot_engaged_count=0)
@@ -197,7 +197,7 @@ def test_position_needs_contested_and_steady_recent_sales():
     assert refusal(sale, params, eclipse, 3, pf) == "trop peu de ventes disputées"
     wild = Quote(400.0, 5, contested=4, spread=2.5)
     assert decide(sale, params, wild, 3, pf) is None and refusal(sale, params, wild, 3, pf) == "ventes trop dispersées"
-    loose = snipe_params(settings(sniper_min_contested_sales=0, sniper_max_price_spread=0), night=False)
+    loose = snipe_params(settings(sniper_min_contested_sales=0, sniper_max_spread_ratio=0), night=False)
     assert decide(sale, loose, wild, 3, pf) and decide(sale, loose, eclipse, 3, pf)
 
 
@@ -217,23 +217,23 @@ def test_position_bid_pushed_toward_ceiling_collection_stays_at_minimum():
 
 
 def test_positions_follow_free_sale_slots():
-    s = settings(portfolio_max_positions=15, portfolio_buffer=10)
+    s = settings(resale_max_positions=15, resale_queue_size=10)
     assert position_cap(s, 5, 4) == (11, 1)   # 1 place libre + 10 en file d'attente
     assert position_cap(s, 5, 5) == (10, 0)   # toutes les places prises : file d'attente seulement
-    assert position_cap(s, 5, 0) == (15, 5)   # plafond absolu PORTFOLIO_MAX_POSITIONS
+    assert position_cap(s, 5, 0) == (15, 5)   # plafond absolu RESALE_MAX_POSITIONS
 
 
 def test_no_position_cap_by_default():
     """31/10 : 5 positions attendaient une place, plus aucune L achetée depuis 18:40. 0 = pas de plafond."""
     cap, room = position_cap(settings(), 5, 5)
     assert room == 0 and cap > 1000
-    cap, _ = position_cap(settings(portfolio_buffer=3), 5, 5)
+    cap, _ = position_cap(settings(resale_queue_size=3), 5, 5)
     assert cap == 3                           # file d'attente limitée, sans plafond absolu
     assert position_cap(settings(), None, 0)[0] > 1000
 
 
 def test_queued_positions_need_a_better_deal():
-    s = settings(sniper_min_bid_share=0)  # 120 pour 400 : sous 40 %, règle testée à part
+    s = settings(sniper_min_bid_ratio=0)  # 120 pour 400 : sous 40 %, règle testée à part
     params = snipe_params(s, night=False)
     card = {"id": "c", "wikipedia_title": "x", "rarity": "C"}
     quote = Quote(400.0, 5)
@@ -251,8 +251,8 @@ def test_queued_positions_need_a_better_deal():
 
 def test_queued_position_jumps_less_profitable_waiting_sales():
     """Une place libérée va à la vente la plus rentable : une position qui bat les ventes en attente sauf moins de
-    `sale_room` n'attend que la prochaine place, au bénéfice minimum ; sinon, PORTFOLIO_QUEUE_PROFIT_RATIO."""
-    s = settings(portfolio_min_profit=30)
+    `sale_room` n'attend que la prochaine place, au bénéfice minimum ; sinon, RESALE_QUEUE_PROFIT_RATIO."""
+    s = settings(resale_min_profit=30)
 
     def pf(waiting, sale_room=2):
         return portfolio_state(s, balance=3000, held_count=6, held_real_cost=0, held_sim_cost=0, engaged_real=0,
@@ -283,12 +283,12 @@ def test_portfolio_counts_engaged_capital():
     # Le capital engagé compte : budget calculé sur 3000, pas sur le solde de 1000.
     assert pf.capital == 3000 and pf.position_budget == 540 and pf.available == 950
     assert pf.open_positions == 6 and pf.can_open             # 4 positions + 2 enchères < 15
-    assert not portfolio_state(settings(portfolio_max_positions=6), balance=1000, held_count=4, held_real_cost=0,
+    assert not portfolio_state(settings(resale_max_positions=6), balance=1000, held_count=4, held_real_cost=0,
                                held_sim_cost=0, engaged_real=0, engaged_sim=0, bot_engaged_count=2).can_open
 
 
 def test_night_mode_is_more_aggressive():
-    s = settings(sniper_daily_budget=300, night_budget_bonus=200)
+    s = settings(sniper_daily_budget=300, sniper_night_budget_bonus=200)
     day, night = snipe_params(s, False), snipe_params(s, True)
     assert night.deal_ratio > day.deal_ratio and night.window_seconds == day.window_seconds  # même timing de mise
     assert night.budget > day.budget
@@ -325,7 +325,7 @@ def test_observed_sales_cap_the_stale_site_average():
 
 
 def test_sale_and_discard_selection_keeps_one_and_protects():
-    s = settings(sell_min_value=15, discard_max_value=2, discard_rarities=["C"])
+    s = settings(duplicates_min_value=15, discard_max_value=2, discard_rarities=["C"])
     rows = [owned("a1", "A"), owned("a2", "A"), owned("a3", "A", starred=True),
             owned("b1", "B"), owned("b2", "B"), owned("b3", "B", is_shiny=True), owned("b4", "B")]
     groups = group_by_card(rows)
@@ -338,16 +338,16 @@ def test_sale_and_discard_selection_keeps_one_and_protects():
 
 
 def test_last_copy_rarities_sold_except_bot_buys():
-    """SELL_LAST_COPY_RARITIES=L : une L de paquet seule se vend ; jamais une carte achetée par le bot, un favori, un
+    """DUPLICATES_LAST_COPY_RARITIES=L : une L de paquet seule se vend ; jamais une carte achetée par le bot, un favori, un
     shiny, un exemplaire protégé, ni une rareté hors liste."""
-    s = settings(sell_min_value=50, sell_last_copy_rarities=["l"])
+    s = settings(duplicates_min_value=50, duplicates_last_copy_rarities=["l"])
     rows = [owned("p1", "P", "L"), owned("s1", "S", "L"), owned("f1", "F", "L", starred=True),
             owned("t1", "T", "L"), owned("r1", "R", "SR"), owned("m1", "M", "L"), owned("m2", "M", "C")]
     groups = group_by_card(rows)
     quotes = {cid: {"L": Quote(600.0, 5), "SR": Quote(300.0, 5), "C": Quote(80.0, 5)} for cid in "PSFTRM"}
     sale = select_for_sale(groups, quotes, {"t1"}, s, bought={"S"})
     assert {c.owned.id for c in sale} == {"p1", "m1"}  # M : la L se vend, la C est gardée à sa place
-    assert {c.owned.id for c in select_for_sale(groups, quotes, set(), settings(sell_min_value=50))} == {"m2"}
+    assert {c.owned.id for c in select_for_sale(groups, quotes, set(), settings(duplicates_min_value=50))} == {"m2"}
 
 
 def test_last_copy_discard_needs_a_known_worthless_card():
@@ -434,20 +434,20 @@ def test_never_bid_in_the_last_ten_seconds():
 
 
 def test_every_list_setting_accepts_csv_from_the_environment(monkeypatch):
-    """PROTECTED_TAGS=date (un seul élément, sans crochets) faisait planter le démarrage."""
+    """TAG_PROTECTED=date (un seul élément, sans crochets) faisait planter le démarrage."""
     from typing import get_origin
 
     from src.config import Settings
 
     lists = [name for name, f in Settings.model_fields.items() if get_origin(f.annotation) is list]
-    assert {"protected_tags", "collection_sets", "simulate", "live_writes", "achievement_milestones"} <= set(lists)
-    monkeypatch.setenv("PROTECTED_TAGS", "date")
+    assert {"tag_protected", "collection_sets", "simulate", "live_writes", "achievements_milestones"} <= set(lists)
+    monkeypatch.setenv("TAG_PROTECTED", "date")
     monkeypatch.setenv("SIMULATE", "sniper, collection")
-    monkeypatch.setenv("ACHIEVEMENT_MILESTONES", "100,250")
+    monkeypatch.setenv("ACHIEVEMENTS_MILESTONES", "100,250")
     monkeypatch.setenv("COLLECTION_TITLES", '["Paris", "Lyon"]')
     s = Settings(_env_file=None)
-    assert s.protected_tags == ["date"] and s.simulate == ["sniper", "collection"]
-    assert s.achievement_milestones == [100, 250] and s.collection_titles == ["Paris", "Lyon"]
+    assert s.tag_protected == ["date"] and s.simulate == ["sniper", "collection"]
+    assert s.achievements_milestones == [100, 250] and s.collection_titles == ["Paris", "Lyon"]
 
 
 @pytest.mark.parametrize("value, expected", [

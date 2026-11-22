@@ -5,7 +5,7 @@ Le profil (RPC Supabase `get_my_profile`, relevé du 16/10/2026) contient `cheat
 `deleted_at` : le site surveille la triche et peut sanctionner. Une nouvelle sanction arrête le bot
 (plus aucune requête, data/HALT écrit) au lieu de laisser les workers aggraver le cas.
 Note aussi `pity_counter` à chaque lecture, pour comprendre ce qu'il compte.
-Prévient aussi quand les paquets s'accumulent (PACKS_ALERT_AT) : le bot ne les ouvre jamais.
+Prévient aussi quand les paquets s'accumulent (GUARD_PACKS_ALERT_AT) : le bot ne les ouvre jamais.
 Nécessite SUPABASE_ANON_KEY (comme les étiquettes et les succès).
 """
 
@@ -97,12 +97,12 @@ class ProfileGuard(Worker):
             self._pity.append(pity)
         self.log.info("profil : pity %s, paquets %s, solde %s", pity, packs[0] if packs else "?",
                       profile.get("wikibidous_balance"))
-        minutes = self.settings.profile_check_minutes
+        minutes = self.settings.guard_check_minutes
         return random.uniform(0.8, 1.2) * minutes * 60
 
     def _alert_packs(self, packs: tuple[int, int] | None, alerted: bool) -> bool:
         """Un message quand le seuil est atteint, un seul jusqu'à ce que le stock redescende. Renvoie l'état à garder."""
-        threshold = self.settings.packs_alert_at
+        threshold = self.settings.guard_packs_alert_at
         if not packs or threshold <= 0:
             return alerted
         stock, cap = packs

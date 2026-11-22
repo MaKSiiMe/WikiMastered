@@ -1,7 +1,7 @@
-# Étiquettes de thème (worker « etiquettes », ENABLE_THEME_TAGS=true).
+# Étiquettes de thème (worker « etiquettes », THEMES_ENABLED=true).
 #
 # Chaque carte possédée reçoit, sur son exemplaire gardé, les thèmes dont une règle correspond à son article
-# Wikipédia, lu sur Wikidata. Les autres exemplaires de la carte reçoivent THEME_DUPLICATE_TAG (« Doublon »).
+# Wikipédia, lu sur Wikidata. Les autres exemplaires de la carte reçoivent TAG_DUPLICATE (« Doublon »).
 # Le bot ne fait qu'ajouter : il ne retire que « Doublon », de l'exemplaire gardé quand il n'a plus de doublon, et les
 # thèmes marqués `retirer`.
 # Les noms sont comparés sans émojis ni casse : « 🎵 Musique » sur le site correspond à « Musique » ici.

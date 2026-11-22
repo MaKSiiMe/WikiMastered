@@ -8,7 +8,7 @@ Le sniper les mise comme une carte demandée sur Discord (/snipe), au minimum, j
 en vente et jamais au-dessus de WISH_MAX_PRICE. Sans cote connue : jusqu'à WISH_UNQUOTED_MAX_PRICE (0 = pas de mise).
 Il prend toute rareté plus haute que
 celle que tu possèdes : une carte obtenue en R peut encore être rachetée en SR, tant qu'elle reste dans ta liste.
-Une carte gagnée est gardée (pas revendue) et reçoit l'étiquette WISH_TAG. Le bot ne retire rien de ta liste : retire
+Une carte gagnée est gardée (pas revendue) et reçoit l'étiquette TAG_WISH. Le bot ne retire rien de ta liste : retire
 la carte toi-même pour arrêter.
 """
 
@@ -133,10 +133,10 @@ async def sync(ctx: Context, now: datetime | None = None) -> dict:
 
 
 async def tag_won(ctx: Context) -> tuple[int, str]:
-    """Pose WISH_TAG sur l'exemplaire de chaque carte souhaitée gagnée. Renvoie (étiquettes posées, problème)."""
+    """Pose TAG_WISH sur l'exemplaire de chaque carte souhaitée gagnée. Renvoie (étiquettes posées, problème)."""
     state = await _state(ctx.db)
     pending: list[dict] = state["to_tag"]
-    tag = ctx.settings.wish_tag.strip()
+    tag = ctx.settings.tag_wish.strip()
     if not pending:
         return 0, ""
     if not tag or not ctx.settings.is_live("tag_card"):
@@ -216,7 +216,7 @@ class WishWatch(Worker):
 
     async def step(self) -> float:
         changed = await sync(self.ctx)
-        tag = self.settings.wish_tag.strip()
+        tag = self.settings.tag_wish.strip()
         for title in changed["added"]:
             self.log.info("carte souhaitée : %s, suivie par le sniper", title)
         for title in changed["removed"]:

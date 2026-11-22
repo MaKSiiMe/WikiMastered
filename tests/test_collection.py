@@ -32,7 +32,7 @@ async def test_collection_read_survives_changes_during_paging(tmp_path):
 
 @pytest.mark.asyncio
 async def test_duplicates_priced_within_quota(tmp_path):
-    """Pas plus de SELL_PRICE_LOOKUPS_PER_RUN cotes demandées ; les autres cartes : ventes observées."""
+    """Pas plus de DUPLICATES_QUOTES_PER_RUN cotes demandées ; les autres cartes : ventes observées."""
     from src.workers.inventory_manager import InventoryManager, select_for_sale
     from tests.test_integration import seed_observed
     from tests.test_session import cookie_for
@@ -51,7 +51,7 @@ async def test_duplicates_priced_within_quota(tmp_path):
             return httpx.Response(200, json={"summary": {"C": {"average": 80}}})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, sell_price_lookups_per_run=1)
+    client, notifier = make_client(tmp_path, handler, duplicates_quotes_per_run=1)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     await seed_observed(db, "B", [60, 70])
@@ -839,8 +839,8 @@ async def test_showcase_tag_follows_showcases_and_kept_collection_copies(tmp_pat
         rows = {"janvier": [row("o1", "1er janvier", "R", ["Vitrine"]), row("o2", "1er janvier", "SR")]}
         return httpx.Response(200, json={"collection": rows.get(request.url.params.get("q", ""), [])})
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False, collection_sets=["jours"], collection_tag="",
-                                   showcase_tag="Vitrine", supabase_anon_key="anon-key",
+    client, notifier = make_client(tmp_path, handler, dry_run=False, collection_sets=["jours"], tag_days="",
+                                   tag_showcase="Vitrine", supabase_anon_key="anon-key",
                                    wm_cookie=cookie_for("a1", "r1", 3600))
     ctx = await make_context(tmp_path, client, notifier)
     state = await refresh(ctx)
