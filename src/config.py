@@ -36,6 +36,7 @@ WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "discard": ("bulk_discard",), "tags": ("tag_card",), "themes": ("theme_tag",),
     "achievements": ("achievements_check", "claim_achievement"),
     "wishes": ("wishlist_write", "mark_notifications_read"),  # liste de souhaits du site, pour les cartes de collection manquantes
+    "favorites": ("favorite_write",),  # favoris à monter : leur place dans ta liste de souhaits, favori déplacé
 }
 
 # Anciens noms des workers et des groupes d'écriture (renommés le 22/11/2026) -> nouveau nom. Encore acceptés dans
@@ -404,6 +405,13 @@ class Settings(BaseSettings):
     quote_history_fallback: bool = True
     tag_wish: str = "Souhait"
     wish_check_minutes: float = 10.0
+    # Favoris à monter (worker « favorites ») : chaque carte en favori est misée dans toute rareté au-dessus de ton
+    # meilleur exemplaire, jusqu'à L, au plus à sa cote (jamais une vente shiny ; sans cote : pas de mise). Repérée sans
+    # recherche par titre : le bot la met dans ta liste de souhaits (le site annonce ses ventes) et le sniper voit déjà
+    # toutes les ventes de SNIPER_RESALE_RARITIES. Montée, le favori passe au nouvel exemplaire et l'ancien redevient
+    # vendable. Écritures : groupe « favorites ».
+    favorites_upgrade: bool = False
+    favorites_check_minutes: float = 60.0  # lecture de tes favoris
     trades_check_minutes: float = 10.0
     trades_fair_margin_ratio: float = 0.1
     achievements_time: time = time(22, 50)  # succès réclamés une fois par jour, avant le bilan de 23:00
@@ -642,8 +650,8 @@ class Settings(BaseSettings):
     collection_bids_per_check: int = 2
     tag_days: str = "date"           # étiquette des jours et de COLLECTION_TITLES ("" = non)
     tag_collection_max_per_run: int = 60   # étiquettes posées par passage (requêtes espacées)
-    # Étiquette posée sur les cartes de tes vitrines du profil et sur l'exemplaire gardé de chaque carte des collections
-    # actives, retirée quand la carte en sort. Le bot la gère seul : ne la pose pas à la main. "" = non.
+    # Étiquette posée sur les cartes de tes vitrines du profil, retirée quand la carte en sort (les collections ont leur
+    # propre étiquette). Le bot la gère seul : ne la pose pas à la main. "" = non.
     tag_showcase: str = ""
 
     # --- Étiquettes de thème (worker « themes ») ---------------------------------------

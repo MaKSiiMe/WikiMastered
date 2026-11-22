@@ -32,6 +32,9 @@ class Snipe:
     # la cote de la carte le baisse à chaque vente ; `above` : rang de la plus haute rareté déjà possédée.
     wish: bool = False
     above: int = -1
+    # Carte favorite à monter en rareté (src/workers/favorites.py), jamais gardée non plus : plafond = sa cote seule
+    # (`max_price` 0), jamais une vente shiny ; `above` comme pour une carte souhaitée.
+    favorite: bool = False
 
     @property
     def key(self) -> str:
@@ -39,8 +42,8 @@ class Snipe:
 
     def matches(self, auction: Auction) -> bool:
         return (collection_key(auction.title) == self.key and (not self.rarity or auction.rarity == self.rarity)
-                and (auction.shiny or not self.shiny)
-                and (not self.wish or RARITY_RANK.get(auction.rarity or "", -1) > self.above))
+                and (auction.shiny or not self.shiny) and not (self.favorite and auction.shiny)
+                and (not (self.wish or self.favorite) or RARITY_RANK.get(auction.rarity or "", -1) > self.above))
 
     @property
     def label(self) -> str:
@@ -50,12 +53,12 @@ class Snipe:
 
 async def load(db: Database) -> dict[str, Snipe]:
     """Demandes en cours, par clé de titre."""
-    return {s.key: s for s in (Snipe(**{k: v for k, v in row.items() if k not in ("wish", "above")})
+    return {s.key: s for s in (Snipe(**{k: v for k, v in row.items() if k not in ("wish", "above", "favorite")})
                                for row in await db.kv_get(KV_KEY, []))}
 
 
 async def _save(db: Database, snipes: dict[str, Snipe]) -> None:
-    await db.kv_set(KV_KEY, [{k: v for k, v in asdict(s).items() if k not in ("wish", "above")}
+    await db.kv_set(KV_KEY, [{k: v for k, v in asdict(s).items() if k not in ("wish", "above", "favorite")}
                              for s in sorted(snipes.values(), key=lambda s: s.added_at)])
 
 

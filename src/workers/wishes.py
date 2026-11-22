@@ -28,7 +28,7 @@ from src.core.notifier import Topic
 from src.core.text import tag_key
 from src.core.timeutils import utcnow
 from src.snipes import Snipe
-from src.workers import wishlist
+from src.workers import favorites, wishlist
 from src.workers.base import Context, Worker
 from src.workers.collection import collection_key
 
@@ -117,6 +117,7 @@ async def sync(ctx: Context, now: datetime | None = None) -> dict:
     state = await _state(ctx.db)
     cards: dict[str, dict] = state["cards"]
     bot = set(((await ctx.db.kv_get(wishlist.KV_KEY) or {}).get("added") or {}).values())
+    bot |= await favorites.added_ids(ctx.db)  # favoris à monter : mis par le bot, pas des souhaits à toi
     mine = await wishlist.current(ctx) - bot
     removed = [cards.pop(cid).get("title", cid) for cid in list(cards) if cid not in mine]
     fresh = sorted(mine - set(cards))
