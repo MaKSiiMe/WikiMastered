@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -43,6 +45,33 @@ class Recorder(DiscordNotifier):
         self.sent.append((level.name, title))
 
 
+def legacy_quotes(handler):
+    """La cote du site vient de l'historique des prix depuis le 22/11 (avant : /sales?scope=summary -> {summary}).
+    Les faux sites des tests écrits avant répondent encore à /sales : leur `summary` est traduit en historique d'une
+    semaine. Un faux site qui sert lui-même /price-history (réponse avec `by_rarity`) est gardé tel quel."""
+    def wrapped(request: httpx.Request) -> httpx.Response:
+        if not request.url.path.endswith("/price-history"):
+            return handler(request)
+        try:
+            response = handler(request)
+            if response.status_code != 200 or "by_rarity" in json.loads(response.content or b"{}"):
+                return response
+        except (AssertionError, KeyError):  # faux site qui ne connaît pas la route
+            pass
+        legacy = httpx.Request("GET", request.url.copy_with(
+            path=request.url.path.removesuffix("/price-history") + "/sales", params={"scope": "summary"}),
+            headers=request.headers)
+        response = handler(legacy)
+        data = json.loads(response.content or b"{}") if response.status_code == 200 else None
+        if not isinstance(data, dict) or not isinstance(data.get("summary"), dict):
+            return response
+        return httpx.Response(200, json={"by_rarity": {
+            r: {"weekly": [{"start": "2026-11-16", "avg": v.get("average"), "count": v.get("count") or 1}]
+                if v.get("average") is not None else []}
+            for r, v in data["summary"].items()}})
+    return wrapped
+
+
 def make_client(tmp_path: Path, handler, **overrides) -> tuple[WikiMastersClient, Recorder]:
     s = Settings(_env_file=None, **{
         "data_dir": tmp_path, "wm_cookie": "a=b", "wm_user_id": ME, "http_min_spacing_seconds": 0,
@@ -58,7 +87,7 @@ def make_client(tmp_path: Path, handler, **overrides) -> tuple[WikiMastersClient
         "sniper_min_bid_ratio": 0.0, **overrides})
     notifier = Recorder()
     client = WikiMastersClient(s, Endpoints.load(ROOT / "config" / "endpoints.yaml"), notifier)
-    client._http = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=client._http.cookies)
+    client._http = httpx.AsyncClient(transport=httpx.MockTransport(legacy_quotes(handler)), cookies=client._http.cookies)
     return client, notifier
 
 

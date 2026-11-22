@@ -472,6 +472,16 @@ class Database:
                                "LIMIT ?", (f"%{text}%", limit))
         return [r["title"] for r in rows if r["title"]]
 
+    async def title_of(self, card_id: str) -> str | None:
+        """Titre d'une carte d'après ce que le bot a vu sur le marché (cartes d'échange : le site n'en donne que
+        l'identifiant, et la route des ventes ne renvoie plus le titre depuis le 22/11)."""
+        for table in ("auctions_seen", "observed_sales", "bids", "listings"):
+            row = await self._one(f"SELECT title FROM {table} WHERE card_id = ? AND title IS NOT NULL AND title != '' "
+                                  "LIMIT 1", (card_id,))
+            if row:
+                return row["title"]
+        return None
+
     async def bought_card_ids(self) -> set[str]:
         """Cartes achetées pour de vrai par le bot (positions et collection), revendues ou non."""
         rows = await self._all("SELECT DISTINCT card_id FROM bids WHERE status = 'won' AND dry_run = 0")

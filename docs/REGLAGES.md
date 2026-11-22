@@ -162,12 +162,14 @@ REALTIME_ENABLED=false                  # temps réel du site : mises sur tes en
 
 Le prix d'une carte suit les tendances (actu, pop culture, mèmes) et la moyenne du site peut être très datée. La cote du bot est donc la médiane des ventes qu'il a lui-même observées (il voit toutes les fins d'enchères), plafonnée par la moyenne du site.
 
+La moyenne du site vient de l'historique des prix de l'onglet « Marché » de la fiche : une requête donne toutes les raretés de la carte. C'est la moyenne de la semaine en cours quand la carte s'est vendue au moins 10 fois ; sinon, le bot remonte les semaines précédentes, jusqu'à 4. Si l'historique est refusé, il prend la médiane des 5 dernières ventes de la carte.
+
 ```sh
 QUOTE_RECENT_SALES=7                    # nombre de ventes observées récentes prises en compte
 QUOTE_SITE_MARGIN_RATIO=1.0             # plafond = moyenne du site × cette marge (1.1 quand les prix montent)
 QUOTE_MIN_SALES=4                       # ventes observées minimum avant d'acheter une carte
 QUOTE_SHINY_MIN_SALES=8                 # … pour un shiny, estimé sur ses seules ventes shiny
-QUOTE_CACHE_MINUTES=180                 # cache de la moyenne du site (route limitée)
+QUOTE_CACHE_MINUTES=180                 # cache de la moyenne du site
 QUOTE_HISTORY_FALLBACK=true             # carte souhaitée ou de collection sans cote : cote tirée de l'historique des prix du site
 QUOTE_OBSERVED_KEEP_DAYS=0              # ventes observées effacées après N jours, sauf shiny et cartes rarement vendues (0 = toutes gardées)
 MARKET_FEE_RATIO=0.0                    # commission du site sur une vente, si elle existe

@@ -92,7 +92,7 @@ flowchart TD
 
 Une mise dans les 10 dernières secondes prolonge l'enchère de 60 s : le bot n'y mise jamais.
 
-**Estimation d'une carte** : médiane des 7 dernières ventes observées par le bot, à rareté égale, plafonnée par la moyenne du site. Un shiny n'est estimé que sur ses propres ventes : la moyenne du site ne le distingue pas. Ne comptent pas :
+**Estimation d'une carte** : médiane des 7 dernières ventes observées par le bot, à rareté égale, plafonnée par la moyenne du site (celle de la semaine, d'après l'historique des prix de la fiche). Un shiny n'est estimé que sur ses propres ventes : la moyenne du site ne le distingue pas. Ne comptent pas :
 - une vente 3 fois au-dessus ou au-dessous de la médiane ;
 - une vente entre deux joueurs qui ont déjà fait affaire ;
 - une vente sans concurrence (elle ne peut pas faire monter l'estimation).

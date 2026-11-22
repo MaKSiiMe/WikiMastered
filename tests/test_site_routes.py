@@ -28,6 +28,70 @@ HISTORY = {"computed_at": "2026-11-21T05:00:00Z", "by_rarity": {
     "SR": {"weekly": []}, "XX": {"weekly": [{"start": "2026-11-17", "avg": 5, "count": 1}]}}}
 
 
+# Réponses relevées le 22/11 sur la fiche d'Ana de Armas (L et UR), après la mise à jour de l'onglet « Marché ».
+ANA = {"computed_at": "2026-11-21T20:25:00Z", "by_rarity": {
+    "L": {"weekly": [{"start": "2026-10-26", "avg": 6492, "min": 5000, "max": 10000, "count": 96},
+                     {"start": "2026-11-02", "avg": 10230, "min": 6282, "max": 20000, "count": 19},
+                     {"start": "2026-11-09", "avg": 9644, "min": 7354, "max": 18000, "count": 87},
+                     {"start": "2026-11-16", "avg": 8845, "min": 4238, "max": 10010, "count": 86}],
+          "monthly": [{"start": "2026-11-01", "avg": 9323, "min": 4238, "max": 20000, "count": 196}]},
+    "UR": {"weekly": [{"start": "2026-10-26", "avg": 2352, "min": 450, "max": 4177, "count": 17},
+                      {"start": "2026-11-02", "avg": 3358, "min": 500, "max": 6000, "count": 74},
+                      {"start": "2026-11-09", "avg": 3837, "min": 2420, "max": 6000, "count": 43},
+                      {"start": "2026-11-16", "avg": 4239, "min": 2662, "max": 7262, "count": 15}]}}}
+RECENT = {"recent": [{"id": "a", "final_price": 2500, "settled_at": "2026-11-21T22:31:16+00:00", "rarity": "UR"},
+                     {"id": "b", "final_price": 9200, "settled_at": "2026-11-21T22:30:22+00:00", "rarity": "L"},
+                     {"id": "c", "final_price": 9130, "settled_at": "2026-11-21T22:23:10+00:00", "rarity": "L"},
+                     {"id": "d", "final_price": 9300, "settled_at": "2026-11-21T19:29:41+00:00", "rarity": "L"},
+                     {"id": "e", "final_price": 3233, "settled_at": "2026-11-21T19:22:45+00:00", "rarity": "UR"}]}
+
+
+def test_a_well_sold_card_takes_the_week_average_like_the_site():
+    """Ana de Armas L : 86 ventes cette semaine, la moyenne de la semaine (8845, affichée par le site) ; pas celle de
+    4 semaines (~8400, tirée par la semaine à 6492). UR : 15 ventes, une semaine suffit aussi."""
+    quotes = history_quotes(ANA)
+    assert quotes["L"].average == 8845 and quotes["L"].count == 86
+    assert quotes["UR"].average == 4239 and quotes["UR"].count == 15
+
+
+@pytest.mark.asyncio
+async def test_site_quote_comes_from_the_price_history_in_one_request(tmp_path):
+    """Depuis le 22/11, ?scope=summary ne renvoie plus de moyenne : la cote du site (plafond du sniper, cote des
+    collections) vient de l'historique des prix, une requête pour toutes les raretés, gardée pour `history_quote`."""
+    asked = []
+
+    def handler(request):
+        asked.append(request.url.path.rsplit("/", 1)[-1])
+        if request.url.path.endswith("/price-history"):
+            return httpx.Response(200, json=ANA)
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    assert (await ctx.prices.quote("ana", "L")).average == 8845
+    assert (await ctx.prices.quote("ana", "UR")).average == 4239
+    assert (await ctx.prices.history_quote("ana", "UR", fetch=False)).average == 4239
+    assert asked == ["price-history"]
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_refused_price_history_falls_back_on_the_last_sales_by_rarity(tmp_path):
+    """Historique refusé : médiane des 5 dernières ventes, rareté par rareté (champ `rarity` depuis le 22/11)."""
+    def handler(request):
+        if request.url.path.endswith("/price-history"):
+            return httpx.Response(404, json={"error": "not found"})
+        if request.url.path.endswith("/sales") and "scope" not in request.url.params:
+            return httpx.Response(200, json=RECENT)
+        return httpx.Response(200, json={"balance": 0})  # vérification de session après un refus
+
+    client, notifier = make_client(tmp_path, handler)
+    ctx = await make_context(tmp_path, client, notifier)
+    quotes = await ctx.prices.quotes("ana")
+    assert quotes["L"].average == 9200 and quotes["UR"].average == pytest.approx(2866.5) and "*" not in quotes
+    await ctx.db.close()
+
+
 def test_history_quote_is_the_weighted_mean_of_the_last_weeks_with_sales():
     """Moyenne des 4 dernières semaines avec des ventes, pondérée : (600 + 1400 + 640 + 2640) / 8 = 660."""
     quotes = history_quotes(HISTORY)
