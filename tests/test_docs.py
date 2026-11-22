@@ -152,6 +152,7 @@ def test_every_worker_is_in_the_readme():
 @pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
 def test_settings_cited_in_the_doc_exist(page):
     cited = set(re.findall(r"`([A-Z][A-Z0-9_]{3,})(?:=[^`]*)?`", page.read_text(encoding="utf-8")))
+    cited = {name for name in cited if not name.endswith("_")}  # préfixes de domaine : `SNIPER_`, `TAG_`…
     unknown = cited - {name.upper() for name in Settings.model_fields} - NOT_SETTINGS - set(RENAMED)  # anciens noms
     assert not unknown, f"{page.name} cite des réglages inconnus : {sorted(unknown)}"
 
