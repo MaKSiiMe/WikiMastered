@@ -1,6 +1,6 @@
 # Commandes
 
-- [Discord](#discord) : à taper dans ton serveur
+- [Discord](#discord) : à taper dans ton serveur, ou `/menu` en boutons
 - [Console](#console) : dans le conteneur
 - [Outils](#outils) : sur ton poste
 
@@ -8,71 +8,112 @@
 
 Ces commandes demandent un bot Discord ([installation](INSTALLATION.md#activer-les-commandes)). Le bot ne répond qu'à `DISCORD_OWNER_ID`. Entre crochets : paramètres facultatifs.
 
-### Suivre
-
-| Commande | Réponse |
-|---|---|
-| `/bot etat` | Santé du bot : session, vérification anti-bot, routes du site en pause, chaque worker. Boutons : vérification faite, pause ou reprise du sniper, actualiser |
-| `/compte bilan` | Le bilan du jour, sans attendre 23:00 |
-| `/compte roi [jours]` | Bénéfice et ROI des reventes, jour par jour (7 jours par défaut), avec un graphique |
-| `/compte solde` | Solde, capital dans les positions, total |
-| `/compte valeur` | Valeur du compte : solde, cartes possédées (estimation du bot), cartes en vente (prix de départ) et mises en tête ; évolution depuis la veille, collection par rareté, cartes les plus chères. Boutons : 📈 courbe de la valeur, 🔄 recompter la collection |
-| `/vente positions` | Cartes achetées pour la revente, et où en est leur vente |
-| `/vente en-cours` | Ventes programmées et en cours |
-| `/sniper recap [heures]` | Récap des enchères misées |
-
-### Cartes et marché
-
-Les ventes observées, les prix et le marché suivi demandent une revente active (`SNIPER_RESALE_RARITIES`).
-
-| Commande | Réponse |
-|---|---|
-| `/cartes fiche <carte>` | Tes exemplaires, les ventes observées, ce que le bot en fait. Boutons : garder, vendre, demander au sniper |
-| `/marche prix <titre> [shiny]` | Ventes observées, estimation du bot, ventes en cours, et la mise conseillée pour acheter et revendre : la plus petite dont la relance minimale (+10 %) atteint la revente, avec le bénéfice |
-| `/marche top [nombre] [shiny]` | Les 10, 25 ou 50 cartes les plus chères en moyenne sur les ventes observées des 7 derniers jours (au moins 3 ventes), avec la mise conseillée |
-| `/sniper opportunites` | Les ventes que le sniper surveille et son plafond pour chacune |
-| `/marche shiny [tri] [prix_max] [nombre] [rentables]` | Les shiny en vente vus par le sniper, avec mise minimale, cote et fin, sans requête au site. 💰 : revente rentable d'après la cote, avec son plafond. Un menu sous le message demande ces cartes au sniper, plafond modifiable |
-| `/echanges bilan [jours]` | Rendement de tes échanges vus par le bot : valeur donnée et reçue, échange par échange, et total des échanges conclus (30 jours par défaut) |
-| `/echanges evaluer <je_donne> <je_recois> […]` | Un échange envisagé est-il équitable ? Jusqu'à 3 cartes et des WB de chaque côté (« Titre », « Titre (L) », « Titre ✨ »). Valeur de chaque carte, ventes par semaine, verdict et, s'il est défavorable, la contre-offre à envoyer |
-
-### Agir
+Chaque commande s'écrit `/groupe action` : tape `/sniper` et Discord propose les actions du groupe. Pour ne rien retenir, `/menu` ouvre les mêmes commandes en boutons.
 
 | Commande | Effet |
 |---|---|
+| `/menu` | Toutes les commandes en boutons : un bouton par groupe, puis par commande ; un formulaire et des listes demandent les paramètres, puis la commande part comme si tu l'avais tapée |
+| `/verif-faite` | Vérification anti-bot faite dans le navigateur : la prochaine mise part tout de suite pour la tester |
+
+### 🤖 /bot
+
+Santé du bot, pauses, sauvegarde.
+
+| Commande | Effet |
+|---|---|
+| `/bot etat` | Santé du bot : session, vérification anti-bot, routes du site en pause, chaque worker. Boutons : vérification faite, pause ou reprise du sniper, actualiser |
+| `/bot pause [quoi] [duree]` | Met en pause `sniper` (par défaut), `ventes` (reventes comprises), `cotes` ou `tout` (sauf la garde). 1 h par défaut, ou 30 min, 2 h, 6 h, jusqu'à `/bot reprise`. Tient après un redémarrage |
+| `/bot reprise [quoi]` | Reprend ce qui est en pause (tout, par défaut) |
+| `/bot sauvegarde` | Sauvegarde la base maintenant ([restauration](INSTALLATION.md#sauvegardes)) |
+
+### 💰 /compte
+
+Résultats et valeur du compte.
+
+| Commande | Effet |
+|---|---|
+| `/compte bilan` | Le bilan du jour, sans attendre 23:00 |
+| `/compte solde` | Solde, capital dans les positions, total |
+| `/compte valeur` | Valeur du compte : solde, cartes possédées (estimation du bot), cartes en vente (prix de départ) et mises en tête ; évolution depuis la veille, collection par rareté, cartes les plus chères. Boutons : 📈 courbe de la valeur, 🔄 recompter la collection |
+| `/compte roi [jours]` | Bénéfice et ROI des reventes, jour par jour (7 jours par défaut), avec un graphique |
+
+### 🎯 /sniper
+
+Enchères du sniper et cartes que tu lui demandes.
+
+| Commande | Effet |
+|---|---|
+| `/sniper recap [heures]` | Récap des enchères misées |
 | `/sniper demander <titre> <prix_max> [rarete] [shiny]` | Demander une carte au sniper : mise au minimum jusqu'à `prix_max`, gardée, pas revendue. `shiny` : seulement un exemplaire shiny. Confirmée par un bouton |
 | `/sniper demandes` | Voir les cartes demandées |
-| `/collection souhaits` | Cartes de ta liste de souhaits suivies par le sniper (`WISH_MAX_PRICE`), la rareté que tu possèdes et le plafond de chaque rareté encore à prendre |
 | `/sniper annuler <titre>` | Ne plus demander une carte |
-| `/profil tags [creer] [harmoniser]` | Tes tags du site avec leur couleur, ceux que le bot pose mais qui manquent, et ceux dont l'émoji ou la couleur diffère de `config/themes.yaml`. `creer` : crée les manquants ; `harmoniser` : applique l'émoji et la couleur du fichier (sans émoji dans le fichier, celui du site est gardé ; un tag absent du fichier n'est jamais touché). Confirmée par un bouton |
-| `/profil vitrines` | Tes vitrines du profil : nom, disposition, cartes |
-| `/profil vitrine <numero> <disposition> <cartes> [nom] [legendes]` | Remplir une vitrine : `cartes` = titres exacts dans l'ordre, séparés par des `;`. Le bot prend ton meilleur exemplaire de chaque carte (plus haute rareté, shiny d'abord). Ligne du temps : une date par carte dans `legendes`. Remplace la vitrine de ce numéro ; confirmée par un bouton |
-| `/vente vendre <carte> <prix> [rarete]` | Vendre ton exemplaire le plus récent (hors favori, shiny, gardé) à ce prix, à la première place libre, avant les autres ventes. Confirmée par un bouton |
-| `/cartes garder <carte> [rarete]` | Ne jamais vendre ni défausser cette carte ; arrête sa revente si le bot la revendait |
-| `/cartes gardees` | Voir les cartes gardées |
-| `/cartes liberer <carte>` | Ne plus garder une carte |
+| `/sniper opportunites` | Les ventes que le sniper surveille et son plafond pour chacune |
 
 Une carte demandée par `/sniper demander` est cherchée par son titre, comme une carte de collection, passe en priorité dans la fenêtre de mise et ignore `SNIPER_MAX_BID`. Gagnée, elle n'est plus demandée. Avec `SIMULATE=collection`, la mise est simulée.
 
-### Collections
+### 🏷️ /vente
 
-| Commande | Réponse |
-|---|---|
-| `/collection avancement` | Avancement des collections, cartes manquantes |
-| `/collection joueur <pseudo> [etiquette]` | Collection publique d'un joueur (une de ses étiquettes au choix), comparée à la liste des GIF |
-| `/collection amis [pseudo] [actualiser]` | Tes cartes manquantes que possèdent tes amis, classés par nombre de cartes (liste reprise pendant 1 h, sauf avec `actualiser`). Avec `pseudo` : valeur de chaque carte, doublons, favorites, et l'offre équilibrée pour ses doublons. Rien n'est envoyé à tes amis : l'échange se propose sur le site. Demande `COLLECTION_WISHLIST` |
-| `/collection plafond [wb_max]` | Voir ou changer la mise maximale d'une carte de collection manquante, sans redéployer |
-
-### Piloter
+Reventes du bot et ventes à la main.
 
 | Commande | Effet |
 |---|---|
-| `/bot pause [quoi] [duree]` | Met en pause `sniper` (par défaut), `ventes` (reventes comprises), `cotes` ou `tout` (sauf la garde). 1 h par défaut, ou 30 min, 2 h, 6 h, jusqu'à `/bot reprise`. Tient après un redémarrage |
-| `/bot reprise [quoi]` | Reprend ce qui est en pause (tout, par défaut) |
-| `/menu` | Toutes les commandes en boutons : un bouton par groupe, puis par commande ; un formulaire et des listes demandent les paramètres, puis la commande part comme si tu l'avais tapée |
-| `/verif-faite` | Vérification anti-bot faite dans le navigateur : la prochaine mise part tout de suite pour la tester |
-| `/cartes defausse [etat]` | Voir, activer ou désactiver la défausse automatique. Coupée, le worker `value_scan` (cotes), qui ne sert qu'à elle, est mis en pause. Les reventes continuent |
+| `/vente positions` | Cartes achetées pour la revente, et où en est leur vente |
+| `/vente en-cours` | Ventes programmées et en cours |
+| `/vente vendre <carte> <prix> [rarete]` | Vendre ton exemplaire le plus récent (hors favori, shiny, gardé) à ce prix, à la première place libre, avant les autres ventes. Confirmée par un bouton |
+
+### 📈 /marche
+
+Prix observés sur le marché (demandent une revente active, `SNIPER_RESALE_RARITIES`).
+
+| Commande | Effet |
+|---|---|
+| `/marche prix <titre> [shiny]` | Ventes observées, estimation du bot, ventes en cours, et la mise conseillée pour acheter et revendre : la plus petite dont la relance minimale (+10 %) atteint la revente, avec le bénéfice |
+| `/marche top [nombre] [shiny]` | Les 10, 25 ou 50 cartes les plus chères en moyenne sur les ventes observées des 7 derniers jours (au moins 3 ventes), avec la mise conseillée |
+| `/marche shiny [tri] [prix_max] [nombre] [rentables]` | Les shiny en vente vus par le sniper, avec mise minimale, cote et fin, sans requête au site. 💰 : revente rentable d'après la cote, avec son plafond. Un menu sous le message demande ces cartes au sniper, plafond modifiable |
+
+### 🃏 /cartes
+
+Tes cartes : fiche, cartes gardées, doublons, défausse.
+
+| Commande | Effet |
+|---|---|
+| `/cartes fiche <carte>` | Tes exemplaires, les ventes observées, ce que le bot en fait. Boutons : garder, vendre, demander au sniper |
+| `/cartes garder <carte> [rarete]` | Ne jamais vendre ni défausser cette carte ; arrête sa revente si le bot la revendait |
+| `/cartes gardees` | Voir les cartes gardées |
+| `/cartes liberer <carte>` | Ne plus garder une carte |
 | `/cartes doublons [etat]` | Voir, activer ou désactiver la vente automatique des doublons. Coupée, les doublons programmés sont annulés |
-| `/bot sauvegarde` | Sauvegarde la base maintenant ([restauration](INSTALLATION.md#sauvegardes)) |
+| `/cartes defausse [etat]` | Voir, activer ou désactiver la défausse automatique. Coupée, le worker `value_scan` (cotes), qui ne sert qu'à elle, est mis en pause. Les reventes continuent |
+
+### 📚 /collection
+
+Collections, liste de souhaits, amis.
+
+| Commande | Effet |
+|---|---|
+| `/collection avancement` | Avancement des collections, cartes manquantes |
+| `/collection souhaits` | Cartes de ta liste de souhaits suivies par le sniper (`WISH_MAX_PRICE`), la rareté que tu possèdes et le plafond de chaque rareté encore à prendre |
+| `/collection plafond [wb_max]` | Voir ou changer la mise maximale d'une carte de collection manquante, sans redéployer |
+| `/collection joueur <pseudo> [etiquette]` | Collection publique d'un joueur (une de ses étiquettes au choix), comparée à la liste des GIF |
+| `/collection amis [pseudo] [actualiser]` | Tes cartes manquantes que possèdent tes amis, classés par nombre de cartes (liste reprise pendant 1 h, sauf avec `actualiser`). Avec `pseudo` : valeur de chaque carte, doublons, favorites, et l'offre équilibrée pour ses doublons. Rien n'est envoyé à tes amis : l'échange se propose sur le site. Demande `COLLECTION_WISHLIST` |
+
+### 🏆 /profil
+
+Vitrines et tags du profil.
+
+| Commande | Effet |
+|---|---|
+| `/profil vitrines` | Tes vitrines du profil : nom, disposition, cartes |
+| `/profil vitrine <numero> <disposition> <cartes> [nom] [legendes]` | Remplir une vitrine : `cartes` = titres exacts dans l'ordre, séparés par des `;`. Le bot prend ton meilleur exemplaire de chaque carte (plus haute rareté, shiny d'abord). Ligne du temps : une date par carte dans `legendes`. Remplace la vitrine de ce numéro ; confirmée par un bouton |
+| `/profil tags [creer] [harmoniser]` | Tes tags du site avec leur couleur, ceux que le bot pose mais qui manquent, et ceux dont l'émoji ou la couleur diffère de `config/themes.yaml`. `creer` : crée les manquants ; `harmoniser` : applique l'émoji et la couleur du fichier (sans émoji dans le fichier, celui du site est gardé ; un tag absent du fichier n'est jamais touché). Confirmée par un bouton |
+
+### 🤝 /echanges
+
+Échanges entre joueurs.
+
+| Commande | Effet |
+|---|---|
+| `/echanges evaluer <je_donne> <je_recois> […]` | Un échange envisagé est-il équitable ? Jusqu'à 3 cartes et des WB de chaque côté (« Titre », « Titre (L) », « Titre ✨ »). Valeur de chaque carte, ventes par semaine, verdict et, s'il est défavorable, la contre-offre à envoyer |
+| `/echanges bilan [jours]` | Rendement de tes échanges vus par le bot : valeur donnée et reçue, échange par échange, et total des échanges conclus (30 jours par défaut) |
 
 ### Boutons sur les messages
 
