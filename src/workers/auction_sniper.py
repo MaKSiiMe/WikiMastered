@@ -1991,7 +1991,7 @@ class AuctionSniper(Worker):
                 await remove_snipe(self.db, row["title"])
                 await self.reload_snipes()
                 title = "Carte demandée obtenue (simulé)" if simulated else "Carte demandée obtenue !"
-            elif str(row["reason"]).startswith(WISH_REASON):  # reste souhaitée : une rareté plus haute est encore prise
+            elif str(row["reason"]).startswith(WISH_REASON):  # plus de mise ; sort de ta liste au passage de « wishes »
                 if not simulated:
                     await wishes.record_win(self.db, row["title"], row["rarity"])
                     await self.reload_snipes()

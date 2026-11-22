@@ -361,7 +361,8 @@ class Settings(BaseSettings):
     trades_enabled: bool = True
     # Cartes souhaitées (worker « wishes ») : une carte que tu ajoutes toi-même à ta liste de souhaits du site est
     # misée par le sniper jusqu'à sa cote dans la rareté en vente, au plus WISH_MAX_PRICE (0 = désactivé), dans toute
-    # rareté plus haute que celle que tu possèdes. Gagnée, elle est gardée et reçoit TAG_WISH (vide = aucune).
+    # rareté plus haute que celle que tu possèdes. Gagnée, elle est gardée, reçoit TAG_WISH (vide = aucune) et sort
+    # de ta liste de souhaits.
     wish_max_price: int = 0
     # Carte souhaitée sans cote dans la rareté en vente (jamais vue vendue) : misée jusqu'à N WB quand même, au plus
     # WISH_MAX_PRICE (le 20/11, 27 ventes ignorées faute de cote, dont la moitié entre 10 et 100 WB). 0 = pas de mise.
