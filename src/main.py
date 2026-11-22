@@ -131,7 +131,8 @@ async def build_context(settings: Settings):
                                                  "ventes": settings.discord_webhook_resale,
                                                  "collection": settings.discord_webhook_collection,
                                                  "bilan": settings.discord_webhook_report,
-                                                 "systeme": settings.discord_webhook_system})
+                                                 "systeme": settings.discord_webhook_system,
+                                                 "wikinsider": settings.discord_webhook_wikinsider})
     notifier.start()
     endpoints = Endpoints.load(settings.endpoints_file, settings.wm_base_url)
     client = WikiMastersClient(settings, endpoints, notifier)

@@ -37,6 +37,7 @@ from datetime import UTC, datetime, time, timedelta
 
 from src import keeps, orders
 from src.account import store_collection
+from src import wikinsider
 from src.config import RARITY_RANK, Settings
 from src.core.api import COLLECTION_PAGE_SIZE
 from src.core.client import ApiError, RateLimited, UncertainMutation, server_message
@@ -1277,6 +1278,10 @@ class InventoryManager(Worker):
             if auction.status == "settled_sold":
                 price = auction.final_price or auction.current_bid or row["base_amount"]
                 await self.db.update_listing(row["id"], status="sold", sale_price=price, settled_at=utcnow())
+                if bid or str(row["reason"]).startswith(MANUAL_SALE_REASON):
+                    wikinsider.note_sale(self.notifier, self.settings.wm_base_url, listing_id=row["id"],
+                                         title=row["title"], price=price, shiny=auction.shiny, rarity=row["rarity"],
+                                         auction_id=row["auction_id"], bought=bid["amount"] if bid else None)
                 if bid:
                     await self.db.close_position(bid["id"], price)
                     self.notifier.success("Revente réussie", f"{label} : achetée {bid['amount']}, vendue {price} WB "
