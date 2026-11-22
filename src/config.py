@@ -165,6 +165,13 @@ RENAMED: dict[str, str] = {
     "THEME_GIF_TAG": "tag_gif",
 }
 _legacy_found: list[str] = []  # anciens noms lus par la dernière construction de Settings
+_env_seen: list[str] = []  # noms donnés par l'environnement et le .env à la dernière construction de Settings
+
+# Variables du système et de l'image Docker (python:3.12-slim, Dockerfile) : jamais signalées comme inutiles.
+SYSTEM_NAMES = frozenset({"PATH", "HOME", "HOSTNAME", "LANG", "LANGUAGE", "TZ", "TERM", "SHLVL", "PWD", "OLDPWD",
+                          "USER", "LOGNAME", "SHELL", "GPG_KEY", "_", "DEBIAN_FRONTEND", "NO_COLOR", "FORCE_COLOR",
+                          "COLUMNS", "LINES", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"})
+SYSTEM_PREFIXES = ("PYTHON", "PIP_", "LC_", "SSL_", "UV_", "VIRTUAL_ENV", "LD_", "XDG_", "PYTEST", "COV_")
 
 
 class LegacyNames(PydanticBaseSettingsSource):
@@ -187,6 +194,7 @@ class LegacyNames(PydanticBaseSettingsSource):
         values |= {k.upper(): v for k, v in os.environ.items()}
         found = sorted(old for old in RENAMED if old in values)
         _legacy_found[:] = found
+        _env_seen[:] = sorted(values)
         return {RENAMED[old]: values[old] for old in found}
 
 
@@ -218,6 +226,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
     _legacy: list[str] = PrivateAttr(default_factory=list)
     _legacy_values: list[tuple[str, str]] = PrivateAttr(default_factory=list)
+    _env_names: list[str] = PrivateAttr(default_factory=list)
 
     @classmethod
     def settings_customise_sources(cls, settings_cls: type[BaseSettings], init_settings: PydanticBaseSettingsSource,
@@ -230,6 +239,8 @@ class Settings(BaseSettings):
     def model_post_init(self, context: Any, /) -> None:
         self._legacy = list(_legacy_found)
         _legacy_found.clear()
+        self._env_names = list(_env_seen)
+        _env_seen.clear()
         # Noms de workers et de groupes d'avant le 22/11 dans les valeurs : remplacés, et signalés au démarrage.
         self._legacy_values = []
         for field in ("live_writes", "simulate"):
@@ -247,6 +258,26 @@ class Settings(BaseSettings):
     def legacy_names(self) -> list[tuple[str, str]]:
         """(ancien nom, nouveau nom) des réglages lus sous leur ancien nom : à renommer dans Portainer ou le .env."""
         return [(old, RENAMED[old].upper()) for old in self._legacy] + self._legacy_values
+
+    @property
+    def unused_names(self) -> list[str]:
+        """Variables de l'environnement ou du .env que le bot ne lit pas : réglage retiré, ou nom mal écrit
+        (pydantic les ignore sans rien dire). Variables du système et de l'image exclues."""
+        fields = {name.upper() for name in type(self).model_fields}
+        return [n for n in self._env_names if n not in fields and n not in RENAMED and n not in SYSTEM_NAMES
+                and not n.startswith(SYSTEM_PREFIXES) and n == n.upper()]
+
+    @property
+    def default_names(self) -> list[str]:
+        """Réglages donnés par l'environnement ou le .env avec la valeur par défaut du dépôt : sans effet aujourd'hui,
+        mais ils gardent ta valeur si le défaut change un jour."""
+        fields = type(self).model_fields
+        out = []
+        for name in self._env_names:
+            field = fields.get(name.lower())
+            if field is not None and getattr(self, name.lower()) == field.get_default(call_default_factory=True):
+                out.append(name)
+        return out
 
 
     # --- Général -------------------------------------------------------------

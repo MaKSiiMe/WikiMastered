@@ -113,3 +113,23 @@ def test_every_worker_has_an_english_name():
              for m in re.findall(r'^    name = "([a-z_]+)"', path.read_text(encoding="utf-8"), re.MULTILINE)} - {"worker"}
     assert names == {"sniper", "inventory", "collection", "themes", "achievements", "wishes", "trades", "value_scan",
                      "account_value", "guard"}
+
+
+def test_unused_and_default_variables_are_reported(tmp_path, monkeypatch):
+    """22/11 : « plein de variables ne servent plus à rien ». Le bot ignorait sans rien dire une variable qu'il ne lit
+    pas (réglage retiré, faute de frappe) ; les variables du système et de l'image ne sont jamais signalées."""
+    env = tmp_path / ".env"
+    env.write_text("VALUE_SELL_ENABLED=true\nRESALE_SLOTS=4\n", encoding="utf-8")
+    monkeypatch.setenv("SNIPER_MAX_BIDD", "700")  # faute de frappe
+    monkeypatch.setenv("PORTFOLIO_SLOTS", "3")  # ancien nom : signalé à part (legacy_names)
+    monkeypatch.setenv("PYTHONUNBUFFERED", "1")
+    monkeypatch.setenv("GPG_KEY", "x")
+    s = Settings(_env_file=env)
+    assert {"SNIPER_MAX_BIDD", "VALUE_SELL_ENABLED"} <= set(s.unused_names)
+    assert not {"PORTFOLIO_SLOTS", "RESALE_SLOTS", "PYTHONUNBUFFERED", "GPG_KEY", "PATH"} & set(s.unused_names)
+
+    default = Settings.model_fields["resale_slots"].default
+    monkeypatch.setenv("RESALE_SLOTS", str(default))
+    monkeypatch.setenv("LIVE_WRITES", "")
+    s = Settings(_env_file=None)
+    assert {"RESALE_SLOTS", "LIVE_WRITES"} <= set(s.default_names) and "PORTFOLIO_SLOTS" not in s.default_names
