@@ -3,7 +3,8 @@
 - Toutes les THEMES_INTERVAL_HOURS, lit toute la collection (requêtes de fond) et, pour chaque carte, l'exemplaire gardé
   (keep_order : favori, shiny, plus haute rareté, puis le plus ancien ; la vente prend toujours le plus récent).
 - Thèmes de la carte : règles de config/themes.yaml appliquées à ce que Wikidata dit de son article (voir
-  src/core/wikidata.py), gardé en base (table card_facts) ; THEMES_LOOKUPS_PER_RUN cartes nouvelles par passage.
+  src/core/wikidata.py) : liens directs gardés en base (table card_facts), hiérarchie des classes aussi (table
+  wikidata_parents) ; THEMES_LOOKUPS_PER_RUN cartes nouvelles par passage. Changer les règles ne relit rien.
   Les corrections du fichier passent avant Wikidata.
 - Posées sur l'exemplaire gardé ; les autres exemplaires reçoivent TAG_DUPLICATE. Le bot n'enlève jamais un
   thème ; il retire seulement « Doublon » de l'exemplaire gardé (son doublon est parti, ou la carte gardée a changé).
@@ -20,8 +21,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import re
 from collections import Counter
@@ -39,7 +38,7 @@ from src.core.models import Card, OwnedCard
 from src.core.notifier import Topic
 from src.core.text import config_value, tag_key
 from src.core.timeutils import utcnow
-from src.core.wikidata import Facts, Wikidata
+from src.core.wikidata import Claims, Facts, Hierarchy, Wikidata
 from src.workers.base import Context, Worker
 from src.workers.inventory_manager import group_by_card
 
@@ -50,6 +49,10 @@ FRAMES_KEY = "gif_frames"
 RULES_FILE = Path(__file__).resolve().parents[2] / "config" / "themes.yaml"
 PERSON = "Q5"  # être humain : les règles « description » et « metiers » ne valent que pour les personnes
 MISSING_RETRY = timedelta(days=7)  # article sans élément Wikidata : relu après N jours
+# Version des liens gardés dans card_facts. Avant le 22/11 : classes déjà filtrées par les règles (empreinte de 12
+# caractères), relues à chaque changement de config/themes.yaml ; elles sont relues une dernière fois.
+FACTS_FORMAT = "claims-1"
+PARENTS_MAX_AGE = timedelta(days=90)  # parents d'une classe relus après N jours (Wikidata évolue)
 BACKLOG_MINUTES = 30
 SHOWN = 40  # cartes sans thème gardées dans l'état (commande, message)
 NOTIFY_HOURS = 6  # un message Discord au plus toutes les N h, avec le cumul des étiquettes posées et retirées
@@ -77,11 +80,6 @@ class Rules:
         """Classes cherchées sur Wikidata : (natures, métiers, taxons)."""
         natures = {PERSON}.union(*(t.natures for t in self.themes))
         return natures, set().union(*(t.jobs for t in self.themes)), set().union(*(t.taxa for t in self.themes))
-
-    @property
-    def fingerprint(self) -> str:
-        """Change quand les classes cherchées changent : les faits gardés en base sont alors relus."""
-        return hashlib.sha1(json.dumps([sorted(x) for x in self.targets]).encode()).hexdigest()[:12]
 
     @property
     def names(self) -> list[str]:
@@ -137,35 +135,41 @@ def themes_of(facts: Facts, rules: Rules) -> list[str]:
 
 async def classify(ctx: Context, wikidata: Wikidata, titles: set[str], rules: Rules,
                    limit: int) -> tuple[dict[str, list[str]], int]:
-    """Thèmes de chaque titre (corrections, sinon faits gardés en base) ; lit sur Wikidata au plus `limit` titres
-    inconnus. Renvoie (thèmes connus, titres encore à lire). Une erreur de Wikidata : on garde ce qui est connu."""
+    """Thèmes de chaque titre (corrections, sinon liens gardés en base) ; lit sur Wikidata au plus `limit` titres
+    inconnus, puis les parents des classes qui manquent encore. Renvoie (thèmes connus, titres pas encore classés).
+    Une erreur de Wikidata : on garde ce qui est connu, la suite au passage suivant."""
     known = await ctx.db.card_facts()
     now = utcnow()
 
     def stale(title: str) -> bool:
         if title not in known:
             return True
-        facts, fingerprint, fetched = known[title]
-        return fingerprint != rules.fingerprint or (facts is None and now - fetched > MISSING_RETRY)
+        claims, version, fetched = known[title]
+        return version != FACTS_FORMAT or (claims is None and now - fetched > MISSING_RETRY)
 
     todo = sorted(t for t in titles if t not in rules.corrections and stale(t))
-    if todo[:limit]:
-        try:
-            found = await wikidata.lookup(todo[:limit], *rules.targets)
-        except ApiError as exc:
-            log.warning("Wikidata : %s (nouvel essai au prochain passage)", exc)
-        else:
-            await ctx.db.card_facts_put({t: f.to_json() if f.qid else None for t, f in found.items()},
-                                        rules.fingerprint)
+    hierarchy = Hierarchy(await ctx.db.wikidata_parents(now - PARENTS_MAX_AGE))
+    try:
+        if todo[:limit]:
+            found = await wikidata.lookup(todo[:limit])
+            await ctx.db.card_facts_put({t: c.to_json() if c.qid else None for t, c in found.items()}, FACTS_FORMAT)
             known = await ctx.db.card_facts()
+        ready = [Claims.from_json(data) for t in titles if t in known and not stale(t) and (data := known[t][0])]
+        await wikidata.fill(hierarchy, ready, ctx.db.wikidata_parents_put)
+    except ApiError as exc:
+        log.warning("Wikidata : %s (suite au prochain passage)", exc)
+    natures, jobs, taxa = rules.targets
     out: dict[str, list[str]] = {}
     for title in titles:
         if title in rules.corrections:
             out[title] = list(rules.corrections[title])
         elif title in known and not stale(title):
-            facts = known[title][0]
-            out[title] = themes_of(Facts.from_json(facts), rules) if facts else []
-    return out, sum(1 for t in todo if t not in out)
+            data = known[title][0]
+            if data is None:
+                out[title] = []
+            elif hierarchy.complete(claims := Claims.from_json(data)):
+                out[title] = themes_of(hierarchy.facts(claims, natures, jobs, taxa), rules)
+    return out, sum(1 for t in titles if t not in out)
 
 
 @dataclass

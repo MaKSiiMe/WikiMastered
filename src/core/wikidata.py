@@ -1,23 +1,28 @@
 """Wikidata : nature de l'article de chaque carte (personne, pays, film…), pour les étiquettes de thème.
 
-Par lots de 50 titres : l'API de Wikipédia (fr) donne l'élément Wikidata de chaque titre (redirections suivies), puis
-le service SPARQL de Wikidata dit quelles classes cherchées chaque élément atteint :
-- natures : « est un » (P31) puis « sous-classe de » (P279) en chaîne, ou l'élément est lui-même une sous-classe
-  (« Marteau », « Pizza » sont des classes) ;
-- métiers (P106, puis P279 en chaîne) et taxons parents (P171 en chaîne : lion -> … -> Animalia) ;
-- et la description en français.
+Deux lectures, toutes deux de simples recherches de liens directs (le service SPARQL limite le temps de calcul) :
+- chaque carte : l'API de Wikipédia (fr) donne l'élément Wikidata de son titre (redirections suivies), puis SPARQL ses
+  liens directs « est un » (P31), « sous-classe de » (P279), « métier » (P106), « taxon parent » (P171) et sa
+  description en français (`Claims`), gardés en base tels quels ;
+- les classes et taxons atteints : leurs parents (P279, P171), lus une fois et gardés en base (`Hierarchy`), car
+  partagés par des milliers de cartes.
+Les classes atteintes par chaque carte se calculent ensuite en local (`Hierarchy.facts`) : changer les règles de
+config/themes.yaml ne demande aucune nouvelle lecture.
+
+Jusqu'au 22/11, une seule requête cherchait les chemins (P31/P279*…) de 50 cartes vers toutes les classes des
+règles : ~40 s par lot avec les ~250 classes des sous-thèmes, au-delà de 60 s pour certains lots (réponse coupée en
+plein JSON, puis 429), et chaque changement de règles faisait relire les 18 000 cartes de la collection.
 
 Aucune requête au site du jeu : rien ne compte pour la vérification anti-bot. Requêtes espacées d'au moins
-SPACING secondes (le service SPARQL limite le temps de calcul par minute) ; une erreur remonte (ApiError), le lot
-est retenté au passage suivant. Essai du 27/10 : 300 cartes du marché en ~2 min, toutes trouvées sur Wikipédia.
+SPACING secondes ; une erreur remonte (ApiError), la lecture reprend au passage suivant.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Iterable
-from dataclasses import asdict, dataclass, field
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -29,34 +34,111 @@ SPARQL = "https://query.wikidata.org/sparql"
 # Politique des robots de Wikimedia (https://w.wiki/4wJS) : nom, contact (une adresse web suffit) et bibliothèque.
 # Sans contact, Wikipédia répond 403 (essai du 27/10).
 USER_AGENT = f"WikiMastered/1.0 (https://github.com/MaKSiiMe/WikiMastered) httpx/{httpx.__version__}"
-BATCH = 50
+BATCH = 50          # titres par requête à Wikipédia (limite de l'API)
+ITEMS_BATCH = 100   # éléments par requête SPARQL (liens directs : moins d'une seconde quand le service va bien)
+PARENTS_BATCH = 200
 SPACING = 1.0
+ENTITY = "http://www.wikidata.org/entity/"
+SUBCLASS, TAXON = "P279", "P171"
+CLAIMS = {"P31": "instance_of", "P279": "subclass_of", "P106": "occupations", "P171": "parent_taxa"}
 
 
 @dataclass
 class Facts:
-    """Ce que Wikidata dit d'un article ; `qid` None : pas de page Wikipédia ou pas d'élément Wikidata."""
+    """Classes cherchées que l'article atteint ; `qid` None : pas de page Wikipédia ou pas d'élément Wikidata."""
 
     qid: str | None = None
     natures: set[str] = field(default_factory=set)  # classes cherchées atteintes par P31/P279* ou P279+
     jobs: set[str] = field(default_factory=set)     # métiers cherchés atteints par P106/P279*
-    taxa: set[str] = field(default_factory=set)     # taxons cherchés atteints par P171*
+    taxa: set[str] = field(default_factory=set)     # taxons cherchés atteints par P171* (l'élément compris)
+    description: str = ""
+
+
+@dataclass
+class Claims:
+    """Liens directs d'un élément, sans rapport avec les règles."""
+
+    qid: str | None = None
+    instance_of: set[str] = field(default_factory=set)
+    subclass_of: set[str] = field(default_factory=set)
+    occupations: set[str] = field(default_factory=set)
+    parent_taxa: set[str] = field(default_factory=set)
     description: str = ""
 
     def to_json(self) -> dict[str, Any]:
-        data = asdict(self)
-        for key in ("natures", "jobs", "taxa"):
-            data[key] = sorted(data[key])
-        return data
+        return {"qid": self.qid, **{name: sorted(getattr(self, name)) for name in CLAIMS.values()},
+                "description": self.description}
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> Facts:
-        return cls(qid=data.get("qid"), natures=set(data.get("natures") or ()), jobs=set(data.get("jobs") or ()),
-                   taxa=set(data.get("taxa") or ()), description=str(data.get("description") or ""))
+    def from_json(cls, data: dict[str, Any]) -> Claims:
+        return cls(data.get("qid"), *(set(data.get(name) or ()) for name in CLAIMS.values()),
+                   description=str(data.get("description") or ""))
+
+    @property
+    def classes(self) -> set[str]:
+        """Classes dont il faut connaître les parents (P279) pour classer l'élément."""
+        return self.instance_of | self.subclass_of | self.occupations
+
+
+class Hierarchy:
+    """Parents de chaque classe (P279) et de chaque taxon (P171) déjà lus : propriété -> élément -> parents."""
+
+    def __init__(self, parents: dict[str, dict[str, list[str]]] | None = None):
+        self.parents: dict[str, dict[str, list[str]]] = {SUBCLASS: {}, TAXON: {}}
+        for prop, known in (parents or {}).items():
+            self.parents.setdefault(prop, {}).update(known)
+        # Beaucoup de cartes partent des mêmes classes (Q5 : être humain) : chemin calculé une fois.
+        self._cache: dict[tuple[str, frozenset[str]], tuple[frozenset[str], frozenset[str]]] = {}
+
+    def add(self, prop: str, parents: dict[str, list[str]]) -> None:
+        self.parents.setdefault(prop, {}).update(parents)
+        self._cache.clear()
+
+    def _walk(self, starts: Iterable[str], prop: str) -> tuple[frozenset[str], frozenset[str]]:
+        """(éléments atteints, départs compris ; atteints dont les parents ne sont pas encore lus)."""
+        key = (prop, frozenset(starts))
+        if key in self._cache:
+            return self._cache[key]
+        known = self.parents.get(prop, {})
+        seen: set[str] = set()
+        unknown: set[str] = set()
+        stack = list(key[1])
+        while stack:
+            node = stack.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            if node in known:
+                stack += known[node]
+            else:
+                unknown.add(node)
+        self._cache[key] = out = (frozenset(seen), frozenset(unknown))
+        return out
+
+    def ancestors(self, starts: Iterable[str], prop: str) -> frozenset[str]:
+        return self._walk(starts, prop)[0]
+
+    def missing(self, starts: Iterable[str], prop: str) -> frozenset[str]:
+        return self._walk(starts, prop)[1]
+
+    def complete(self, claims: Claims) -> bool:
+        """Tous les parents utiles à cet élément sont lus : ses classes atteintes sont sûres."""
+        return not self.missing(claims.classes, SUBCLASS) and not self.missing(claims.parent_taxa, TAXON)
+
+    def facts(self, claims: Claims, natures: set[str], jobs: set[str], taxa: set[str]) -> Facts:
+        """Classes cherchées atteintes, comme le chemin SPARQL (P31/P279*)|P279+, P106/P279* et P171*."""
+        reached = self.ancestors(claims.instance_of | claims.subclass_of, SUBCLASS)
+        lineage = self.ancestors(claims.parent_taxa, TAXON) | ({claims.qid} if claims.qid else set())
+        return Facts(claims.qid, set(reached & natures), set(self.ancestors(claims.occupations, SUBCLASS) & jobs),
+                     set(lineage & taxa), claims.description)
 
 
 def _qid(uri: str) -> str:
     return uri.rsplit("/", 1)[-1]
+
+
+def _values(ids: Iterable[str]) -> str:
+    return " ".join(f"wd:{q}" for q in ids)
 
 
 class Wikidata:
@@ -80,12 +162,20 @@ class Wikidata:
             self._last = time.monotonic()
         if resp.status_code != 200:
             raise ApiError(resp.status_code, None, url, resp.text[:200])
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as exc:
+            # Requête trop longue : le service SPARQL coupe la réponse en plein JSON (22/11, « Unterminated
+            # string », « Invalid control character »), avec un statut 200.
+            raise ApiError(resp.status_code, None, url, f"réponse coupée ({len(resp.content)} octets)") from exc
 
     async def _sparql(self, query: str) -> list[dict[str, Any]]:
         data = await self._request("POST", SPARQL, data={"query": query, "format": "json"},
                                    headers={"Accept": "application/sparql-results+json"})
-        return data["results"]["bindings"]
+        try:
+            return data["results"]["bindings"]
+        except (KeyError, TypeError) as exc:
+            raise ApiError(200, None, SPARQL, "réponse sans résultats") from exc
 
     async def qids(self, titles: list[str]) -> dict[str, str | None]:
         """Élément Wikidata de chaque titre de Wikipédia (fr), redirections suivies ; None : introuvable."""
@@ -107,43 +197,65 @@ class Wikidata:
                 out[title] = pages.get(final)
         return out
 
-    async def facts(self, qids: Iterable[str], natures: set[str], jobs: set[str], taxa: set[str]) -> dict[str, Facts]:
-        """Faits de chaque élément, pour les classes cherchées seulement."""
+    async def claims(self, qids: Iterable[str]) -> dict[str, Claims]:
+        """Liens directs et description de chaque élément."""
         items = sorted(set(qids))
-        out = {q: Facts(qid=q) for q in items}
-        values = " ".join(f"wd:{t}" for t in sorted(natures | jobs | taxa))
-        for i in range(0, len(items), BATCH):
-            chunk = " ".join(f"wd:{q}" for q in items[i:i + BATCH])
-            rows = await self._sparql(f"""SELECT ?item ?via ?target WHERE {{
-  VALUES ?item {{ {chunk} }}
-  VALUES ?target {{ {values} }}
-  {{ ?item (wdt:P31/wdt:P279*)|wdt:P279+ ?target. BIND("n" AS ?via) }}
-  UNION {{ ?item wdt:P106/wdt:P279* ?target. BIND("j" AS ?via) }}
-  UNION {{ ?item wdt:P171* ?target. BIND("t" AS ?via) }}
+        out = {q: Claims(qid=q) for q in items}
+        props = " ".join(f"wdt:{p}" for p in CLAIMS)
+        for i in range(0, len(items), ITEMS_BATCH):
+            rows = await self._sparql(f"""SELECT ?item ?p ?o WHERE {{
+  VALUES ?item {{ {_values(items[i:i + ITEMS_BATCH])} }}
+  {{ VALUES ?p {{ {props} }} ?item ?p ?o. FILTER(STRSTARTS(STR(?o), "{ENTITY}Q")) }}
+  UNION {{ ?item schema:description ?o. FILTER(lang(?o) = "fr") BIND("description" AS ?p) }}
 }}""")
             for row in rows:
-                facts, target = out[_qid(row["item"]["value"])], _qid(row["target"]["value"])
-                via = row["via"]["value"]
-                if via == "n" and target in natures:
-                    facts.natures.add(target)
-                elif via == "j" and target in jobs:
-                    facts.jobs.add(target)
-                elif via == "t" and target in taxa:
-                    facts.taxa.add(target)
-            rows = await self._sparql(f"""SELECT ?item ?desc WHERE {{
-  VALUES ?item {{ {chunk} }}
-  ?item schema:description ?desc FILTER(lang(?desc) = "fr")
-}}""")
-            for row in rows:
-                if "desc" in row:
-                    out[_qid(row["item"]["value"])].description = row["desc"]["value"]
+                claims = out.get(_qid(row["item"]["value"]))
+                prop, value = _qid(row["p"]["value"]), row["o"]["value"]
+                if claims is None:
+                    continue
+                if prop == "description":
+                    claims.description = value
+                elif prop in CLAIMS:
+                    getattr(claims, CLAIMS[prop]).add(_qid(value))
         return out
 
-    async def lookup(self, titles: list[str], natures: set[str], jobs: set[str], taxa: set[str]) -> dict[str, Facts]:
-        """Faits de chaque titre (Facts() vide : pas d'élément Wikidata)."""
+    async def parents(self, ids: Iterable[str], prop: str) -> dict[str, list[str]]:
+        """Parents directs (P279 ou P171) de chaque élément ; [] : aucun."""
+        items = sorted(set(ids))
+        out: dict[str, set[str]] = {q: set() for q in items}
+        for i in range(0, len(items), PARENTS_BATCH):
+            rows = await self._sparql(f"""SELECT ?item ?parent WHERE {{
+  VALUES ?item {{ {_values(items[i:i + PARENTS_BATCH])} }}
+  ?item wdt:{prop} ?parent. FILTER(STRSTARTS(STR(?parent), "{ENTITY}Q"))
+}}""")
+            for row in rows:
+                if (item := _qid(row["item"]["value"])) in out:
+                    out[item].add(_qid(row["parent"]["value"]))
+        return {q: sorted(p) for q, p in out.items()}
+
+    async def lookup(self, titles: list[str]) -> dict[str, Claims]:
+        """Liens directs de chaque titre (Claims() vide : pas d'élément Wikidata)."""
         qids = await self.qids(titles)
-        facts = await self.facts((q for q in qids.values() if q), natures, jobs, taxa)
-        return {t: facts[q] if q else Facts() for t, q in qids.items()}
+        claims = await self.claims(q for q in qids.values() if q)
+        return {t: claims[q] if q else Claims() for t, q in qids.items()}
+
+    async def fill(self, hierarchy: Hierarchy, claims: Iterable[Claims],
+                   on_read: Callable[[str, dict[str, list[str]]], Awaitable[None]] | None = None) -> int:
+        """Lit les parents qui manquent pour classer ces éléments, niveau par niveau ; `on_read(prop, parents)` est
+        appelé après chaque requête, pour garder la progression même si la suivante échoue. Renvoie le nombre
+        d'éléments lus."""
+        claims = list(claims)
+        read = 0
+        for prop, starts in ((SUBCLASS, set().union(*(c.classes for c in claims))),
+                             (TAXON, set().union(*(c.parent_taxa for c in claims)))):
+            while todo := sorted(hierarchy.missing(starts, prop)):
+                for i in range(0, len(todo), PARENTS_BATCH):
+                    found = await self.parents(todo[i:i + PARENTS_BATCH], prop)
+                    hierarchy.add(prop, found)
+                    read += len(found)
+                    if on_read is not None:
+                        await on_read(prop, found)
+        return read
 
     async def gif_frames(self, files: list[str]) -> dict[str, int | None]:
         """Nombre d'images de chaque fichier GIF (1 : image fixe) ; None : fichier ou nombre introuvable."""

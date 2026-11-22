@@ -78,10 +78,14 @@ CREATE INDEX IF NOT EXISTS idx_observed_card ON observed_sales (card_id, ended_a
 -- Plus haut prix observé de chaque carte parmi les ventes purgées (QUOTE_OBSERVED_KEEP_DAYS) : la défausse ne doit pas
 -- oublier qu'une carte s'est déjà vendue cher.
 CREATE TABLE IF NOT EXISTS observed_max (card_id TEXT PRIMARY KEY, price INTEGER NOT NULL);
--- Ce que Wikidata dit de l'article de chaque carte (étiquettes de thème) ; `rules` : empreinte des classes cherchées
--- (relu quand config/themes.yaml change) ; `facts` NULL : pas d'élément Wikidata.
+-- Ce que Wikidata dit de l'article de chaque carte (étiquettes de thème, liens directs : src/core/wikidata.Claims) ;
+-- `rules` : version du format (une autre valeur : relu) ; `facts` NULL : pas d'élément Wikidata.
 CREATE TABLE IF NOT EXISTS card_facts (
     title TEXT PRIMARY KEY, facts TEXT, rules TEXT NOT NULL, fetched_at TEXT NOT NULL
+);
+-- Parents de chaque classe (P279) et de chaque taxon (P171) atteints par les cartes, partagés entre elles.
+CREATE TABLE IF NOT EXISTS wikidata_parents (
+    qid TEXT NOT NULL, prop TEXT NOT NULL, parents TEXT NOT NULL, fetched_at TEXT NOT NULL, PRIMARY KEY (qid, prop)
 );
 """
 
@@ -256,7 +260,7 @@ class Database:
 
     # ------------------------------------------------------- faits Wikidata
     async def card_facts(self) -> dict[str, tuple[dict | None, str, datetime]]:
-        """Titre -> (faits Wikidata ou None, empreinte des règles, date de lecture)."""
+        """Titre -> (liens Wikidata ou None, version du format, date de lecture)."""
         return {r["title"]: (json.loads(r["facts"]) if r["facts"] else None, r["rules"], parse_iso(r["fetched_at"]))
                 for r in await self._all("SELECT title, facts, rules, fetched_at FROM card_facts")}  # type: ignore[misc]
 
@@ -266,6 +270,22 @@ class Database:
             "INSERT INTO card_facts (title, facts, rules, fetched_at) VALUES (?, ?, ?, ?) ON CONFLICT(title) DO UPDATE "
             "SET facts = excluded.facts, rules = excluded.rules, fetched_at = excluded.fetched_at",
             [(t, json.dumps(f, ensure_ascii=False) if f is not None else None, rules, now) for t, f in facts.items()])
+        await self.db.commit()
+
+    async def wikidata_parents(self, since: datetime) -> dict[str, dict[str, list[str]]]:
+        """Propriété -> élément -> parents, lus depuis `since` (plus anciens : relus)."""
+        out: dict[str, dict[str, list[str]]] = {}
+        for r in await self._all("SELECT qid, prop, parents FROM wikidata_parents WHERE fetched_at >= ?",
+                                 (iso(since),)):
+            out.setdefault(r["prop"], {})[r["qid"]] = json.loads(r["parents"])
+        return out
+
+    async def wikidata_parents_put(self, prop: str, parents: dict[str, list[str]]) -> None:
+        now = iso(utcnow())
+        await self.db.executemany(
+            "INSERT INTO wikidata_parents (qid, prop, parents, fetched_at) VALUES (?, ?, ?, ?) ON CONFLICT(qid, prop) "
+            "DO UPDATE SET parents = excluded.parents, fetched_at = excluded.fetched_at",
+            [(q, prop, json.dumps(p), now) for q, p in parents.items()])
         await self.db.commit()
 
     # ---------------------------------------------------------------- cotes
