@@ -177,7 +177,7 @@ Le bot n'envoie jamais de message privé : tout arrive dans les salons des webho
 |---|---|
 | `python -m src.tools.parse_curl [--name ROUTE --write] [--env] [--hot] < requete.curl` | Importe une requête copiée depuis les DevTools (« Copier comme cURL (bash) ») : corrige une route dans `config/endpoints.local.yaml`, met à jour `.env` (`--env`) ou dépose le cookie à chaud (`--hot`) |
 | `python -m src.tools.browser_login [--record]` | Ouvre un navigateur (Playwright, poste avec écran) où tu te connectes toi-même, puis écrit le cookie dans `data/session_cookie.txt`. `--record` : enregistre aussi les appels `/api/` dans `data/inspect/capture/` |
-| `python -m src.tools.site_map [--headed]` | Après une mise à jour du site : ouvre ses pages avec la session de `browser_login` (lecture seule, sans clic) et écrit dans `data/site-map/` la carte du site (pages, appels et forme des réponses, routes, tables et canaux trouvés dans le JS) et ce qui a changé depuis la carte précédente |
+| `python -m src.tools.site_map [--import-cookie FICHIER] [--headed]` | Après une mise à jour du site : ouvre ses pages avec une session prise une fois dans ton navigateur (`document.cookie`, voir l'aide de l'outil ; Cloudflare refuse la connexion dans un navigateur piloté) (lecture seule, sans clic) et écrit dans `data/site-map/` la carte du site (pages, appels et forme des réponses, routes, tables et canaux trouvés dans le JS) et ce qui a changé depuis la carte précédente |
 | `python -m src.tools.gif_list` | Régénère `config/animated_gifs.txt` depuis Wikipédia (aucune requête au site du jeu) |
 
 `browser_login` et `site_map` demandent en plus `pip install -r requirements-tools.txt && playwright install chromium`.
