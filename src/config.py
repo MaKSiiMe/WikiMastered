@@ -584,13 +584,13 @@ class Settings(BaseSettings):
     value_scan_freeze_below: int = 50
 
     # --- Module G : collection (cartes gardées, jamais revendues) ---------------------
-    collection_sets: CsvList = Field(default_factory=list)    # « jours » + clés de config/collections.yaml
+    collection_sets: CsvList = Field(default_factory=list)    # « days » + clés de config/collections.yaml
     collection_titles: CsvList = Field(default_factory=list)  # titres en plus, exacts (ex. Paris,Lyon)
     collection_max_price: int = 10                              # mise maximale pour une carte manquante
-    # Plafond propre à une collection, à la place de COLLECTION_MAX_PRICE : elements=100,pays=3000 (clés de
+    # Plafond propre à une collection, à la place de COLLECTION_MAX_PRICE : elements=100,countries=3000 (clés de
     # COLLECTION_SETS ; vide : aucune).
     collection_set_max_price: Annotated[dict[str, float], NoDecode] = Field(default_factory=dict)
-    # Collection misée comme une revente : jusqu'à sa cote dans la rareté en vente × ce ratio (pays=0.8), au plus son
+    # Collection misée comme une revente : jusqu'à sa cote dans la rareté en vente × ce ratio (countries=0.8), au plus son
     # plafond de COLLECTION_SET_MAX_PRICE s'il en a un. Sans cote connue : pas de mise. Vide : aucune.
     collection_set_quote_ratio: Annotated[dict[str, float], NoDecode] = Field(default_factory=dict)
     # Carte possédée : le sniper mise aussi sur un exemplaire de rareté plus haute que la meilleure possédée,
@@ -611,7 +611,7 @@ class Settings(BaseSettings):
     tag_showcase: str = ""
 
     # --- Étiquettes de thème (worker « themes ») ---------------------------------------
-    # Thème de chaque carte (Personne, Pays, Musique…) lu sur Wikidata selon config/etiquettes.yaml, posé sur
+    # Thème de chaque carte (Personne, Pays, Musique…) lu sur Wikidata selon config/themes.yaml, posé sur
     # l'exemplaire gardé ; les autres exemplaires reçoivent TAG_DUPLICATE. Écritures : groupe « themes ».
     themes_enabled: bool = False
     themes_interval_hours: float = 6.0          # passage complet toutes les N h
@@ -665,7 +665,7 @@ class Settings(BaseSettings):
         pairs = [re.split(r"[=:]", part, maxsplit=1) for part in text.split(",") if part.strip()]
         if any(len(pair) != 2 for pair in pairs):
             example = {"http_worker_spacing_seconds": "value_scan=5,themes=3",
-                       "collection_set_quote_ratio": "pays=0.8"}.get(info.field_name or "", "elements=100")
+                       "collection_set_quote_ratio": "countries=0.8"}.get(info.field_name or "", "elements=100")
             raise ValueError(f"{(info.field_name or '').upper()} : attendu nom=valeur séparés par des virgules "
                              f"(ex. {example}) : {text}")
         return {name.strip(): float(number) for name, number in pairs}

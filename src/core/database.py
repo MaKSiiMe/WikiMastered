@@ -79,7 +79,7 @@ CREATE INDEX IF NOT EXISTS idx_observed_card ON observed_sales (card_id, ended_a
 -- oublier qu'une carte s'est déjà vendue cher.
 CREATE TABLE IF NOT EXISTS observed_max (card_id TEXT PRIMARY KEY, price INTEGER NOT NULL);
 -- Ce que Wikidata dit de l'article de chaque carte (étiquettes de thème) ; `rules` : empreinte des classes cherchées
--- (relu quand config/etiquettes.yaml change) ; `facts` NULL : pas d'élément Wikidata.
+-- (relu quand config/themes.yaml change) ; `facts` NULL : pas d'élément Wikidata.
 CREATE TABLE IF NOT EXISTS card_facts (
     title TEXT PRIMARY KEY, facts TEXT, rules TEXT NOT NULL, fetched_at TEXT NOT NULL
 );

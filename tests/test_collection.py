@@ -801,7 +801,7 @@ def test_collection_names_accept_singular_and_accents():
     from src.workers.collection import collections
 
     active, unknown = collections(Settings(_env_file=None, collection_sets=["jours", "Élément", "countries", "gif"]))
-    assert set(active) == {"jours", "elements", "pays", "gifs"} and unknown == []
+    assert set(active) == {"days", "elements", "countries", "gifs"} and unknown == []
     assert collections(Settings(_env_file=None, collection_sets=["planetes"]))[1] == ["planetes"]
 
 
@@ -861,3 +861,22 @@ def test_showcase_copy_ids():
 
     data = {"showcase": [{"user_card": {"id": "a"}}, {"user_card": None}, "?", {"user_card": {"id": 7}}]}
     assert showcases.copy_ids(data) == {"a", "7"} and showcases.copy_ids({}) == set()
+
+
+def test_old_french_keys_of_the_config_files_are_still_read(tmp_path, monkeypatch):
+    """Fichiers de config modifiés à la main avant le renommage du 22/11 (forks) : anciennes clés encore lues."""
+    from src.config import Settings
+    from src.workers import collection, themes
+
+    path = tmp_path / "collections.yaml"
+    path.write_text("vieux:\n  nom: Vieille liste\n  etiquette: Vieux\n  titres: [Premier]\n  fichier: liste.txt\n",
+                    encoding="utf-8")
+    (tmp_path / "liste.txt").write_text("Second\n", encoding="utf-8")
+    monkeypatch.setattr(collection, "COLLECTIONS_FILE", path)
+    assert collection.defined(Settings())["vieux"] == collection.Collection("Vieille liste", ("Premier", "Second"), "Vieux")
+    rules = tmp_path / "rules.yaml"
+    rules.write_text("themes:\n  Ancien:\n    natures: [Q1]\n    taxons: [Q2]\n    metiers: [Q3]\n    sauf: [Autre]\n"
+                     "    seul: true\n    retirer: true\n", encoding="utf-8")
+    theme = themes.load_rules(rules).themes[0]
+    assert (theme.natures, theme.taxa, theme.jobs, theme.unless, theme.alone, theme.removable) == (
+        frozenset({"Q1"}), frozenset({"Q2"}), frozenset({"Q3"}), ("Autre",), True, True)

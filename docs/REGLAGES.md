@@ -379,14 +379,14 @@ Cette partie ne concerne que les cartes de ta collection : les doublons qu'on ve
 
 ## Collections
 
-Collections disponibles : `jours` (les 366 jours de l'année), `gifs` (articles à GIF animé), ou la tienne dans [`config/collections.yaml`](../config/collections.yaml). Détail : [Fonctionnement](FONCTIONNEMENT.md#collections).
+Collections disponibles : `days` (les 366 jours de l'année), `gifs` (articles à GIF animé), ou la tienne dans [`config/collections.yaml`](../config/collections.yaml). Détail : [Fonctionnement](FONCTIONNEMENT.md#collections).
 
 ```sh
 COLLECTION_SETS=                      # collections actives (vide : aucune) ; ex. ma_liste (config/collections.yaml)
 COLLECTION_TITLES=                    # titres exacts en plus, séparés par des virgules
 COLLECTION_MAX_PRICE=10               # mise maximale pour une carte manquante
 COLLECTION_SET_MAX_PRICE=             # plafond propre à une collection, à la place du précédent ; ex. elements=100
-COLLECTION_SET_QUOTE_RATIO=           # collection misée jusqu'à sa cote × N, comme une revente ; ex. pays=0.8
+COLLECTION_SET_QUOTE_RATIO=           # collection misée jusqu'à sa cote × N, comme une revente ; ex. countries=0.8
 COLLECTION_UPGRADE=false              # miser aussi sur une rareté plus haute que la meilleure possédée
 COLLECTION_WISHLIST=false             # cartes manquantes en liste de souhaits du site : il annonce leurs ventes (SUPABASE_ANON_KEY requise)
 COLLECTION_WISHLIST_SECONDS=120       # lecture des annonces du site toutes les N secondes
@@ -397,15 +397,15 @@ TAG_COLLECTION_MAX_PER_RUN=60
 TAG_SHOWCASE=                         # étiquette des cartes en vitrine et des exemplaires gardés des collections (vide = non)
 ```
 
-**Exemple**, avec `COLLECTION_SETS=jours` et `COLLECTION_MAX_PRICE=50` : il te manque la carte « 14 juillet ». Une enchère sur cette carte, à n'importe quelle rareté, arrive à sa fin avec une mise minimale de 30 WB. Le bot mise 30 et garde la carte, sans la revendre. À 60 WB, il ne mise pas.
+**Exemple**, avec `COLLECTION_SETS=days` et `COLLECTION_MAX_PRICE=50` : il te manque la carte « 14 juillet ». Une enchère sur cette carte, à n'importe quelle rareté, arrive à sa fin avec une mise minimale de 30 WB. Le bot mise 30 et garde la carte, sans la revendre. À 60 WB, il ne mise pas.
 
 Avec `COLLECTION_UPGRADE=true`, s'il te reste un « 14 juillet » en C, le bot mise aussi sur un exemplaire de rareté plus haute (PC, R…), dans la même limite de 50 WB.
 
-Un plafond par collection, avec `COLLECTION_SETS=jours,elements,pays`, `COLLECTION_SET_MAX_PRICE=elements=100` et `COLLECTION_SET_QUOTE_RATIO=pays=0.8` :
+Un plafond par collection, avec `COLLECTION_SETS=days,elements,countries`, `COLLECTION_SET_MAX_PRICE=elements=100` et `COLLECTION_SET_QUOTE_RATIO=pays=0.8` :
 - « Fer » en vente à 90 WB : misé, la limite des éléments est 100 WB. Un jour reste limité par `COLLECTION_MAX_PRICE`.
 - « Canada » en L, cote 1 760 WB : misé jusqu'à 1 408 WB (0,8 × 1 760). Comme pour une revente, une autre vente du Canada en L à 1 500 WB ramène la cote à 1 500, donc le plafond à 1 200.
 - Un pays sans cote connue dans la rareté en vente : pas de mise.
-- Les deux réglages ensemble (`COLLECTION_SET_MAX_PRICE=pays=3000`) : la cote × 0,8, au plus 3 000 WB.
+- Les deux réglages ensemble (`COLLECTION_SET_MAX_PRICE=countries=3000`) : la cote × 0,8, au plus 3 000 WB.
 
 Une carte de collection manquante, ou à monter en rareté, n'est jamais achetée pour la revente, même si la revente permettrait de miser plus haut.
 
@@ -413,7 +413,7 @@ Le site laisse passer environ 9 ou 10 mises par vérification anti-bot. Avec `CO
 
 ## Étiquettes de thème
 
-Règles des thèmes dans [`config/etiquettes.yaml`](../config/etiquettes.yaml). Détail : [Fonctionnement](FONCTIONNEMENT.md#étiquettes-de-thème).
+Règles des thèmes dans [`config/themes.yaml`](../config/themes.yaml). Détail : [Fonctionnement](FONCTIONNEMENT.md#étiquettes-de-thème).
 
 ```sh
 THEMES_ENABLED=false               # thèmes sur l'exemplaire gardé, « Doublon » sur les autres

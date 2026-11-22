@@ -2,7 +2,7 @@
 
 Table Supabase `tags` : {id, user_id, name, color, …}, créée par l'éditeur du site ou par une extension avec
 {user_id, name, color} [WP tags.js]. L'émoji fait partie du nom (« 📅 Jour ») ; le bot compare les noms sans émojis
-ni casse (tag_key). Émoji et couleur : config/etiquettes.yaml (`emoji`, `couleur` d'un thème, et section `autres` pour
+ni casse (tag_key). Émoji et couleur : config/themes.yaml (`emoji`, `couleur` d'un thème, et section `autres` pour
 les étiquettes qui ne sont pas des thèmes), à la création et pour harmoniser les étiquettes existantes (PATCH du nom et de
 la couleur, comme l'éditeur du site).
 """
@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-from src.core.text import tag_key
+from src.core.text import config_value, tag_key
 from src.workers.base import Context
 from src.workers.themes import RULES_FILE, load_rules
 
@@ -38,14 +38,14 @@ class Wanted:
 
 def _style(spec: Any) -> tuple[str, str]:
     spec = spec if isinstance(spec, dict) else {}
-    return str(spec.get("emoji") or "").strip(), str(spec.get("couleur") or "").strip()
+    return str(spec.get("emoji") or "").strip(), str(config_value(spec, "color", "couleur") or "").strip()
 
 
 def styles() -> dict[str, Wanted]:
     """Style de chaque étiquette du fichier (thèmes et `autres`), par clé de nom (tag_key)."""
     raw = yaml.safe_load(RULES_FILE.read_text(encoding="utf-8")) or {}
     out = {}
-    for name, spec in {**(raw.get("themes") or {}), **(raw.get("autres") or {})}.items():
+    for name, spec in {**(raw.get("themes") or {}), **(config_value(raw, "other_tags", "autres") or {})}.items():
         emoji, color = _style(spec)
         if emoji or color:
             out[tag_key(str(name))] = Wanted(str(name), emoji, color)
