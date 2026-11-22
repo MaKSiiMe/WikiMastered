@@ -59,6 +59,7 @@ MESSAGE_BUTTONS = {
                ("keep", "🔒 Garder", discord.ButtonStyle.secondary)],
     "kept": [("resell", "💰 Remettre en vente…", discord.ButtonStyle.primary)],
     "stale": [("stalekeep", "🔒 Garder", discord.ButtonStyle.primary)],
+    "wikinsider": [("noted", "✅ Noté", discord.ButtonStyle.success)],
 }
 
 Handler = Callable[[discord.Interaction, int], Awaitable[None]]
@@ -865,7 +866,14 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         await close_buttons(interaction, "Le bot ne brade plus à 1 WB. Une carte qu'il renonce à vendre est gardée "
                                          "avec une étiquette.")
 
-    handlers = {"price": change_price, "cheap": no_fire_sale, "keep": keep_from_listing, "resell": resell,
+    async def noted(interaction: discord.Interaction, _: int) -> None:
+        """Opération notée sur Wikinsider : son message disparaît, le salon ne garde que ce qu'il reste à noter."""
+        try:
+            await interaction.message.delete()  # type: ignore[union-attr]
+        except discord.HTTPException:
+            await interaction.response.send_message("Message non effacé : supprime-le à la main.", ephemeral=True)
+
+    handlers = {"noted": noted, "price": change_price, "cheap": no_fire_sale, "keep": keep_from_listing, "resell": resell,
                 "recount": recount, "valuehist": value_history, "stalefire": no_fire_sale, "stalekeep": stale_keep}
     client.wm_handlers = handlers  # type: ignore[attr-defined]
     client.add_dynamic_items(MessageButton)

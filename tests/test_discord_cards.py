@@ -115,7 +115,7 @@ async def test_message_buttons_survive_a_restart():
     assert all(re.fullmatch(template, i) for i in ids)
     assert not re.fullmatch(template, "wm:verif-faite")  # le bouton anti-bot garde le sien
     assert message_view({"kind": "relist"}) is None and message_view({"kind": "autre", "listing": 1}) is None
-    assert set(MESSAGE_BUTTONS) == {"relist", "kept", "stale"}
+    assert set(MESSAGE_BUTTONS) == {"relist", "kept", "stale", "wikinsider"}
 
 
 @pytest.mark.asyncio

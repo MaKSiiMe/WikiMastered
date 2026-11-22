@@ -42,6 +42,7 @@ class Topic(Enum):
     TRADES = "🤝 Échanges"        # échanges proposés, évalués
     REPORT = "📊 Bilan"           # bilan du soir
     RECAP = "🩺 Récap"            # récap périodique des workers
+    WIKINSIDER = "📝 Wikinsider"  # achats et ventes à noter à la main sur Wikinsider
 
 
 # Limites des embeds Discord
@@ -59,6 +60,7 @@ TOPIC_CHANNELS = {
     Topic.REPORT: "bilan",
     Topic.RECAP: "bilan",
     Topic.SYSTEM: "systeme",
+    Topic.WIKINSIDER: "wikinsider",
 }
 
 THREAD_LINES = 15  # étapes gardées dans le message d'une position (les plus récentes)
@@ -268,6 +270,8 @@ class DiscordNotifier:
         return embed
 
     def _webhook_for(self, msg: _Message) -> str:
+        if msg.topic is Topic.WIKINSIDER:  # ce salon seul : un message ailleurs n'aurait pas de sens
+            return self._channels.get(Topic.WIKINSIDER, "")
         if not self._webhook:
             return ""
         if msg.level is Level.CRITICAL:

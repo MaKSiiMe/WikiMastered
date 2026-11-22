@@ -34,6 +34,7 @@ from collections import Counter, deque
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 
+from src import wikinsider
 from src.config import RARITY_RANK, Settings
 from src.core import timeutils
 from src.core import journal
@@ -1962,6 +1963,13 @@ class AuctionSniper(Worker):
         self._engaged.pop(row["auction_id"], None)
         if not won:
             return
+        if not simulated and (not closed or self.settings.discord_wikinsider_kept):
+            reason = str(row["reason"] or "")
+            kept = "" if not closed else ("carte demandée" if reason.startswith(SNIPE_REASON) else
+                                          "souhaitée" if reason.startswith(WISH_REASON) else "collection")
+            wikinsider.note_buy(self.notifier, self.settings.wm_base_url, bid_id=row["id"], title=row["title"],
+                                price=amount, shiny=bool(row["is_shiny"]), rarity=row["rarity"],
+                                auction_id=row["auction_id"], kept=kept)
         link = card.page_url if card else None
         name = f"**[{row['title']}]({link})**" if link else f"**{row['title']}**"
         look = {"thumbnail": card.image_url if card else None, "url": link}
