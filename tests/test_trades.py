@@ -121,11 +121,12 @@ def test_card_text_is_parsed():
 @pytest.mark.asyncio
 async def test_trade_items_with_ids_only_are_named_and_priced(tmp_path):
     """Lpancho, 01/11 : le site ne donne que les identifiants. Ma carte : titre et rareté retrouvés, cotée ; la sienne :
-    titre retrouvé, rareté inconnue, donc pas de valeur inventée."""
+    titre retrouvé, rareté inconnue, donc pas de valeur inventée. Titre lu d'abord dans ce que le bot a vu (Emma Watson,
+    ventes observées) : la route des ventes ne le donne plus depuis le 22/11."""
     def handler(request):
         path = request.url.path
-        if path.endswith("/emma/sales"):
-            return httpx.Response(200, json={"summary": {}, "wikipedia_title": "Emma Watson"})
+        if path.endswith("/emma/sales") and request.url.params.get("scope") == "summary":
+            return httpx.Response(200, json={"summary": {}})  # titre absent : celui de la base
         if path.endswith("/zendaya/sales"):
             return httpx.Response(200, json={"summary": {}, "wikipedia_title": "Zendaya"})
         if path == "/api/my-collection":

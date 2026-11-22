@@ -223,14 +223,16 @@ async def evaluate(ctx: Context, given: list[Priced], received: list[Priced], wb
 async def item_details(ctx: Context, item: TradeItem, me: str, owned: bool = False) -> tuple[str, str | None, bool]:
     """(titre, rareté, shiny) d'une carte d'échange. Le 01/11, le site n'en donnait que les identifiants (« ? · ? » pour
     les 7 cartes demandées par Lpancho) : titre lu sur la route des ventes de la carte, rareté de ton exemplaire lue
-    dans ta collection. Rareté d'une carte de l'autre joueur : inconnue."""
+    dans ta collection. Rareté d'une carte de l'autre joueur : inconnue. Depuis le 22/11, la route des ventes ne donne
+    plus le titre : il vient d'abord de ce que le bot a vu sur le marché."""
     title, rarity, shiny = item.title or "?", item.rarity, item.shiny
     if item.card or not item.card_id:
         return title, rarity, shiny
     # Exemplaire que le bot a déjà mis en vente : sa rareté est connue, même s'il a quitté la collection.
     known = await ctx.db.known_copy(item.user_card_id) if item.user_card_id else None
     try:
-        title = (await ctx.api.sales_summary(item.card_id, background=True)).wikipedia_title or "?"
+        title = (await ctx.db.title_of(item.card_id)
+                 or (await ctx.api.sales_summary(item.card_id, background=True)).wikipedia_title or "?")
         if known:
             return title, known[0], known[1]
         # Le tien, ou celui que tu as reçu d'un échange terminé : cherché dans ta collection.

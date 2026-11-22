@@ -70,13 +70,13 @@ endpoints:
     method: GET
     path: /api/marketplace/{auction_id}
 
-  sales_summary:                # [KZ bridge/prices.js, WR api.js] limitée par le site (403 + Retry-After)
-    method: GET                 # -> { summary: { "<rareté>": {average, count?} }, isPro } (count absent hors PRO)
+  sales_summary:                # [KZ bridge/prices.js, WR api.js] plus de moyenne depuis le 22/11 : -> { recent: [...] }
+    method: GET                 #   (avant : { summary: { "<rareté>": {average, count?} }, isPro }) ; plus utilisée
     path: /api/marketplace/cards/{card_id}/sales
     params: {scope: summary}
 
-  sales_history:                # [WP market.js] historique public des ventes d'une carte
-    method: GET                 # -> { recent: [ {final_price, ...} ], sales: [ ... ] }
+  sales_history:                # [WP market.js] 5 dernières ventes d'une carte, ouvertes à tous depuis le 22/11
+    method: GET                 # -> { recent: [ {id, final_price, settled_at, rarity} ] } ; ?rarity=X : une rareté
     path: /api/marketplace/cards/{card_id}/sales
 
   price_history:                # historique des prix d'une carte (fiche de la carte, relevé du 21/11)

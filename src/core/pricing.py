@@ -5,12 +5,12 @@ la moyenne du site peut être très datée (relevé réel : GMMTV vendue 157 WB,
 Sources, de la plus fiable à la moins fiable :
 1. **Ventes observées** par le sniper lui-même (table observed_sales) : médiane des
    QUOTE_RECENT_SALES dernières. Gratuit, sans requête, et à jour des tendances.
-2. Historique du site /api/marketplace/cards/{id}/sales [WP market.js] — refusé (403)
-   aux comptes non PRO, donc rarement disponible.
-3. Moyenne ?scope=summary [KZ bridge/prices.js], sans nombre de ventes hors PRO.
-4. Historique des prix /api/marketplace/cards/{id}/price-history (relevé du 21/11) : moyennes par semaine et par
-   rareté. Seulement en secours, pour une carte gardée (souhaitée, de collection) sans autre cote : voir
-   `history_quote`.
+2. Cote du site : historique des prix /api/marketplace/cards/{id}/price-history (onglet « Marché » de la fiche) :
+   moyennes par semaine et par rareté, une requête pour toutes les raretés (`history_quotes`). Depuis la mise à jour
+   du 22/11, ?scope=summary ne renvoie plus de moyenne (seulement `recent`, les 5 dernières ventes) : sans ce
+   changement, le bot n'avait plus de cote du site, ni plafond pour le sniper ni cote pour les collections.
+3. Secours si l'historique est refusé : les 5 dernières ventes de /api/marketplace/cards/{id}/sales (`recent`,
+   ouvertes à tous depuis le 22/11, avec leur rareté).
 
 Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence ; × QUOTE_SITE_MARGIN_RATIO :
 la moyenne du site suit une hausse avec retard, voir `combine`), sauf pour un
@@ -46,7 +46,8 @@ log = logging.getLogger(__name__)
 
 ANY = "*"
 OUTLIER_FACTOR = 3.0
-HISTORY_WEEKS = 4  # semaines avec ventes retenues pour la cote de l'historique (les plus récentes)
+HISTORY_WEEKS = 4  # semaines avec ventes retenues au plus pour la cote de l'historique (les plus récentes)
+HISTORY_MIN_SALES = 10  # ventes suffisantes : les semaines plus anciennes ne comptent pas
 HISTORY_TTL = timedelta(hours=6)
 HISTORY_OFF = timedelta(hours=1)  # route refusée (compte, panne) : plus essayée pendant ce temps
 HISTORY_CACHE_MAX = 500
@@ -122,10 +123,13 @@ def combine(observed: list[int], n_observed: int, site_average: float | None,
     return Quote(site_average, 0)
 
 
-def history_quotes(data: dict) -> dict[str, Quote]:
-    """Cote par rareté tirée de l'historique des prix du site : moyenne des HISTORY_WEEKS dernières semaines avec
-    des ventes, pondérée par leur nombre (le site affiche la moyenne de la dernière semaine). Format relevé le 21/11
-    dans son code : {by_rarity: {"<rareté>": {weekly: [{start, avg, min, max, count}]}}}. Inattendu : aucune cote."""
+def history_quotes(data: dict | None) -> dict[str, Quote]:
+    """Cote par rareté tirée de l'historique des prix du site : moyenne des dernières semaines avec des ventes,
+    pondérée par leur nombre, en remontant jusqu'à HISTORY_MIN_SALES ventes ou HISTORY_WEEKS semaines. Une carte
+    très vendue a donc la moyenne de la semaine, comme le site (Ana de Armas L le 22/11 : 8845 sur 86 ventes, quand
+    celle des 4 semaines valait ~8400, tirée vers le bas par la semaine du 26/10 à 6492) ; une carte rare prend plus
+    de semaines. `count` : ventes retenues. Format relevé le 22/11 : {computed_at, by_rarity: {"<rareté>": {weekly: [{start, avg, min, max,
+    count}], monthly: [...]}}}. Inattendu : aucune cote."""
     quotes: dict[str, Quote] = {}
     by_rarity = data.get("by_rarity") if isinstance(data, dict) else None
     if not isinstance(by_rarity, dict):
@@ -136,10 +140,15 @@ def history_quotes(data: dict) -> dict[str, Quote]:
             continue
         points = sorted((p for p in weekly if isinstance(p, dict) and isinstance(p.get("avg"), int | float)
                          and isinstance(p.get("count"), int) and p["count"] > 0 and p["avg"] > 0),
-                        key=lambda p: str(p.get("start", "")))[-HISTORY_WEEKS:]
-        total = sum(p["count"] for p in points)
+                        key=lambda p: str(p.get("start", "")), reverse=True)
+        kept: list[dict] = []
+        for point in points:
+            kept.append(point)
+            if len(kept) >= HISTORY_WEEKS or sum(p["count"] for p in kept) >= HISTORY_MIN_SALES:
+                break
+        total = sum(p["count"] for p in kept)
         if total:
-            quotes[rarity] = Quote(sum(p["avg"] * p["count"] for p in points) / total, total)
+            quotes[rarity] = Quote(sum(p["avg"] * p["count"] for p in kept) / total, total)
     return quotes
 
 
@@ -157,8 +166,8 @@ def recent_estimates(rows: list[SaleRow], recent_n: int) -> dict[str, tuple[floa
         priced.sort(key=lambda r: r.settled_at or _EPOCH, reverse=True)  # plus récentes d'abord
     groups: dict[str, list[int]] = {ANY: [r.final_price for r in priced]}  # type: ignore[misc]
     for r in priced:
-        if r.snapshot_rarity in RARITIES:
-            groups.setdefault(r.snapshot_rarity, []).append(r.final_price)  # type: ignore[arg-type]
+        if r.sale_rarity in RARITIES:
+            groups.setdefault(r.sale_rarity, []).append(r.final_price)  # type: ignore[arg-type]
     return {k: (float(statistics.median(v[:recent_n])), len(v)) for k, v in groups.items() if v}
 
 
@@ -170,32 +179,40 @@ class PriceService:
         self.default_ttl = timedelta(minutes=default_ttl_minutes)
         self.recent_n = recent_n
         self.site_margin = site_margin  # le plafond de l'estimation est la moyenne du site × cette marge
-        self.pro = False  # compte PRO, d'après la dernière cote lue (isPro)
         self._history: dict[str, tuple[datetime, dict[str, Quote]]] = {}  # historique du site, par carte
         self._history_off_until = _EPOCH
+        self._history_format_warned = False  # format inattendu signalé une seule fois
+
+    def _remember_history(self, card_id: str, quotes: dict[str, Quote]) -> None:
+        now = utcnow()
+        if len(self._history) >= HISTORY_CACHE_MAX:
+            self._history = {k: v for k, v in self._history.items() if now - v[0] <= HISTORY_TTL}
+        self._history[card_id] = (now, quotes)
 
     async def _fetch(self, card_id: str, wait: bool,
                      background: bool = False) -> dict[str, tuple[float | None, int | None]]:
-        # Historique des ventes : réservé aux comptes PRO (403 sinon, relevé du 14/10). Demandé seulement quand la
-        # cote du site dit le compte PRO ; avant, chaque 403 coûtait en plus une vérification de session.
-        if self.pro and self.api.client.endpoints.has("sales_history"):
-            try:
-                history = SalesHistory.model_validate(
-                    await self.api.client.get("sales_history", card_id=card_id, wait=wait, background=background))
-                data = recent_estimates(history.rows(), self.recent_n)
-                if data:
-                    return data
-            except RateLimited:
+        """Cote du site par rareté : historique des prix (une requête, toutes les raretés) ; refusé ou de format
+        inattendu : médiane des 5 dernières ventes de la carte."""
+        data = None
+        try:
+            data = await self.api.price_history(card_id, wait=wait, background=background)
+        except RateLimited:
+            raise
+        except ApiError as exc:
+            if exc.status not in (401, 403, 404):
                 raise
-            except (ApiError, ValueError) as exc:
-                log.debug("historique indisponible pour %s (%s), repli sur la moyenne", card_id, exc)
-        summary = await self.api.sales_summary(card_id, wait=wait, background=background)
-        self.pro = summary.is_pro
-        return {
-            r: (s.average, s.count)
-            for r, s in summary.summary.items()
-            if r in RARITIES and (s.average is None or s.average >= 0)
-        }
+            log.debug("historique des prix refusé pour %s (HTTP %s), repli sur les dernières ventes", card_id,
+                      exc.status)
+        if isinstance(data, dict) and isinstance(data.get("by_rarity"), dict):
+            quotes = history_quotes(data)
+            self._remember_history(card_id, quotes)
+            return {r: (q.average, q.count) for r, q in quotes.items()}
+        if data is not None and not self._history_format_warned:
+            self._history_format_warned = True
+            log.warning("historique des prix de %s : format inattendu, repli sur les dernières ventes", card_id)
+        history = SalesHistory.model_validate(
+            await self.api.client.get("sales_history", card_id=card_id, wait=wait, background=background))
+        return {r: v for r, v in recent_estimates(history.rows(), self.recent_n).items() if r != ANY}
 
     async def _market(self, card_id: str, max_age: timedelta, wait: bool, fetch: bool = True,
                       background: bool = False) -> dict[str, tuple[float | None, int | None]]:
@@ -279,9 +296,7 @@ class PriceService:
                          HISTORY_OFF.seconds // 60)
             return None
         quotes = history_quotes(data)
-        if len(self._history) >= HISTORY_CACHE_MAX:
-            self._history = {k: v for k, v in self._history.items() if now - v[0] <= HISTORY_TTL}
-        self._history[card_id] = (now, quotes)
+        self._remember_history(card_id, quotes)
         log.debug("historique des prix de %s : %s", card_id,
                   ", ".join(f"{r} {q.average:.0f} ({q.count})" for r, q in quotes.items()) or "aucune vente")
         return quotes.get(rarity)

@@ -270,28 +270,6 @@ async def test_profile_command_reads_the_rpc_and_hides_personal_fields(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_sales_history_asked_only_for_a_pro_account(tmp_path):
-    """Historique des ventes réservé aux comptes PRO : le 18/10, le bot le demandait toutes les 6 h pour un 403."""
-    asked, pro = [], {"isPro": False}
-
-    def handler(request):
-        scope = request.url.params.get("scope")
-        asked.append(scope or "history")
-        if scope == "summary":
-            return httpx.Response(200, json={"summary": {"L": {"average": 900}}, **pro})
-        return httpx.Response(200, json={"recent": [{"final_price": 700, "snapshot_rarity": "L"}]})
-
-    client, notifier = make_client(tmp_path, handler)
-    ctx = await make_context(tmp_path, client, notifier)
-    prices = ctx.prices
-    assert (await prices.quote("a", "L")).average == 900 and asked == ["summary"]
-    pro["isPro"] = True
-    await prices.quote("b", "L")
-    assert (await prices.quote("c", "L")).average == 700 and asked == ["summary", "summary", "history"]
-    await ctx.db.close()
-
-
-@pytest.mark.asyncio
 async def test_tag_moves_to_the_highest_rarity_copy(tmp_path):
     import json as jsonlib
 

@@ -33,7 +33,7 @@ from src.workers.base import Worker
 from src.workers.inventory_manager import excluded_copies, group_by_card
 
 KV_KEY = "value_scan"
-ROUTE = "sales_summary"
+ROUTE = "price_history"  # cote du site depuis le 22/11 (`PriceService._fetch`)
 START_DELAY = timedelta(minutes=10)  # après un démarrage, laisse d'abord le sniper prendre son rythme
 MAX_SPACING = 300.0                  # espacement maximal des cotes quand la route est limitée
 SPEED_UP_AFTER = 20                  # cotes acceptées de suite avant de réaccélérer…
