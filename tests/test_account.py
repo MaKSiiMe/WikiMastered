@@ -1,4 +1,4 @@
-"""Valeur du compte (/valeur) : solde, cartes possédées, cartes en vente, mises en tête."""
+"""Valeur du compte (/compte valeur) : solde, cartes possédées, cartes en vente, mises en tête."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Module J : valeur du compte (/valeur), tenue à jour sans dépendre de la défausse ni de la vente des doublons.
+"""Module J : valeur du compte (/compte valeur), tenue à jour sans dépendre de la défausse ni de la vente des doublons.
 
 Toutes les ACCOUNT_VALUE_HOURS heures, si aucun autre worker n'a relu toute la collection entre-temps (cotes,
 inventaire : leur lecture compte), ce worker la relit en requêtes de fond (le sniper passe toujours avant), garde

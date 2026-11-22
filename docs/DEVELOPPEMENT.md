@@ -62,7 +62,7 @@ Un défaut qui change modifie le comportement de toute instance qui n'a pas rens
 
 ## Ajouter un worker
 
-Hérite de `Worker`, écris `step()`, qui retourne le délai avant le prochain passage en secondes, et ajoute-le dans `run_bot` (`src/main.py`). Son `name` sert aux logs, au récap et à `/pause`.
+Hérite de `Worker`, écris `step()`, qui retourne le délai avant le prochain passage en secondes, et ajoute-le dans `run_bot` (`src/main.py`). Son `name` sert aux logs, au récap et à `/bot pause`.
 
 ## Ajouter une commande Discord
 

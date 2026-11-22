@@ -119,7 +119,7 @@ class ValueScan(Worker):
     async def start_cycle(self, now: datetime) -> None:
         s = self.settings
         rows = await self.api.load_collection()
-        await store_collection(self.ctx, rows)  # valeur du compte (/valeur), sans autre lecture
+        await store_collection(self.ctx, rows)  # valeur du compte (/compte valeur), sans autre lecture
         groups = group_by_card(rows)
         excluded = await excluded_copies(self.ctx, rows)
         candidates = [cid for cid, copies in groups.items() if free_copies(copies, excluded)]

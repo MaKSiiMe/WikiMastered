@@ -304,7 +304,7 @@ def discard_affects_count(s: Settings) -> bool:
 
 async def excluded_copies(ctx: Context, rows: list[OwnedCard]) -> set[str]:
     """Exemplaires jamais vendus ni défaussés : engagés dans un échange, déjà en vente ou programmés, portant une
-    étiquette de TAG_PROTECTED (casse ignorée), ou d'une carte gardée sur Discord (/garder)."""
+    étiquette de TAG_PROTECTED (casse ignorée), ou d'une carte gardée sur Discord (/cartes garder)."""
     excluded = await ctx.api.protected_owned_ids({r.id for r in rows})
     excluded |= await ctx.db.scheduled_owned_ids()
     excluded |= keeps.protected(rows, await keeps.load(ctx.db))
@@ -312,7 +312,7 @@ async def excluded_copies(ctx: Context, rows: list[OwnedCard]) -> set[str]:
 
 
 async def copies_of(ctx: Context, title: str) -> tuple[list[OwnedCard], set[str]]:
-    """Exemplaires possédés d'une carte (titre exact, casse ignorée ; commandes Discord /vendre et /carte), et ceux
+    """Exemplaires possédés d'une carte (titre exact, casse ignorée ; commandes Discord /vente vendre et /cartes fiche), et ceux
     à ne pas vendre (échange, déjà en vente, protégés, gardés). Un favori reste dans la liste : le site refuse de le
     vendre, l'appelant le signale."""
     rows: list[OwnedCard] = []
@@ -524,7 +524,7 @@ class InventoryManager(Worker):
     async def snapshot(self, lookups: int | None = None
                        ) -> tuple[dict[str, list[OwnedCard]], set[str], dict[str, dict[str, Quote]], int]:
         rows = await self.api.load_collection()
-        await store_collection(self.ctx, rows)  # valeur du compte (/valeur), sans autre lecture
+        await store_collection(self.ctx, rows)  # valeur du compte (/compte valeur), sans autre lecture
         groups = group_by_card(rows)
         excluded = await excluded_copies(self.ctx, rows)
         keep = min(self.settings.duplicates_keep_copies, max(1, self.settings.discard_keep_copies))
@@ -944,7 +944,7 @@ class InventoryManager(Worker):
         await self.db.kv_set(STALE_KV, sorted(alerted & {r["id"] for r in held}))
         return new
 
-    # ------------------------------------------------ demandes Discord (/vendre, /garder)
+    # ------------------------------------------------ demandes Discord (/vente vendre, /cartes garder)
     async def sell_copy(self, copy: OwnedCard, price: int) -> int | None:
         """Vente demandée sur Discord : publiée à la première place libre, avant les autres ventes, pour la durée
         d'une revente (fin hors des heures évitées). Renvoie l'identifiant de la vente."""

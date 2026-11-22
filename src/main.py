@@ -86,7 +86,7 @@ stats_log = logging.getLogger("stats")
 
 async def stats_loop(ctx: Context, workers: list[Worker]) -> None:
     """Toutes les LOG_STATS_MINUTES : passages de chaque worker et requêtes au site, quelques lignes en console et le
-    détail dans le journal (événement « stats »). Le dernier relevé est montré par /etat."""
+    détail dans le journal (événement « stats »). Le dernier relevé est montré par /bot etat."""
     since = utcnow()
     while True:
         await asyncio.sleep(ctx.settings.log_stats_minutes * 60)
@@ -172,7 +172,7 @@ class Report:
 
 
 async def daily_report_parts(ctx: Context) -> Report:
-    """Chiffres du jour, puis le bilan tel qu'envoyé le soir (aussi demandé par /bilan sur Discord)."""
+    """Chiffres du jour, puis le bilan tel qu'envoyé le soir (aussi demandé par /compte bilan sur Discord)."""
     since = local_dt(now_local().date(), time(0, 0))
     stats = await ctx.db.report(since)
     try:
@@ -402,7 +402,7 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
                 md: bool = False, resale: dict[tuple[str, bool], Quote] | None = None, fee: float = 0.0,
                 shiny: bool = False, site_margin: float = 1.0) -> str:
     """Ventes observées d'une carte, estimation du bot, achats du bot et ventes en cours (commande prices).
-    `md` : version Discord (/prix, voir prices_md). `resale` : revente estimée par
+    `md` : version Discord (/marche prix, voir prices_md). `resale` : revente estimée par
     (rareté, shiny) sur les ventes observées seules, d'où la mise conseillée pour l'acheter. `shiny` : les exemplaires
     shiny seuls (ventes, estimation, achats, ventes en cours), sans la cote du site qui ne les distingue pas. `site_margin` : marge du plafond
     (QUOTE_SITE_MARGIN_RATIO), montrée à côté de la cote."""
@@ -478,14 +478,14 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
     return "\n".join(lines)
 
 
-PRICES_MD_SHOWN = 10  # ventes listées par rareté sur Discord (/prix)
+PRICES_MD_SHOWN = 10  # ventes listées par rareté sur Discord (/marche prix)
 PRICES_FOOTER = ("Ventes finies avec au moins une mise, vues par le bot (une mise de dernière seconde peut manquer). "
                  "Revente : médiane des dernières ventes, sans la cote du site.")
 
 
 def prices_md(observed, bought, selling, quotes: dict, site: dict, me: str | None, now: datetime,
               resale: dict[tuple[str, bool], Quote], fee: float, shiny: bool, site_margin: float = 1.0) -> str:
-    """/prix : par rareté, l'estimation et la mise conseillée en tête, puis les dernières ventes ; ensuite les achats
+    """/marche prix : par rareté, l'estimation et la mise conseillée en tête, puis les dernières ventes ; ensuite les achats
     du bot et les ventes en cours. Ce qui explique les chiffres est dans le pied du message (PRICES_FOOTER)."""
     def when(value) -> str:
         moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)

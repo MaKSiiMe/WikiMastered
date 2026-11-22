@@ -1,4 +1,4 @@
-"""Graphiques PNG pour Discord (/roi, /valeur), dessinés avec Pillow (≈ 20 Mo, sans matplotlib).
+"""Graphiques PNG pour Discord (/compte roi, /compte valeur), dessinés avec Pillow (≈ 20 Mo, sans matplotlib).
 
 Deux formes : des barres par jour (bénéfice, vert au-dessus de zéro, rouge dessous) et une courbe (valeur du
 compte). Fond sombre comme Discord ; chiffres sans espace insécable. Police : DejaVu Sans (src/assets, licence jointe),

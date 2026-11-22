@@ -1,6 +1,6 @@
 """Échanges entre joueurs : valeur de chaque côté, verdict, contre-offre à envoyer.
 
-Sert au worker « trades » (chaque échange qu'on te propose, évalué une fois) et à /echange (un échange que tu
+Sert au worker « trades » (chaque échange qu'on te propose, évalué une fois) et à /echanges evaluer (un échange que tu
 envisages). Valeur d'une carte : médiane de ses ventes observées des TRADE_DAYS derniers jours (même rareté, shiny à
 part, ventes suspectes écartées) ; moins de TRADE_MIN_SALES ventes : l'estimation du bot, sans requête. Le nombre de
 ventes dit si elle part vite : le 28/10, un joueur refusait Jeffrey Epstein (L, ~12 000) « qui se vend pas trop » contre
@@ -29,7 +29,7 @@ from src.workers.base import Context
 
 log = logging.getLogger(__name__)
 
-# Couleur d'un échange (src/core/colors.py), sur /echange comme dans le salon des ventes.
+# Couleur d'un échange (src/core/colors.py), sur /echanges evaluer comme dans le salon des ventes.
 LEVELS = {"equitable": Level.INFO, "avantage": Level.SUCCESS, "defavorable": Level.WARNING,
           "incomplet": Level.WARNING}
 TRADE_DAYS = 7
@@ -175,7 +175,7 @@ def parse_card(text: str) -> tuple[str, str | None, bool]:
 
 
 async def value_of_title(ctx: Context, text: str) -> Priced:
-    """Carte saisie dans /echange : sans rareté précisée, la plus vendue de ce titre."""
+    """Carte saisie dans /echanges evaluer : sans rareté précisée, la plus vendue de ce titre."""
     title, rarity, shiny = parse_card(text)
     rows = [r for r in await ctx.db.observed_for_title(title) if bool(r["is_shiny"]) == shiny]
     if rarity:

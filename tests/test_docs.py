@@ -57,14 +57,17 @@ def anchor(title: str) -> str:
 def slash_commands() -> dict[str, list[str]]:
     """Commandes Discord du code : nom -> paramètres."""
     commands = {}
-    for name in ("discord_bot.py", "discord_cards.py"):
+    for name in ("discord_bot.py", "discord_cards.py", "discord_menu.py"):
         for node in ast.walk(ast.parse((ROOT / "src" / name).read_text(encoding="utf-8"))):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
             for decorator in node.decorator_list:
                 if isinstance(decorator, ast.Call) and getattr(decorator.func, "attr", "") == "command":
                     named = {k.arg: k.value.value for k in decorator.keywords if isinstance(k.value, ast.Constant)}
-                    commands[named.get("name", node.name)] = [a.arg for a in node.args.args if a.arg != "interaction"]
+                    owner = decorator.func.value  # G["sniper"].command : sous-commande du groupe « sniper »
+                    group = owner.slice.value if isinstance(owner, ast.Subscript) and isinstance(owner.slice, ast.Constant) else ""
+                    full = f"{group} {named.get('name', node.name)}".strip()
+                    commands[full] = [a.arg for a in node.args.args if a.arg != "interaction"]
     return commands
 
 
@@ -104,7 +107,7 @@ def test_env_example_loads():
 
 def test_every_discord_command_is_documented():
     text = COMMANDS.read_text(encoding="utf-8")
-    rows = {m[1]: m[2] for m in re.finditer(r"^\| `/([a-z-]+)([^`]*)`", text, re.M)}
+    rows = {m[1]: m[2] for m in re.finditer(r"^\| `/([a-z-]+(?: [a-z-]+)?)([^`]*)`", text, re.M)}
     code = slash_commands()
     assert code, "Aucune commande Discord trouvée : le test ne lit plus le bon code"
     assert not set(code) - set(rows), f"À ajouter dans docs/COMMANDES.md : {sorted(set(code) - set(rows))}"

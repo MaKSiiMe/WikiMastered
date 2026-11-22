@@ -1,4 +1,4 @@
-"""Collection publique d'un autre joueur (/collection-joueur), comparée à la collection « gifs » : ses cartes par rareté,
+"""Collection publique d'un autre joueur (/collection joueur), comparée à la collection « gifs » : ses cartes par rareté,
 celles de notre liste, et celles hors liste qui sont vraiment animées (notre liste est-elle complète ?).
 
 Lecture seule, en requêtes de fond, à la demande ; aucune mise : rien ne compte pour la vérification anti-bot. Le

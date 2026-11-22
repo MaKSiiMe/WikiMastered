@@ -1,4 +1,4 @@
-"""Rendement des reventes du sniper, jour par jour (commande roi et /roi sur Discord)."""
+"""Rendement des reventes du sniper, jour par jour (commande roi et /compte roi sur Discord)."""
 
 from __future__ import annotations
 

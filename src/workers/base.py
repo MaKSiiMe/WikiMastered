@@ -30,10 +30,10 @@ class Context:
     db: Database
     notifier: DiscordNotifier
     prices: PriceService
-    # Workers en pause (/pause sur Discord) : nom -> fin, ou None jusqu'à /reprise. Voir src/pauses.py.
+    # Workers en pause (/bot pause sur Discord) : nom -> fin, ou None jusqu'à /bot reprise. Voir src/pauses.py.
     pauses: dict[str, datetime | None] = field(default_factory=dict)
-    last_backup: dict = field(default_factory=dict)  # dernière sauvegarde de la base (src/backup.py), pour /etat
-    last_stats: dict = field(default_factory=dict)  # dernier relevé de stats_loop (src/main.py), pour /etat
+    last_backup: dict = field(default_factory=dict)  # dernière sauvegarde de la base (src/backup.py), pour /bot etat
+    last_stats: dict = field(default_factory=dict)  # dernier relevé de stats_loop (src/main.py), pour /bot etat
     realtime: Any = None  # temps réel du site (src/core/realtime.py, REALTIME_ENABLED), sinon None
 
 
@@ -118,7 +118,7 @@ class Worker:
             self.log.info("fin de la pause, reprise")
             return 0.0
         left = (until - utcnow()).total_seconds() if until else 30.0
-        return min(1.0, max(0.1, left))  # /reprise est vue dans la seconde
+        return min(1.0, max(0.1, left))  # /bot reprise est vue dans la seconde
 
     @property
     def errors_in_a_row(self) -> int:
@@ -126,12 +126,12 @@ class Worker:
 
     @property
     def paused(self) -> str | None:
-        """« en pause jusqu'à 14:30 » (ou jusqu'à /reprise), None hors pause."""
+        """« en pause jusqu'à 14:30 » (ou jusqu'à /bot reprise), None hors pause."""
         if self.name not in self.ctx.pauses:
             return None
         until = self.ctx.pauses[self.name]
         if until is None:
-            return "en pause jusqu'à /reprise"
+            return "en pause jusqu'à /bot reprise"
         return f"en pause jusqu'à {until.astimezone(timeutils.PARIS):%H:%M}" if until > utcnow() else None
 
     @property

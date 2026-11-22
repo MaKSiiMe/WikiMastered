@@ -18,8 +18,8 @@
 #                ne retire pas un thème trouvé par la description ou le métier (une personne les cumule)
 #   alone        seulement si la carte n'a aucun autre thème
 #   removable    retiré d'une carte qui n'a plus ce thème, une fois un autre de ses thèmes posé
-#   emoji, color style de l'étiquette sur le site : à la création (/etiquettes creer) et pour harmoniser les
-#                existantes (/etiquettes harmoniser) ; sans émoji, celui du site est gardé
+#   emoji, color style de l'étiquette sur le site : à la création (/profil tags creer) et pour harmoniser les
+#                existantes (/profil tags harmoniser) ; sans émoji, celui du site est gardé
 # Anciennes clés françaises (natures, taxons, metiers, sauf, seul, retirer, couleur, autres) encore lues.
 # Modifier classes, taxa ou occupations fait relire Wikidata pour toutes les cartes au passage suivant.
 
@@ -452,7 +452,7 @@ themes:
 # Babie : posée à la main sur le site, le bot ne la pose pas (et n'enlève jamais un thème).
 
 # Émoji et couleur des étiquettes qui ne sont pas des thèmes (les thèmes ont `emoji` et `color` dans leur règle),
-# pour /etiquettes creer et harmoniser. Une étiquette absente de ce fichier n'est jamais touchée.
+# pour /profil tags creer et harmoniser. Une étiquette absente de ce fichier n'est jamais touchée.
 other_tags:
   Doublon: {color: "#27272a"}
   GIF: {color: "#ff2d95"}

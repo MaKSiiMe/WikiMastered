@@ -4,7 +4,7 @@ Toutes les WISH_CHECK_MINUTES, le worker « wishes » relit ta liste de souhaits
 Les cartes que le bot y a mises pour les collections (COLLECTION_WISHLIST) ne comptent pas : seules les tiennes
 deviennent des cartes souhaitées (kv « wishes »), avec leur titre et la plus haute rareté que tu en possèdes déjà.
 
-Le sniper les mise comme une carte demandée sur Discord (/snipe), au minimum, jusqu'à la cote de la carte dans la rareté
+Le sniper les mise comme une carte demandée sur Discord (/sniper demander), au minimum, jusqu'à la cote de la carte dans la rareté
 en vente et jamais au-dessus de WISH_MAX_PRICE. Sans cote connue : jusqu'à WISH_UNQUOTED_MAX_PRICE (0 = pas de mise).
 Il prend toute rareté plus haute que
 celle que tu possèdes : une carte obtenue en R peut encore être rachetée en SR, tant qu'elle reste dans ta liste.
@@ -175,7 +175,7 @@ async def tag_won(ctx: Context) -> tuple[int, str]:
 
 
 async def overview_text(ctx: Context) -> str:
-    """Commande /souhaits : chaque carte souhaitée, la rareté déjà possédée et le plafond de chaque rareté encore à
+    """Commande /collection souhaits : chaque carte souhaitée, la rareté déjà possédée et le plafond de chaque rareté encore à
     prendre (sa cote, au plus WISH_MAX_PRICE ; sans requête : ventes observées et cote du site en cache)."""
     cap = ctx.settings.wish_max_price
     if cap <= 0:

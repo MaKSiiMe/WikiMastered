@@ -145,7 +145,7 @@ def history_quotes(data: dict) -> dict[str, Quote]:
 
 def advised_bid(resale: float, fee: float) -> tuple[int, float]:
     """Mise conseillée pour revendre une carte (`deterrent_bid` : qui surenchérit paie plus que la revente) et bénéfice
-    si elle gagne à ce prix (commandes /top et /prix)."""
+    si elle gagne à ce prix (commandes /marche top et /marche prix)."""
     bid = deterrent_bid(resale)
     return bid, resale * (1 - fee) - bid
 

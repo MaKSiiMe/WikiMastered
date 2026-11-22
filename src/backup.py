@@ -1,4 +1,4 @@
-"""Sauvegarde quotidienne de la base SQLite (BACKUP_TIME, 04:30) et à la demande (/sauvegarde sur Discord).
+"""Sauvegarde quotidienne de la base SQLite (BACKUP_TIME, 04:30) et à la demande (/bot sauvegarde sur Discord).
 
 Toute la mémoire du bot tient dans data/wikimastered.db (≈ 180 Mo le 27/10) : ventes observées, cotes, positions,
 réglages changés sur Discord. Perdue, le sniper n'estime plus rien pendant des jours.
@@ -99,7 +99,7 @@ def backup_sync(source: Path, directory: Path, keep: int) -> Backup:
 
 
 async def run_backup(ctx: Context) -> Backup:
-    """Sauvegarde maintenant ; garde le résultat en base et dans le contexte (affiché par /etat)."""
+    """Sauvegarde maintenant ; garde le résultat en base et dans le contexte (affiché par /bot etat)."""
     s = ctx.settings
     result = await asyncio.to_thread(backup_sync, ctx.db.path, s.backup_dir, s.backup_keep_count)
     ctx.last_backup = result.info()
@@ -110,7 +110,7 @@ async def run_backup(ctx: Context) -> Backup:
 
 
 def describe(info: dict | None) -> str:
-    """Ligne de /etat : dernière sauvegarde."""
+    """Ligne de /bot etat : dernière sauvegarde."""
     if not info:
         return "aucune sauvegarde faite depuis le démarrage"
     when = datetime.fromisoformat(info["at"]).astimezone(now_local().tzinfo)

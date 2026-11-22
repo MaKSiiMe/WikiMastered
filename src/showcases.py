@@ -1,4 +1,4 @@
-"""Vitrines du profil (commandes Discord /vitrines et /vitrine) : lues et enregistrées comme l'éditeur du site.
+"""Vitrines du profil (commandes Discord /profil vitrines et /profil vitrine) : lues et enregistrées comme l'éditeur du site.
 
 Routes relevées dans le code du site le 21/11 : GET /api/showcase -> {galleries: [{gallery_index, name, layout}],
 showcase: [{position, gallery_index, caption, user_card: {id, snapshot_rarity, is_shiny, card{...}}}]} ;
@@ -83,7 +83,7 @@ def copy_ids(data: dict[str, Any]) -> set[str]:
 
 
 def overview(galleries: list[Gallery]) -> str:
-    """Texte de /vitrines : chaque vitrine remplie, sa disposition et ses cartes."""
+    """Texte de /profil vitrines : chaque vitrine remplie, sa disposition et ses cartes."""
     lines = []
     for g in galleries:
         if not g.cards and not g.name:

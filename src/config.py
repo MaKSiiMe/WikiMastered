@@ -32,7 +32,7 @@ WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "collection": ("collection_bid",),   # mises du mode collection (cartes gardées)
     "resale": ("create_listing", "reprice_listing"), "inventory": ("create_listing", "reprice_listing", "bulk_discard"),
     "settle": ("settle_auction",),       # enchères finies que le site tarde à régler
-    "showcases": ("showcase_gallery",),  # vitrines du profil (/vitrine)
+    "showcases": ("showcase_gallery",),  # vitrines du profil (/profil vitrine)
     "discard": ("bulk_discard",), "tags": ("tag_card",), "themes": ("theme_tag",),
     "achievements": ("achievements_check", "claim_achievement"),
     "wishes": ("wishlist_write", "mark_notifications_read"),  # liste de souhaits du site, pour les cartes de collection manquantes
@@ -331,7 +331,7 @@ class Settings(BaseSettings):
     # Moniteur « Push » d'Uptime Kuma : appelé au plus une fois par minute après un passage réussi d'un worker. Vide =
     # rien. Kuma prévient (sur Discord, par exemple) si le bot tourne mais ne fait plus rien.
     kuma_push_url: str = ""
-    # Commandes slash (/roi, /bilan, /snipe…) : bot Discord (portail développeur > Bot > token). Vide = pas de
+    # Commandes slash (/compte roi, /compte bilan, /sniper demander…) : bot Discord (portail développeur > Bot > token). Vide = pas de
     # commandes, les webhooks seuls. Seul DISCORD_OWNER_ID (ton identifiant utilisateur) peut s'en servir ;
     # DISCORD_GUILD_ID (ton serveur) les fait apparaître tout de suite au lieu d'attendre jusqu'à 1 h.
     discord_bot_token: str = ""
@@ -415,9 +415,9 @@ class Settings(BaseSettings):
     sniper_min_estimate: int = 0
     # Revente d'une carte non shiny sautée si sa mise minimale dépasse N × son prix de départ (0 = jamais) : une
     # enchère déjà très disputée part le plus souvent au-dessus de notre plafond. Chaque mise minimale vaut 1,1 × la
-    # précédente : 1,1 = une mise déjà faite, 1,21 = deux, 1,46 = quatre. Collection, /snipe et souhaits non concernés.
+    # précédente : 1,1 = une mise déjà faite, 1,21 = deux, 1,46 = quatre. Collection, /sniper demander et souhaits non concernés.
     sniper_max_rise: float = 0.0
-    sniper_max_bid: int = 500        # plafond absolu d'une mise, /snipe excepté (0 = aucun, le budget par position s'applique)
+    sniper_max_bid: int = 500        # plafond absolu d'une mise, /sniper demander excepté (0 = aucun, le budget par position s'applique)
     sniper_daily_budget: int = 0     # 0 = pas de budget quotidien
     sniper_balance_reserve: int = 50
     sniper_prefetch_seconds: float = 8.0
@@ -567,7 +567,7 @@ class Settings(BaseSettings):
     # Toutes les N heures, toute la collection est cotée, derniers exemplaires compris (la vente automatique ne cote
     # que des doublons) : la défausse de DISCARD_LAST_COPY_RARITIES s'en sert. Aucun message.
     value_scan_enabled: bool = True
-    # Valeur du compte (/valeur) : collection relue toutes les N heures au plus, si aucun autre worker ne l'a fait.
+    # Valeur du compte (/compte valeur) : collection relue toutes les N heures au plus, si aucun autre worker ne l'a fait.
     account_value_enabled: bool = True
     account_value_hours: float = 6.0
     value_scan_hours: float = 12.0
