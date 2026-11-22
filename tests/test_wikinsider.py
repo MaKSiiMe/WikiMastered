@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from src import wikinsider
+from src.wikinsider import worth_noting
 from src.core.notifier import DiscordNotifier, Level, Topic, _Message
 from src.discord_cards import message_view
 from src.workers.inventory_manager import InventoryManager
@@ -93,3 +94,14 @@ async def test_a_real_sale_of_a_position_is_to_be_noted(tmp_path):
     columns = dict(notes[0]["columns"])
     assert columns["Prix"] == "`6100`" and columns["Shiny"] == "oui" and columns["Achetée"] == "4200 WB (+1900)"
     await db.close()
+
+
+def test_only_shiny_and_legendary_cards_are_noted():
+    assert worth_noting(False, "L") and worth_noting(True, "C") and worth_noting(True, None)
+    assert not worth_noting(False, "UR") and not worth_noting(False, None)
+    cap = Capture()
+    wikinsider.note_buy(cap, BASE, bid_id=1, title="Fer", price=300, shiny=False, rarity="UR", auction_id="a")
+    wikinsider.note_sale(cap, BASE, listing_id=2, title="Fer", price=400, shiny=False, rarity="UR", auction_id="b")
+    assert cap.sent == []
+    wikinsider.note_buy(cap, BASE, bid_id=3, title="Fer", price=900, shiny=True, rarity="UR", auction_id="c")
+    assert [m["title"] for m in cap.sent] == ["Achat à noter : Fer"]
