@@ -195,8 +195,65 @@ async def refresh(ctx: Context) -> dict:
     state.update(await tag_owned(ctx, copies, active.values()))
     if ctx.settings.tag_showcase.strip():
         state["showcase"] = await tag_showcase(ctx, copies, active.values())
+    if ctx.settings.favorites_auto:
+        state["auto_favorites"] = await star_kept(ctx, copies)
     await ctx.db.kv_set(KV_KEY, state)
     return state
+
+
+AUTO_FAVORITES_KEY = "auto_favorites"
+STAR_BATCH = 100  # exemplaires mis en favori par requête (la liste passe dans l'adresse)
+
+
+async def star_kept(ctx: Context, copies: dict[str, list[OwnedCard]]) -> dict:
+    """FAVORITES_AUTO : met en favori l'exemplaire gardé (keep_order) de chaque carte des collections actives sans
+    aucun exemplaire en favori, et chaque carte exposée dans tes vitrines ; le worker favorites les monte ensuite en
+    rareté. Chaque carte n'est traitée qu'une fois (kv « auto_favorites ») : un favori que tu retires n'est pas remis,
+    et le bot n'en retire jamais (sauf pour le passer à un meilleur exemplaire, worker favorites). Les vitrines lues
+    sont gardées pour le worker favorites, qui ne sort jamais une carte exposée des favoris."""
+    from src import showcases  # import local : showcases.py importe ce module
+    from src.workers.inventory_manager import keep_order
+
+    out: dict = {"starred": 0, "to_star": 0, "error": ""}
+    state = await ctx.db.kv_get(AUTO_FAVORITES_KEY) or {}
+    done: set[str] = set(state.get("done") or [])  # clés de collection et « vitrine:<exemplaire> » déjà traitées
+    want: dict[str, str | None] = {}  # clé -> exemplaire à mettre en favori (None : déjà un favori, rien à faire)
+    for key, rows in copies.items():
+        if rows and key not in done:
+            want[key] = None if any(r.starred for r in rows) else min(rows, key=keep_order).id
+    try:
+        shown = sorted(showcases.copy_ids(await ctx.api.showcase()))
+        state["shown"] = shown
+    except ApiError as exc:
+        shown = []
+        out["error"] = f"vitrines illisibles ({exc})"
+    starred = {r.id for rows in copies.values() for r in rows if r.starred}
+    want.update({f"vitrine:{cid}": None if cid in starred else cid for cid in shown if f"vitrine:{cid}" not in done})
+    todo = sorted({cid for cid in want.values() if cid})
+    out["to_star"] = len(todo)
+    if not ctx.settings.is_live("favorite_write"):
+        if todo:
+            log.info("[SIMULÉ] %d exemplaire(s) mis en favori (collections et vitrines)", len(todo))
+        await ctx.db.kv_set(AUTO_FAVORITES_KEY, {**state, "done": sorted(done)})
+        return out
+    ok: set[str] = set()
+    for start in range(0, len(todo), STAR_BATCH):
+        chunk = todo[start:start + STAR_BATCH]
+        try:
+            status, data = await ctx.client.supabase(
+                "PATCH", "user_cards", prefer="return=minimal", json_body={"starred": True},
+                params={"id": f"in.({','.join(chunk)})", "user_id": f"eq.{ctx.api.user_id}"}, background=True)
+        except ApiError as exc:
+            out["error"] = f"favoris non posés : {exc}"
+            break
+        if status not in (200, 204):
+            out["error"] = f"favoris refusés (HTTP {status}) : {str(data)[:200]}"
+            break
+        ok.update(chunk)
+    done |= {key for key, cid in want.items() if cid is None or cid in ok}
+    out["starred"], out["to_star"] = len(ok), len(todo) - len(ok)
+    await ctx.db.kv_set(AUTO_FAVORITES_KEY, {**state, "done": sorted(done)})
+    return out
 
 
 async def record_win(ctx: Context, title: str, rarity: str | None = None) -> None:
@@ -439,6 +496,12 @@ class CollectionWorker(Worker):
                                f"{shown['untagged']} ; reste {shown['to_tag'] + shown.get('to_untag', 0)}.")
         if shown.get("error"):
             self.log.warning("étiquette des vitrines : %s", shown["error"])
+        if (auto := state.get("auto_favorites") or {}).get("starred"):
+            self.notifier.info("Collection : favoris posés", f"{auto['starred']} carte(s) de tes collections et "
+                               "vitrines mises en favori (protégées, et montées en rareté avec FAVORITES_UPGRADE)"
+                               + (f" ; reste {auto['to_star']}." if auto["to_star"] else "."))
+        if auto.get("error"):
+            self.log.warning("favoris des collections : %s", auto["error"])
         if state.get("tag_error"):
             self.log.warning("étiquettes de collection : %s", state["tag_error"])
         if self.settings.collection_wishlist:

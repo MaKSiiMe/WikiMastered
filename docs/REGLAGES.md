@@ -424,6 +424,7 @@ Le worker `favorites` rachète chaque carte que tu mets en favori dans une raret
 
 ```sh
 FAVORITES_UPGRADE=false                 # monter tes cartes en favori (écritures : groupe « favorites »)
+FAVORITES_AUTO=false                    # le bot met lui-même en favori tes cartes de collection et de vitrine
 FAVORITES_CHECK_MINUTES=60              # lecture de tes favoris
 ```
 
@@ -431,6 +432,7 @@ FAVORITES_CHECK_MINUTES=60              # lecture de tes favoris
 - « Khéops » en favori, ton meilleur exemplaire est une R : une SR en vente, cotée 120 WB, est misée jusqu'à 120 WB. Gagnée, la SR passe en favori, la R en sort et peut être vendue ; le bot vise ensuite l'UR et la L.
 - Une carte en favori dont tu as un shiny, ou déjà en L : plus rien à acheter.
 - Ces mises comptent dans `COLLECTION_BIDS_PER_CHECK`, comme celles des collections.
+- `FAVORITES_AUTO=true` avec `COLLECTION_SETS=days,countries` : à la lecture de la collection, le meilleur exemplaire de chaque jour et de chaque pays possédé passe en favori, ainsi que chaque carte exposée dans tes vitrines. Une seule fois par carte : un favori que tu retires n'est pas remis.
 
 ## Thèmes
 

@@ -197,3 +197,48 @@ def test_kept_copy_of_a_collection_card_is_never_sold_even_without_a_tag():
     quotes = {"c-fr": {"L": Quote(2000, 5)}, "c-zz": {"L": Quote(2000, 5)}}
     groups = {"c-fr": [rows[0]], "c-zz": [rows[1]]}
     assert [c.owned.id for c in select_for_sale(groups, quotes, excluded, s)] == ["zz"]
+
+
+@pytest.mark.asyncio
+async def test_collection_cards_and_showcase_cards_are_starred_once(tmp_path):
+    """22/11 : « c'est impossible que le bot mette en favori mes cartes ? » Le meilleur exemplaire de chaque carte des
+    collections sans favori, et chaque carte exposée, passent en favori en une requête ; une seule fois par carte."""
+    from src.workers.collection import AUTO_FAVORITES_KEY, refresh
+
+    patches: list = []
+
+    def owned(oid, title, rarity, starred=False):
+        return {"id": oid, "card_id": f"card-{title}", "starred": starred, "snapshot_rarity": rarity,
+                "obtained_at": "2026-10-01T10:00:00+00:00",
+                "card": {"id": f"card-{title}", "wikipedia_title": title, "rarity": rarity}}
+
+    collection = {"janvier": [owned("j1-c", "1er janvier", "C"), owned("j1-r", "1er janvier", "R"),
+                              owned("j2", "2 janvier", "C", starred=True)]}  # déjà en favori : rien à faire
+
+    def handler(request):
+        if request.url.host.endswith("supabase.co"):
+            assert request.method == "PATCH"
+            patches.append((dict(request.url.params), json.loads(request.content)))
+            return httpx.Response(204)
+        if request.url.path == "/api/showcase":
+            return httpx.Response(200, json={"showcase": [{"position": 0, "user_card": {"id": "s1"}}]})
+        return httpx.Response(200, json={"collection": collection.get(request.url.params.get("q", ""), [])})
+
+    client, notifier = make_client(tmp_path, handler, dry_run=False, collection_sets=["jours"], tag_days="",
+                                   favorites_auto=True, supabase_anon_key="k", wm_cookie=cookie_for("a1", "r1", 3600))
+    ctx = await make_context(tmp_path, client, notifier)
+    state = await refresh(ctx)
+    assert patches == [({"id": "in.(j1-r,s1)", "user_id": f"eq.{client.user_id}"}, {"starred": True})]
+    assert state["auto_favorites"] == {"starred": 2, "to_star": 0, "error": ""}
+    assert (await ctx.db.kv_get(AUTO_FAVORITES_KEY))["shown"] == ["s1"]
+    # Favori retiré à la main ensuite : pas remis.
+    collection["janvier"][1]["starred"] = False
+    await refresh(ctx)
+    assert len(patches) == 1
+    await ctx.db.close()
+
+
+def test_a_showcase_copy_keeps_its_star_when_a_better_copy_arrives():
+    rows = [copy("c-up", "u-r", "R", starred=True), copy("c-up", "u-ur", "UR")]
+    cards, moves = favorites.plan({"c-up": rows}, {c["id"]: c for c in CATALOG}, shown={"u-r"})
+    assert [(best["id"], [r["id"] for r in lower]) for best, lower, _ in moves] == [("u-ur", [])]
