@@ -1,17 +1,17 @@
 """Module J : étiquettes de thème (Personne, Pays, Musique…) et « Doublon » sur toute la collection.
 
-- Toutes les THEME_TAGS_HOURS, lit toute la collection (requêtes de fond) et, pour chaque carte, l'exemplaire gardé
+- Toutes les THEMES_INTERVAL_HOURS, lit toute la collection (requêtes de fond) et, pour chaque carte, l'exemplaire gardé
   (keep_order : favori, shiny, plus haute rareté, puis le plus ancien ; la vente prend toujours le plus récent).
 - Thèmes de la carte : règles de config/etiquettes.yaml appliquées à ce que Wikidata dit de son article (voir
-  src/core/wikidata.py), gardé en base (table card_facts) ; THEME_LOOKUPS_PER_RUN cartes nouvelles par passage.
+  src/core/wikidata.py), gardé en base (table card_facts) ; THEMES_LOOKUPS_PER_RUN cartes nouvelles par passage.
   Les corrections du fichier passent avant Wikidata.
-- Posées sur l'exemplaire gardé ; les autres exemplaires reçoivent THEME_DUPLICATE_TAG. Le bot n'enlève jamais un
+- Posées sur l'exemplaire gardé ; les autres exemplaires reçoivent TAG_DUPLICATE. Le bot n'enlève jamais un
   thème ; il retire seulement « Doublon » de l'exemplaire gardé (son doublon est parti, ou la carte gardée a changé).
-- THEME_GIF_TAG sur l'exemplaire gardé d'une carte vraiment animée (fichier GIF de plus d'une image, nombre lu sur
-  Wikipédia et gardé en base, kv « gif_frames »), retirée de tout autre exemplaire : avec PROTECTED_TAGS, la carte de
+- TAG_GIF sur l'exemplaire gardé d'une carte vraiment animée (fichier GIF de plus d'une image, nombre lu sur
+  Wikipédia et gardé en base, kv « gif_frames »), retirée de tout autre exemplaire : avec TAG_PROTECTED, la carte de
   la collection est protégée et ses doublons restent à vendre. Fichier encore inconnu : on ne touche à rien.
 - Écritures : table Supabase `user_card_tags`, comme l'éditeur d'étiquettes du site (voir collection.tag_owned),
-  THEME_TAGS_MAX_PER_RUN par passage ; groupe « themes » de LIVE_WRITES / SIMULATE. Tant qu'il en reste, le passage
+  THEMES_MAX_PER_RUN par passage ; groupe « themes » de LIVE_WRITES / SIMULATE. Tant qu'il en reste, le passage
   suivant a lieu BACKLOG_MINUTES plus tard.
 - Aucune mise ni ouverture de paquet : rien ne compte pour la vérification anti-bot.
 
@@ -230,9 +230,9 @@ async def run_pass(ctx: Context, wikidata: Wikidata, *, write: bool = True) -> d
     await store_collection(ctx, rows)  # la valeur du compte profite de la lecture
     groups = group_by_card(rows)
     titles = {copies[0].title for copies in groups.values() if copies[0].title}
-    themes, pending = await classify(ctx, wikidata, titles, rules, s.theme_lookups_per_run)
-    gif = s.theme_gif_tag.strip()
-    todo = plan(groups, themes, s.theme_duplicate_tag.strip(), gif, await known_frames(ctx, wikidata, rows) if gif else {},
+    themes, pending = await classify(ctx, wikidata, titles, rules, s.themes_lookups_per_run)
+    gif = s.tag_gif.strip()
+    todo = plan(groups, themes, s.tag_duplicate.strip(), gif, await known_frames(ctx, wikidata, rows) if gif else {},
                 rules.removable)
     counts = Counter(t for title in titles for t in themes.get(title, []))
     state: dict = {
@@ -251,17 +251,17 @@ async def run_pass(ctx: Context, wikidata: Wikidata, *, write: bool = True) -> d
 
 
 async def apply(ctx: Context, todo: Plan, rules: Rules, state: dict, write: bool) -> None:
-    """Retraits puis ajouts, THEME_TAGS_MAX_PER_RUN au plus ; une étiquette absente du site est ignorée."""
+    """Retraits puis ajouts, THEMES_MAX_PER_RUN au plus ; une étiquette absente du site est ignorée."""
     s = ctx.settings
     status, data = await ctx.client.supabase("GET", "tags", params={"select": "id,name",
                                                                      "user_id": f"eq.{ctx.api.user_id}"},
                                              background=True)
     ids = {tag_key(str(t.get("name", ""))): t["id"] for t in data or [] if isinstance(t, dict)} if status == 200 else {}
-    wanted = {*rules.names, *(t for v in rules.corrections.values() for t in v), s.theme_duplicate_tag.strip(),
-              s.theme_gif_tag.strip()} - {""}
+    wanted = {*rules.names, *(t for v in rules.corrections.values() for t in v), s.tag_duplicate.strip(),
+              s.tag_gif.strip()} - {""}
     state["missing_tags"] = sorted(t for t in wanted if tag_key(t) not in ids)
     ops = [("remove", c, t) for c, t in todo.remove] + [("add", c, t) for c, t in todo.add]
-    ops = [op for op in ops if tag_key(op[2]) in ids][: s.theme_tags_max_per_run]
+    ops = [op for op in ops if tag_key(op[2]) in ids][: s.themes_max_per_run]
     for kind, copy, tag in ops:
         if not state["live"]:
             log.info("[SIMULÉ] étiquette « %s » %s %s (%s)", tag, "retirée de" if kind == "remove" else "sur",
@@ -327,4 +327,4 @@ class ThemeTagger(Worker):
             self._notified_at = now
         backlog = state["pending_lookups"] or (state["live"] and state["to_add"] + state["to_remove"]
                                                and not state.get("tag_error"))
-        return BACKLOG_MINUTES * 60 if backlog else self.settings.theme_tags_hours * 3600
+        return BACKLOG_MINUTES * 60 if backlog else self.settings.themes_interval_hours * 3600

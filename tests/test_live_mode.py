@@ -97,15 +97,15 @@ async def test_duplicates_fill_free_slots_during_the_day(tmp_path, monkeypatch):
             return httpx.Response(200, json={"trades": []})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"], auto_list=True,
-                                   sell_price_lookups_per_run=0, sell_max_listings_per_run=2)
+    client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=["sniper"], duplicates_sell=True,
+                                   duplicates_quotes_per_run=0, duplicates_max_per_run=2)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     for card, prices in (("A", [300, 310]), ("B", [100, 90]), ("C", [50, 60])):
         await seed_observed(db, card, prices)
     inv = InventoryManager(ctx)
     await inv.setup()
-    # Les 2 doublons les mieux cotés entrent dans la file (SELL_MAX_LISTINGS_PER_RUN en attente), places libres ou non.
+    # Les 2 doublons les mieux cotés entrent dans la file (DUPLICATES_MAX_PER_RUN en attente), places libres ou non.
     assert await inv.fill_free_slots() == 2
     rows = await db._all("SELECT card_id, post_at FROM listings ORDER BY base_amount DESC")
     assert [r["card_id"] for r in rows] == ["A", "B"]
@@ -170,7 +170,7 @@ async def test_simulated_positions_never_block_real_collection_bids(tmp_path, ca
 
 def test_hours_without_leading_zero():
     """17/10 : une heure à 3:00 dans Portainer arrêtait le bot au démarrage."""
-    s = Settings(_env_file=None, night_start="2:00", night_end=" 7:30", http_peak_start="23:00")
-    assert (s.night_start, s.night_end, s.http_peak_start) == (time(2, 0), time(7, 30), time(23, 0))
+    s = Settings(_env_file=None, sniper_night_start="2:00", sniper_night_end=" 7:30", http_peak_start="23:00")
+    assert (s.sniper_night_start, s.sniper_night_end, s.http_peak_start) == (time(2, 0), time(7, 30), time(23, 0))
 
 

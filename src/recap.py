@@ -1,4 +1,4 @@
-"""Récap périodique (RECAP_INTERVAL_HOURS) : ce qui cloche, puis les achats et les ventes de la période.
+"""Récap périodique (REPORT_RECAP_HOURS) : ce qui cloche, puis les achats et les ventes de la période.
 
 Il sert à repérer vite un problème (worker arrêté, erreurs, plafond dépassé, sniper qui ne trouve rien) sans attendre
 le bilan du soir. Sur Discord : seulement ce qui s'est passé. Le détail de chaque worker (repérage, issues des
@@ -105,15 +105,15 @@ def anomalies(ctx: Context, stats: dict[str, int], pending: dict[str, int],
     """Incohérences de la base, à corriger. `window` : durée couverte par le récap."""
     found = []
     s = ctx.settings
-    if s.enable_sniper:
+    if s.sniper_enabled:
         # Comme le plafond du sniper : en réel, seules les positions réelles comptent. Les positions simulées
         # d'avant le passage en réel déclenchaient « 11 positions ouvertes, plafond 5 » au récap de 16 h le 16/10.
         live = s.is_live("place_bid")
         open_positions = (stats["held_real"] + pending["real_positions"]) if live else \
             (stats["held"] + pending["positions"])
-        if 0 < s.portfolio_max_positions < open_positions:
+        if 0 < s.resale_max_positions < open_positions:
             found.append(f"sniper : {open_positions} positions {'réelles ' if live else ''}ouvertes, "
-                         f"plafond {s.portfolio_max_positions}")
+                         f"plafond {s.resale_max_positions}")
         if pending["positions"] > 20:
             found.append(f"sniper : {pending['positions']} mises en attente de relecture")
         if not stats["observed"] and window >= OBSERVED_MIN_WINDOW:
@@ -181,8 +181,8 @@ async def build_recap(ctx: Context, workers: list[Worker], since: datetime,
 
 
 async def recap_loop(ctx: Context, workers: list[Worker], started_at: datetime) -> None:
-    """Un récap toutes les RECAP_INTERVAL_HOURS heures, aux heures rondes (0 h, 4 h, 8 h… pour 4)."""
-    hours = ctx.settings.recap_interval_hours
+    """Un récap toutes les REPORT_RECAP_HOURS heures, aux heures rondes (0 h, 4 h, 8 h… pour 4)."""
+    hours = ctx.settings.report_recap_hours
     since = utcnow()
     while True:
         await sleep_until(next_recap(now_local(), hours))

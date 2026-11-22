@@ -26,7 +26,7 @@ PRIOR = 20            # poids du taux moyen face aux mises d'une tranche
 MIN_SAMPLES = 200     # mises réglées au moins pour bâtir le modèle
 MIN_RESALES = 10      # reventes au moins pour mesurer prix de vente / estimation (sinon 1)
 RESALE_BOUNDS = (0.5, 1.2)
-CONTROL_MARK = "témoin"  # fin du motif d'une mise laissée au minimum pour mesurer SNIPER_BID_PUSH : hors modèle
+CONTROL_MARK = "témoin"  # fin du motif d'une mise laissée au minimum pour mesurer SNIPER_BID_PUSH_RATIO : hors modèle
 ACCEPTED = ("won", "lost", "outbid")
 
 

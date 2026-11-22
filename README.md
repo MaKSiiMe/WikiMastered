@@ -14,9 +14,9 @@ Par défaut, `DRY_RUN=true` : rien n'est envoyé au site, le bot annonce seuleme
 | Worker | Rôle | Par défaut |
 |---|---|---|
 | [`sniper`](src/workers/auction_sniper.py) | Achète sous leur prix des cartes des raretés que tu choisis, pour les revendre ; mise aussi pour les collections | actif, sans revente |
-| [`inventory`](src/workers/inventory_manager.py) | Revend les achats ; vend les doublons et défausse les cartes sans valeur si tu l'actives | actif (`AUTO_LIST`, `AUTO_DISCARD` coupés) |
+| [`inventory`](src/workers/inventory_manager.py) | Revend les achats ; vend les doublons et défausse les cartes sans valeur si tu l'actives | actif (`DUPLICATES_SELL`, `DISCARD_ENABLED` coupés) |
 | [`collection`](src/workers/collection.py) | Suit tes collections : jours de l'année, GIF animés, ou ta propre liste | dès que `COLLECTION_SETS` est rempli |
-| [`etiquettes`](src/workers/themes.py) | Range la collection par thème (Personne, Pays, Musique…) grâce à Wikidata | coupé (`ENABLE_THEME_TAGS`) |
+| [`etiquettes`](src/workers/themes.py) | Range la collection par thème (Personne, Pays, Musique…) grâce à Wikidata | coupé (`THEMES_ENABLED`) |
 | [`succes`](src/workers/achievements.py) | Réclame les récompenses de succès, chaque soir à 22:50 | actif |
 | [`souhaits`](src/workers/wishes.py) | Achète les cartes que tu ajoutes toi-même à ta liste de souhaits du site, jusqu'à leur cote, et les étiquette | coupé (`WISH_MAX_PRICE`) |
 | [`echanges`](src/workers/trade_watch.py) | Évalue les échanges qu'on te propose et suggère une contre-offre ; ne répond jamais à ta place | actif |

@@ -27,7 +27,7 @@ def test_nothing_is_bought_or_sent_until_chosen(defaults):
     assert defaults.dry_run
     assert defaults.sniper_resale_rarities == []
     assert defaults.collection_sets == [] and defaults.collection_titles == []
-    assert not defaults.auto_list and not defaults.auto_discard
+    assert not defaults.duplicates_sell and not defaults.discard_enabled
 
 
 def test_a_card_can_still_be_bought_once_a_rarity_is_chosen(defaults):
@@ -40,8 +40,8 @@ def test_a_card_can_still_be_bought_once_a_rarity_is_chosen(defaults):
     portfolio = portfolio_state(defaults, balance=3000, held_count=0, held_real_cost=0, held_sim_cost=0,
                                 engaged_real=0, engaged_sim=0, bot_engaged_count=0)
     assert portfolio.position_budget == 300 and portfolio.min_profit == 150
-    decision = decide(auction, snipe_params(defaults, False), quote, defaults.price_min_sales, portfolio,
-                      push=defaults.sniper_bid_push)
+    decision = decide(auction, snipe_params(defaults, False), quote, defaults.quote_min_sales, portfolio,
+                      push=defaults.sniper_bid_push_ratio)
     assert decision is not None and decision.amount == auction.min_bid and decision.ceiling == 300
 
 

@@ -78,18 +78,18 @@ def setup_logging(settings: Settings, *, with_journal: bool) -> None:
     """Console pour toutes les commandes ; journal détaillé (src/core/journal.py) pour le bot seulement : une
     commande lancée à côté dans la console du conteneur n'écrit pas dans le fichier du bot."""
     journal.setup(settings.log_level, settings.data_dir / "logs" if with_journal else None,
-                  settings.journal_keep_days)
+                  settings.log_journal_keep_days)
 
 
 stats_log = logging.getLogger("stats")
 
 
 async def stats_loop(ctx: Context, workers: list[Worker]) -> None:
-    """Toutes les STATS_MINUTES : passages de chaque worker et requêtes au site, quelques lignes en console et le
+    """Toutes les LOG_STATS_MINUTES : passages de chaque worker et requêtes au site, quelques lignes en console et le
     détail dans le journal (événement « stats »). Le dernier relevé est montré par /etat."""
     since = utcnow()
     while True:
-        await asyncio.sleep(ctx.settings.stats_minutes * 60)
+        await asyncio.sleep(ctx.settings.log_stats_minutes * 60)
         now = utcnow()
         seconds = (now - since).total_seconds()
         passes = {}
@@ -124,14 +124,14 @@ def print_journal(settings: Settings, since: str, kinds: str, events_only: bool)
 @contextlib.asynccontextmanager
 async def build_context(settings: Settings):
     set_timezone(settings.timezone)
-    notifier = DiscordNotifier(settings.discord_webhook_url, settings.discord_alert_webhook_url,
+    notifier = DiscordNotifier(settings.discord_webhook_main, settings.discord_webhook_alerts,
                                settings.discord_mention, settings.dry_run, footer=f"Mode {settings.mode_label}",
-                               activity_webhook_url=settings.discord_activity_webhook_url,
+                               activity_webhook_url=settings.discord_webhook_activity,
                                channel_webhooks={"sniper": settings.discord_webhook_sniper,
-                                                 "ventes": settings.discord_webhook_ventes,
+                                                 "ventes": settings.discord_webhook_resale,
                                                  "collection": settings.discord_webhook_collection,
-                                                 "bilan": settings.discord_webhook_bilan,
-                                                 "systeme": settings.discord_webhook_systeme})
+                                                 "bilan": settings.discord_webhook_report,
+                                                 "systeme": settings.discord_webhook_system})
     notifier.start()
     endpoints = Endpoints.load(settings.endpoints_file, settings.wm_base_url)
     client = WikiMastersClient(settings, endpoints, notifier)
@@ -139,9 +139,9 @@ async def build_context(settings: Settings):
     await db.connect()
     notifier.store = db  # messages uniques des positions
     api = WikiMastersAPI(client)
-    ctx = Context(settings, client, api, db, notifier, PriceService(api, db, settings.price_cache_ttl_minutes, settings.price_recent_sales,
-                                                                    settings.price_site_margin))
-    if settings.enable_realtime:
+    ctx = Context(settings, client, api, db, notifier, PriceService(api, db, settings.quote_cache_minutes, settings.quote_recent_sales,
+                                                                    settings.quote_site_margin_ratio))
+    if settings.realtime_enabled:
         from src.core.realtime import Realtime  # websockets chargé seulement avec le temps réel
 
         ctx.realtime = Realtime(client)
@@ -182,7 +182,7 @@ async def daily_report_parts(ctx: Context) -> Report:
     description, sections = report_sections(stats, live_bids=ctx.settings.is_live("place_bid"))
     if not ctx.settings.is_live("place_bid"):  # sniper simulé : on juge la simulation
         sections.append(as_section(validation_text(await ctx.db.validation_stats(since,
-                                                                                 ctx.settings.price_min_sales))))
+                                                                                 ctx.settings.quote_min_sales))))
     if ctx.settings.collection_sets or ctx.settings.collection_titles:
         sections.append((Topic.COLLECTION.value, summary_line(await ctx.db.kv_get("collection"), targets(ctx))))
     if text := calibration_text(await ctx.db.calibration(since)):
@@ -247,7 +247,7 @@ def calibration_text(ratios: dict[str, list[float]]) -> str:
     if len(lost) < CALIBRATION_MIN or (ratio := st.median(lost)) < CALIBRATION_LOW:
         return ""
     return (f"⚠️ Trop basses : les enchères perdues ont fini à ×{ratio:.2f} de l'estimation ({len(lost)}). "
-            "Les prix montent, `PRICE_SITE_MARGIN` est à relever.").replace("×1.", "×1,")
+            "Les prix montent, `QUOTE_SITE_MARGIN_RATIO` est à relever.").replace("×1.", "×1,")
 
 
 def as_section(text: str) -> tuple[str, str]:
@@ -282,7 +282,7 @@ def validation_text(v: dict[str, int]) -> str:
 async def report_loop(ctx: Context) -> None:
     """Bilan quotidien, puis entretien de la base. Une erreur n'arrête jamais le bot."""
     while True:
-        await sleep_until(next_local(ctx.settings.daily_report_time))
+        await sleep_until(next_local(ctx.settings.report_daily_time))
         try:
             await daily_report(ctx)
         except Exception:  # noqa: BLE001 - le bot continue sans bilan
@@ -297,9 +297,9 @@ async def report_loop(ctx: Context) -> None:
 async def sniper_report_loop(ctx: Context) -> None:
     """Chaque matin, le récap de toutes les enchères misées par le sniper sur les dernières heures."""
     while True:
-        await sleep_until(next_local(ctx.settings.sniper_report_time))
+        await sleep_until(next_local(ctx.settings.report_sniper_time))
         try:
-            await send_sniper_report(ctx, ctx.settings.sniper_report_hours)
+            await send_sniper_report(ctx, ctx.settings.report_sniper_hours)
         except Exception:  # noqa: BLE001 - le bot continue sans ce récap
             log.exception("Récap du sniper impossible")
 
@@ -308,9 +308,9 @@ async def send_sniper_report(ctx: Context, hours: float, *, send: bool = True) -
     until = utcnow()
     since = until - timedelta(hours=hours)
     if send:
-        title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.sale_fee_pct)
+        title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.market_fee_ratio)
         ctx.notifier.info(title, summary, topic=Topic.SNIPER, sections=sections, important=True)
-    title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.sale_fee_pct, limit=None)
+    title, summary, sections = await sniper_report(ctx.db, since, until, ctx.settings.market_fee_ratio, limit=None)
     return "\n\n".join([f"{title}\n{summary}", *(f"== {name} ==\n{body}" for name, body in sections)])
 
 
@@ -405,7 +405,7 @@ def prices_text(title: str, observed, bought, selling, quotes: dict, site: dict,
     `md` : version Discord (/prix, voir prices_md). `resale` : revente estimée par
     (rareté, shiny) sur les ventes observées seules, d'où la mise conseillée pour l'acheter. `shiny` : les exemplaires
     shiny seuls (ventes, estimation, achats, ventes en cours), sans la cote du site qui ne les distingue pas. `site_margin` : marge du plafond
-    (PRICE_SITE_MARGIN), montrée à côté de la cote."""
+    (QUOTE_SITE_MARGIN_RATIO), montrée à côté de la cote."""
     def paris(value) -> str:
         moment = value if isinstance(value, datetime) else datetime.fromisoformat(value)
         return f"{moment.astimezone(timeutils.PARIS):%d/%m %H:%M}"
@@ -560,14 +560,14 @@ async def prices_status(ctx: Context, title: str, md: bool = False, shiny: bool 
             resale.update({(r, version): q for r, q in (await ctx.prices.observed_quote(card_id, version)).items()})
     name = selling[0].title if selling else title
     return prices_text(name, observed, await ctx.db.bids_for_title(title), selling, quotes, site,
-                       ctx.client.user_id, now, md, resale, ctx.settings.sale_fee_pct, shiny, ctx.prices.site_margin)
+                       ctx.client.user_id, now, md, resale, ctx.settings.market_fee_ratio, shiny, ctx.prices.site_margin)
 
 
 async def roi_report(ctx: Context, days: int) -> Roi:
     today = now_local().date()
     rows = await ctx.db.position_results(local_dt(today - timedelta(days=days - 1), time(0, 0)))
     held = await ctx.db.positions_summary()
-    return roi(rows, days, today, ctx.settings.sale_fee_pct, (held["real_count"], held["real_cost"]))
+    return roi(rows, days, today, ctx.settings.market_fee_ratio, (held["real_count"], held["real_cost"]))
 
 
 async def roi_status(ctx: Context, days: int) -> str:
@@ -649,27 +649,27 @@ async def run_bot(settings: Settings) -> None:
         if changed := await load_overrides(ctx):
             log.info("Réglages changés sur Discord : %s", ", ".join(f"{k}={v}" for k, v in changed.items()))
         workers: list[Worker] = []
-        if settings.enable_sniper:
+        if settings.sniper_enabled:
             workers.append(AuctionSniper(ctx))
-        if settings.enable_inventory:
+        if settings.inventory_enabled:
             workers.append(InventoryManager(ctx))
         if settings.collection_sets or settings.collection_titles:
             workers.append(CollectionWorker(ctx))
-        if settings.enable_theme_tags:
+        if settings.themes_enabled:
             workers.append(ThemeTagger(ctx))
-        if settings.enable_achievements:
+        if settings.achievements_enabled:
             workers.append(AchievementsWorker(ctx))
-        if settings.enable_value_scan:
+        if settings.value_scan_enabled:
             workers.append(ValueScan(ctx))
-        if settings.enable_account_value:
+        if settings.account_value_enabled:
             workers.append(AccountValue(ctx))
-        if settings.enable_trade_watch:
+        if settings.trades_enabled:
             workers.append(TradeWatch(ctx))
-        if settings.enable_sniper and settings.wish_max_price > 0:
+        if settings.sniper_enabled and settings.wish_max_price > 0:
             workers.append(WishWatch(ctx))
-        if settings.enable_profile_guard and settings.supabase_anon_key:
+        if settings.guard_enabled and settings.supabase_anon_key:
             workers.insert(0, ProfileGuard(ctx))  # en premier : une sanction arrête le bot avant les autres
-        elif settings.enable_profile_guard:
+        elif settings.guard_enabled:
             ctx.notifier.warning("Garde des sanctions inactive", "Clé publique introuvable sur le site et "
                                  "SUPABASE_ANON_KEY vide : le profil ne peut pas être lu, une sanction du site "
                                  "n'arrêterait pas le bot.")
@@ -682,22 +682,28 @@ async def run_bot(settings: Settings) -> None:
         log.info("Démarrage en mode %s — workers : %s — joueur %s", mode, names, ctx.client.user_id or "?")
         ctx.notifier.info("Bot démarré", f"Mode {mode}\nWorkers : {names}\nSession : {ctx.client.session_status()}",
                           important=True)
+        if legacy := settings.legacy_names:
+            lines = "\n".join(f"{old} → {new}" for old, new in legacy)
+            log.warning("Réglages sous leur ancien nom (encore lus, à renommer) : %s",
+                        ", ".join(f"{old} → {new}" for old, new in legacy))
+            ctx.notifier.warning(f"{len(legacy)} réglage(s) sous leur ancien nom",
+                                 f"Encore lus, mais à renommer dans Portainer (ou le .env) :\n{lines}"[:3900])
 
         # Chaque tâche est supervisée à part : si l'une plante, elle est relancée et les autres continuent.
         started_at = utcnow()
         jobs: list[tuple[str, Callable[[], Awaitable[None]]]] = [(w.name, w.run) for w in workers]
         jobs += [("report", lambda: report_loop(ctx)), ("heartbeat", lambda: heartbeat(ctx))]
-        if settings.recap_interval_hours > 0:
+        if settings.report_recap_hours > 0:
             jobs.append(("recap", lambda: recap_loop(ctx, workers, started_at)))
-        if settings.stats_minutes > 0:
+        if settings.log_stats_minutes > 0:
             jobs.append(("stats", lambda: stats_loop(ctx, workers)))
         if settings.kuma_push_url:
             jobs.append(("kuma", lambda: kuma_loop(ctx, workers)))
         if ctx.realtime is not None:
             jobs.append(("temps-reel", ctx.realtime.run))
-        if settings.enable_sniper and settings.sniper_report_hours > 0:
+        if settings.sniper_enabled and settings.report_sniper_hours > 0:
             jobs.append(("sniper-report", lambda: sniper_report_loop(ctx)))
-        if (settings.enable_backup and settings.backup_keep > 0) or settings.observed_keep_days > 0:
+        if (settings.backup_enabled and settings.backup_keep_count > 0) or settings.quote_observed_keep_days > 0:
             jobs.append(("sauvegarde", lambda: backup_loop(ctx)))
         if settings.discord_bot_token and settings.discord_owner_id <= 0:
             ctx.notifier.warning("Commandes Discord inactives", "DISCORD_OWNER_ID manquant ou pas un nombre : il faut "
@@ -750,7 +756,7 @@ async def sniper_backtest(settings: Settings, days: float, capital: int, resale:
         actual = await db.position_bids_outcome(since, rarity)
     finally:
         await db.close()
-    budget = int(capital * settings.portfolio_capital_ratio / max(1, settings.portfolio_slots))
+    budget = int(capital * settings.resale_capital_ratio / max(1, settings.resale_slots))
     print(backtest_text(cases, actual, settings, budget, days, resale))
 
 
@@ -762,7 +768,7 @@ async def sniper_value(settings: Settings, days: float) -> None:
         rows = await db.bid_outcomes(utcnow() - timedelta(days=days))
     finally:
         await db.close()
-    print(thresholds_text(rows, days, settings.sale_fee_pct))
+    print(thresholds_text(rows, days, settings.market_fee_ratio))
 
 
 async def collection_status(ctx: Context) -> None:
@@ -806,7 +812,7 @@ async def themes_status(ctx: Context) -> None:
     print(themes.summary(state))
     if state["untagged"]:
         print("Sans thème (corrections possibles dans config/etiquettes.yaml) : " + ", ".join(state["untagged"]))
-    print(f"À poser : {state['to_add']} ; « {ctx.settings.theme_duplicate_tag} » à retirer : {state['to_remove']}")
+    print(f"À poser : {state['to_add']} ; « {ctx.settings.tag_duplicate} » à retirer : {state['to_remove']}")
     if state["missing_tags"]:
         print("Étiquettes à créer sur le site : " + ", ".join(state["missing_tags"]))
     print("Champ « category » des cartes : " + ", ".join(f"{k} ({n})" for k, n in state["categories"].items()))
@@ -868,7 +874,7 @@ async def sniper_report_status(ctx: Context, hours: float, summary: bool, with_b
     text = text.split("\n\n== ", 1)[0] if summary else text
     if with_breakdown:
         rows = await ctx.db.bids_since(utcnow() - timedelta(hours=hours))
-        text += "\n\n" + breakdown(rows, ctx.settings.sale_fee_pct)
+        text += "\n\n" + breakdown(rows, ctx.settings.market_fee_ratio)
     return text
 
 
@@ -930,7 +936,7 @@ def main(argv: list[str] | None = None) -> None:
     inv.add_argument("action", choices=["scan", "report", "list", "discard"])
     inv.add_argument("--apply", action="store_true", help="exécute (simulé si DRY_RUN=true)")
     inv.add_argument("--lookups", type=int, default=None,
-                     help="report : cotes demandées au site (route limitée ; défaut SELL_PRICE_LOOKUPS_PER_RUN)")
+                     help="report : cotes demandées au site (route limitée ; défaut DUPLICATES_QUOTES_PER_RUN)")
     args = parser.parse_args(argv)
 
     settings = get_settings()

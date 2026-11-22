@@ -1,6 +1,6 @@
 """Statistiques de fonctionnement : durée des passages de chaque worker, requêtes au site par route.
 
-Comptées en continu et relevées toutes les STATS_MINUTES (src/main.py, stats_loop) : une ligne lisible en console,
+Comptées en continu et relevées toutes les LOG_STATS_MINUTES (src/main.py, stats_loop) : une ligne lisible en console,
 le détail dans le journal (événement « stats »), le dernier relevé dans /etat.
 """
 

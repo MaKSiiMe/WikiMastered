@@ -43,7 +43,7 @@ async def past_unsold(db: Database, bid: int, count: int, minutes: int = 360) ->
 
 @pytest.mark.asyncio
 async def test_simulated_resale_follows_the_observed_market(tmp_path):
-    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_list_duration_minutes=360)
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), resale_duration_minutes=360)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
@@ -59,7 +59,7 @@ async def test_simulated_resale_follows_the_observed_market(tmp_path):
     await inv.settle_listings()
     await db._exec("UPDATE listings SET status = 'simulated', target_end = ? WHERE id = 3",
                    ((datetime.now(UTC) - timedelta(minutes=5)).isoformat(),))
-    await inv.settle_listings()  # 3 invendus (POSITION_GIVE_UP_AFTER) : le bot renonce, jamais de revente à 1 WB
+    await inv.settle_listings()  # 3 invendus (RESALE_GIVE_UP_AFTER_STEPS) : le bot renonce, jamais de revente à 1 WB
     assert not await db._all("SELECT id FROM listings WHERE status = 'scheduled'")
     assert (await db._one("SELECT MIN(base_amount) AS low FROM listings"))["low"] == 324
     closed = await db.get_bid(bid)
@@ -70,9 +70,9 @@ async def test_simulated_resale_follows_the_observed_market(tmp_path):
 
 @pytest.mark.asyncio
 async def test_floor_after_relists_when_the_bot_never_gives_up(tmp_path):
-    """POSITION_GIVE_UP_AFTER=0 : après 2 remises à -10 %, revente au plancher, jusqu'à POSITION_MAX_LOSS (10 %)
+    """RESALE_GIVE_UP_AFTER_STEPS=0 : après 2 remises à -10 %, revente au plancher, jusqu'à RESALE_MAX_LOSS_RATIO (10 %)
     sous le prix d'achat (101 commission comprise)."""
-    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_give_up_after=0)
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), resale_give_up_after_steps=0)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
@@ -88,7 +88,7 @@ async def test_floor_after_relists_when_the_bot_never_gives_up(tmp_path):
 
 @pytest.mark.asyncio
 async def test_hourly_resales_step_down_every_six_hours(tmp_path):
-    """01/11 : reventes d'1 h. Les remises suivent le temps passé en vente (POSITION_STEP_MINUTES=360), pas le nombre
+    """01/11 : reventes d'1 h. Les remises suivent le temps passé en vente (RESALE_STEP_MINUTES=360), pas le nombre
     de ventes : même prix 5 h durant, −10 % à 6 h et 12 h, gardée à 18 h (comme 3 ventes de 6 h sans acheteur)."""
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(500))
     ctx = await make_context(tmp_path, client, notifier)
@@ -127,7 +127,7 @@ async def test_unsold_position_kept_only_when_every_slot_is_taken(tmp_path):
     def handler(request):
         return httpx.Response(200, json={"sellingCount": selling["n"], "maxConcurrentAuctions": 5})
 
-    client, notifier = make_client(tmp_path, handler, position_give_up_after=0)
+    client, notifier = make_client(tmp_path, handler, resale_give_up_after_steps=0)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
@@ -284,7 +284,7 @@ async def test_position_listed_12h_until_5_positions_are_held(tmp_path):
     """20/10 : tant que moins de 5 L attendent leur revente, une vente de 12 h est plus vue ; au-delà, 6 h pour
     faire tourner les 5 places de vente."""
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}), dry_run=False,
-                                   position_list_duration_minutes=360, position_list_long_below=5)
+                                   resale_duration_minutes=360, resale_long_below_positions=5)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     now = datetime.now(UTC)
@@ -802,18 +802,18 @@ def test_expensive_positions_are_given_up_sooner():
     s = Settings(_env_file=None)
     assert relist_limits(6119, s) == (1, 2)  # une remise à -10 %, puis gardée au 2e invendu
     assert relist_limits(400, s) == (2, 3)
-    assert relist_limits(6119, Settings(_env_file=None, position_give_up_after=0)) == (1, 0)
-    assert relist_limits(6119, Settings(_env_file=None, position_expensive_from=0)) == (2, 3)
+    assert relist_limits(6119, Settings(_env_file=None, resale_give_up_after_steps=0)) == (1, 0)
+    assert relist_limits(6119, Settings(_env_file=None, resale_expensive_from=0)) == (2, 3)
 
 
 @pytest.mark.asyncio
 async def test_expensive_position_given_up_after_two_unsold(tmp_path):
-    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), position_expensive_from=100,
-                                   position_list_duration_minutes=360)
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(500), resale_expensive_from=100,
+                                   resale_duration_minutes=360)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
-    bid = await simulated_position(db, 400)  # achetée 100 : « chère » avec POSITION_EXPENSIVE_FROM=100
+    bid = await simulated_position(db, 400)  # achetée 100 : « chère » avec RESALE_EXPENSIVE_FROM=100
     await seed_observed(db, "c1", [300, 310, 290])
     await inv.settle_listings()  # 1er invendu : une remise à -10 %
     row = await db._one("SELECT base_amount, relist_count FROM listings ORDER BY id DESC LIMIT 1")
@@ -857,8 +857,8 @@ async def test_shiny_sale_notes_its_page(tmp_path, shiny):
 
 @pytest.mark.asyncio
 async def test_given_up_card_is_kept_and_tagged_never_sold_for_one_wb(tmp_path):
-    """Le bot ne brade jamais : après POSITION_GIVE_UP_AFTER étapes, la carte reste dans la collection, la position
-    est close et l'exemplaire revenu (nouvel identifiant) reçoit l'étiquette POSITION_UNSOLD_TAG."""
+    """Le bot ne brade jamais : après RESALE_GIVE_UP_AFTER_STEPS étapes, la carte reste dans la collection, la position
+    est close et l'exemplaire revenu (nouvel identifiant) reçoit l'étiquette TAG_UNSOLD."""
     from tests.test_session import cookie_for
 
     tagged, tags = [], [{"id": 3, "name": "Doublon"}]
@@ -926,7 +926,7 @@ async def test_old_one_wb_sales_are_cancelled_at_startup(tmp_path):
 @pytest.mark.asyncio
 async def test_expensive_unsold_position_waits_for_a_slot_instead_of_being_kept(tmp_path):
     """11/11 : Coupe du monde de football 1994 (achetée 8 110), invendue 4 fois en 13 h, gardée « Invendue » parce
-    que toutes les places de vente étaient prises. Avec POSITION_WAIT_SLOT_FROM, une carte chère attend sa place."""
+    que toutes les places de vente étaient prises. Avec RESALE_WAIT_SLOT_FROM, une carte chère attend sa place."""
     def handler(request):
         if request.url.path == "/api/marketplace/mine":
             return httpx.Response(200, json={"sellingCount": 5, "maxConcurrentAuctions": 5})
@@ -936,9 +936,9 @@ async def test_expensive_unsold_position_waits_for_a_slot_instead_of_being_kept(
     for cost, wait_from in ((8110, 0), (8110, 5000), (900, 5000)):
         folder = tmp_path / f"{cost}-{wait_from}"
         folder.mkdir()
-        client, notifier = make_client(folder, handler, dry_run=False, position_wait_slot_from=wait_from,
-                                       position_step_minutes=0, position_max_relists=1, position_give_up_after=0,
-                                       position_max_loss=0.0)
+        client, notifier = make_client(folder, handler, dry_run=False, resale_wait_slot_from=wait_from,
+                                       resale_step_minutes=0, resale_max_steps=1, resale_give_up_after_steps=0,
+                                       resale_max_loss_ratio=0.0)
         db = Database(folder / "t.db")
         await db.connect()
         now = datetime.now(UTC)

@@ -17,10 +17,10 @@
 - Suivi de complétion : avancement de chaque collection (jours, titres) et date d'obtention de
   chaque carte (kv « collection », clé first_owned), pour le récap, le bilan et la commande.
 
-- Étiquette de la collection (COLLECTION_TAG pour les jours, « date » par défaut) : posée sur l'exemplaire
+- Étiquette de la collection (TAG_DAYS pour les jours, « date » par défaut) : posée sur l'exemplaire
   gardé de chaque carte (favori, shiny, plus haute rareté : keep_order) et retirée des autres, qui peuvent
   alors partir (le R remplacé par un SR gagné), comme le fait l'éditeur d'étiquettes du site
-  (tables Supabase `tags` et `user_card_tags` [WP tags.js]). Avec PROTECTED_TAGS=date, cet exemplaire n'est jamais vendu.
+  (tables Supabase `tags` et `user_card_tags` [WP tags.js]). Avec TAG_PROTECTED=date, cet exemplaire n'est jamais vendu.
 
 Les titres attendus sont ceux de Wikipédia (« 1er janvier », « 14 octobre »), vérifiés sur les
 cartes du site ; seuls les titres exacts comptent (pas « 14 août en sport » ni « 10 mai 1981 »).
@@ -97,7 +97,7 @@ def spec_titles(spec: dict) -> tuple[str, ...]:
 
 def defined(settings: Settings) -> dict[str, Collection]:
     """Collections connues : « jours » (intégrée), puis celles de config/collections.yaml."""
-    out = {"jours": Collection("Jours de l'année", tuple(year_days()), settings.collection_tag.strip())}
+    out = {"jours": Collection("Jours de l'année", tuple(year_days()), settings.tag_days.strip())}
     raw = yaml.safe_load(COLLECTIONS_FILE.read_text(encoding="utf-8")) if COLLECTIONS_FILE.exists() else None
     for key, spec in (raw or {}).items():
         out[normalize_title(str(key))] = Collection(str(spec.get("nom") or key), spec_titles(spec),
@@ -118,7 +118,7 @@ def collections(settings: Settings) -> tuple[dict[str, Collection], list[str]]:
         else:
             unknown.append(value)
     if settings.collection_titles:
-        active[TITLES] = Collection("Titres", tuple(settings.collection_titles), settings.collection_tag.strip())
+        active[TITLES] = Collection("Titres", tuple(settings.collection_titles), settings.tag_days.strip())
     return active, unknown
 
 
@@ -192,7 +192,7 @@ async def refresh(ctx: Context) -> dict:
              "first_owned": first_owned(previous, owned, utcnow()),
              "best": {k: r for k, rows in sorted(copies.items()) if (r := best_rarity(rows))}}
     state.update(await tag_owned(ctx, copies, active.values()))
-    if ctx.settings.showcase_tag.strip():
+    if ctx.settings.tag_showcase.strip():
         state["showcase"] = await tag_showcase(ctx, copies, active.values())
     await ctx.db.kv_set(KV_KEY, state)
     return state
@@ -291,7 +291,7 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: It
         out["tag_error"] = (f"étiquette(s) « {', '.join(missing)} » introuvable(s) (HTTP {status}) : "
                             "crée-la une fois sur le site")
     waiting = {(tag, collection_key(row.title)) for tag, row in untagged}  # cartes sans exemplaire étiqueté
-    for tag, row in [u for u in untagged if tag_key(u[0]) in ids][: ctx.settings.collection_tag_max_per_run]:
+    for tag, row in [u for u in untagged if tag_key(u[0]) in ids][: ctx.settings.tag_collection_max_per_run]:
         tag_id = ids[tag_key(tag)]
         if not live:
             log.info("[DRY RUN] étiquette « %s » sur %s", tag, row.title)
@@ -323,13 +323,13 @@ async def tag_owned(ctx: Context, copies: dict[str, list[OwnedCard]], active: It
 
 
 async def tag_showcase(ctx: Context, copies: dict[str, list[OwnedCard]], active: Iterable[Collection]) -> dict:
-    """SHOWCASE_TAG sur les cartes des vitrines du profil et sur l'exemplaire gardé de chaque carte des collections
+    """TAG_SHOWCASE sur les cartes des vitrines du profil et sur l'exemplaire gardé de chaque carte des collections
     actives ; retirée des exemplaires qui n'en sont plus (sortis d'une vitrine, remplacés par une rareté plus haute).
     Rien n'est retiré si les vitrines n'ont pas pu être lues."""
     from src import showcases  # import local : showcases.py importe ce module
     from src.workers.inventory_manager import keep_order
 
-    tag = ctx.settings.showcase_tag.strip()
+    tag = ctx.settings.tag_showcase.strip()
     out: dict = {"tag": tag, "tagged": 0, "untagged": 0, "to_tag": 0}
     keys = {collection_key(t) for c in active for t in c.titles}
     kept = {key: min(rows, key=keep_order) for key, rows in copies.items() if key in keys and rows}
@@ -356,7 +356,7 @@ async def tag_showcase(ctx: Context, copies: dict[str, list[OwnedCard]], active:
     out["to_tag"] = len(missing)
     live = ctx.settings.is_live("tag_card")
     done = set(current)  # exemplaires étiquetés, ceux de ce passage compris
-    for copy_id in missing[: ctx.settings.collection_tag_max_per_run]:
+    for copy_id in missing[: ctx.settings.tag_collection_max_per_run]:
         if not live:
             log.info("[DRY RUN] étiquette « %s » sur l'exemplaire %s", tag, copy_id)
             continue

@@ -555,9 +555,9 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
 
     @tree.command(name="sauvegarde", description="Sauvegarder la base maintenant (avant un gros changement)")
     async def sauvegarde(interaction: discord.Interaction) -> None:
-        if not s.enable_backup:
+        if not s.backup_enabled:
             await interaction.response.send_message(embed=discord.Embed(
-                title="Sauvegardes désactivées", description="ENABLE_BACKUP=false : aucune sauvegarde n'est faite.",
+                title="Sauvegardes désactivées", description="BACKUP_ENABLED=false : aucune sauvegarde n'est faite.",
                 color=GREY))
             return
         await interaction.response.defer(thinking=True)
@@ -571,7 +571,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         embed = discord.Embed(title="💾 Sauvegarde faite", color=GREEN,
                               description=f"`{result.path.name}`\n{result.size >> 20} Mo (base {result.db_size >> 20} "
                                           f"Mo) en {result.seconds:.0f} s")
-        embed.set_footer(text=f"{s.backup_keep} sauvegardes gardées au plus")
+        embed.set_footer(text=f"{s.backup_keep_count} sauvegardes gardées au plus")
         await followup(interaction, embed=embed)
 
     @tree.command(name="verif-faite", description="Vérification anti-bot faite : les mises reprennent sans attendre")
@@ -769,11 +769,11 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     async def sniper_report(interaction: discord.Interaction, heures: app_commands.Range[float, 1, 168] = 24) -> None:
         until = utcnow()
         since = until - timedelta(hours=heures)
-        _, summary, _ = await cli.sniper_report(ctx.db, since, until, s.sale_fee_pct)
+        _, summary, _ = await cli.sniper_report(ctx.db, since, until, s.market_fee_ratio)
         embed = discord.Embed(title=f"🎯 Sniper · {plural(heures, 'dernière heure', 'dernières heures')}",
                               description=summary[:4000], color=COLOR)
         embed.set_footer(text=f"Du {paris(since)} au {paris(until)} · le détail de chaque enchère dans le récap de "
-                              f"{s.sniper_report_time:%H:%M}")
+                              f"{s.report_sniper_time:%H:%M}")
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------ actions
@@ -790,7 +790,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         if titre.casefold() not in {t.casefold() for t in await ctx.db.known_titles(titre, limit=200)}:
             notes.append("⚠️ Jamais vue sur le marché par le bot : vérifie le titre exact.")
         if sniper is None:
-            notes.append("⚠️ Sniper désactivé (ENABLE_SNIPER) : rien ne sera misé.")
+            notes.append("⚠️ Sniper désactivé (SNIPER_ENABLED) : rien ne sera misé.")
         elif not s.is_live("collection_bid"):
             notes.append("ℹ️ Mises de collection simulées (DRY_RUN / SIMULATE) : la mise sera simulée.")
         label = snipes.Snipe(titre, prix_max, rarity, shiny=shiny).label

@@ -1,4 +1,4 @@
-"""Cartes gardées (/garder sur Discord) : jamais vendues ni défaussées, comme une étiquette de PROTECTED_TAGS.
+"""Cartes gardées (/garder sur Discord) : jamais vendues ni défaussées, comme une étiquette de TAG_PROTECTED.
 
 Une demande = un titre et, au choix, une rareté (kv « kept ») ; tous les exemplaires correspondants sont protégés.
 """

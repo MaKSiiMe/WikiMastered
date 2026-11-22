@@ -124,7 +124,7 @@ async def close_buttons(interaction: discord.Interaction, note: str) -> None:
 
 
 def card_lines(copies: list[OwnedCard], excluded: set[str], kept: list[keeps.Keep], selling: set[str],
-               protected_tags: set[str]) -> list[str]:
+               tag_protected: set[str]) -> list[str]:
     """Une ligne par exemplaire, avec ce qui l'empêche d'être vendu : en vente (`selling` : programmée ou publiée),
     étiquette protégée, gardé, sinon un échange en attente (seule raison restante d'`excluded`)."""
     lines = []
@@ -136,7 +136,7 @@ def card_lines(copies: list[OwnedCard], excluded: set[str], kept: list[keeps.Kee
             notes.append("⭐ favori")
         if c.id in selling:
             notes.append("🏷️ en vente")
-        if c.tag_names & protected_tags:
+        if c.tag_names & tag_protected:
             notes.append("🛡️ étiquette protégée")
         elif c.id in excluded and c.id not in selling and not any(k.matches(c.title, c.rarity) for k in kept):
             notes.append("🤝 en échange")
@@ -237,7 +237,7 @@ async def top_embeds(ctx: Context, size: int, shiny: bool) -> list[discord.Embed
         quote = (await ctx.prices.observed_quote(r["card_id"], shiny)).get(r["rarity"])
         lines.append(f"`{i:>2}.` **{r['title'][:45]}** ({r['rarity']}) · **{wb(r['average'])}** · {r['sales']} "
                      f"ventes · {wb(r['low'])}–{wb(r['high'])}"
-                     + top_bid(quote.average if quote else None, ctx.settings.sale_fee_pct))
+                     + top_bid(quote.average if quote else None, ctx.settings.market_fee_ratio))
     kind = "shiny" if shiny else "normales"
     title = f"🏆 Top {size} des cartes {kind} les plus chères"
     if not lines:
@@ -257,8 +257,8 @@ def shiny_ceiling(quote: Quote | None, s: Settings) -> int | None:
     décote et bénéfice minimum. None : cote pas assez sûre."""
     if quote is None or not quote.reliable(min_sales(s, True)):
         return None
-    return math.floor(min(quote.average * s.sniper_deal_ratio_max,  # type: ignore[operator]
-                          quote.average * (1 - s.sale_fee_pct) - s.portfolio_min_profit))  # type: ignore[operator]
+    return math.floor(min(quote.average * s.sniper_max_deal_ratio,  # type: ignore[operator]
+                          quote.average * (1 - s.market_fee_ratio) - s.resale_min_profit))  # type: ignore[operator]
 
 
 @dataclass(frozen=True)
@@ -419,7 +419,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     async def sell(title: str, price: int, rarity: str = "") -> discord.Embed:
         """Programme la vente d'un exemplaire ; renvoie le message pour l'utilisateur."""
         if inventory is None:
-            return discord.Embed(title="Ventes désactivées", description="ENABLE_INVENTORY : rien n'est vendu.",
+            return discord.Embed(title="Ventes désactivées", description="INVENTORY_ENABLED : rien n'est vendu.",
                                  color=GREY)
         copies, excluded = await copies_of(ctx, title)
         copy, why = sellable(copies, excluded, rarity)
@@ -470,7 +470,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                      rarete: app_commands.Choice[str] | None = None) -> None:
         if inventory is None:
             await interaction.response.send_message(embed=discord.Embed(
-                title="Ventes désactivées", description="ENABLE_INVENTORY : rien n'est vendu.", color=GREY))
+                title="Ventes désactivées", description="INVENTORY_ENABLED : rien n'est vendu.", color=GREY))
             return
         await interaction.response.defer(thinking=True)
         rarity = rarete.value if rarete else ""
@@ -517,12 +517,12 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     async def defausse(interaction: discord.Interaction, etat: app_commands.Choice[int] | None = None) -> None:
         if etat is None:
             await interaction.response.send_message(embed=switch_embed(
-                "🗑️ Défausse automatique", s.auto_discard,
+                "🗑️ Défausse automatique", s.discard_enabled,
                 "Le worker cotes est en pause (il ne sert qu'à elle)." if "cotes" in ctx.pauses else "",
-                "/defausse activer" if not s.auto_discard else "/defausse couper"))
+                "/defausse activer" if not s.discard_enabled else "/defausse couper"))
             return
         on = bool(etat.value)
-        await overrides.set_value(ctx, "auto_discard", on)
+        await overrides.set_value(ctx, "discard_enabled", on)
         # Le worker cotes ne sert qu'à la défausse des derniers exemplaires : en pause avec elle, ses requêtes
         # (route des cotes, limitée) restent au sniper.
         if on:
@@ -542,11 +542,11 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     async def doublons(interaction: discord.Interaction, etat: app_commands.Choice[int] | None = None) -> None:
         if etat is None:
             await interaction.response.send_message(embed=switch_embed(
-                "💰 Vente automatique des doublons", s.auto_list, "",
-                "/doublons couper" if s.auto_list else "/doublons activer"))
+                "💰 Vente automatique des doublons", s.duplicates_sell, "",
+                "/doublons couper" if s.duplicates_sell else "/doublons activer"))
             return
         on = bool(etat.value)
-        await overrides.set_value(ctx, "auto_list", on)
+        await overrides.set_value(ctx, "duplicates_sell", on)
         log.info("Discord : vente des doublons %s", "activée" if on else "coupée")
         cancelled = 0 if on else await ctx.db.cancel_scheduled_duplicates()
         extra = f"\n{plural(cancelled, 'doublon programmé annulé', 'doublons programmés annulés')}." if cancelled else ""
@@ -686,7 +686,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
     async def opportunites(interaction: discord.Interaction) -> None:
         if sniper is None:
             await interaction.response.send_message(embed=discord.Embed(
-                title="Sniper désactivé", description="ENABLE_SNIPER=false : aucune vente suivie.", color=GREY))
+                title="Sniper désactivé", description="SNIPER_ENABLED=false : aucune vente suivie.", color=GREY))
             return
         now = utcnow()
         # Mise minimale déjà au-dessus du plafond : le sniper ne misera pas (sauf si sa cote remonte), à part.
@@ -738,7 +738,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             await submitted.response.send_message(embed=discord.Embed(
                 title=f"🎯 Carte demandée : {added.label}", color=GREEN if sniper else ORANGE,
                 description="Gagnée, elle est gardée, pas revendue." if sniper else
-                            "⚠️ Sniper désactivé (ENABLE_SNIPER) : rien ne sera misé."))
+                            "⚠️ Sniper désactivé (SNIPER_ENABLED) : rien ne sera misé."))
 
         for embed in embeds[:-1]:
             await interaction.followup.send(embed=embed)
@@ -770,7 +770,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         if e.notes:
             embed.add_field(name="\u200b", value=e.notes[:1024], inline=False)
         embed.set_footer(text=f"Médiane des ventes observées sur {trades.TRADE_DAYS} jours (même rareté, shiny à "
-                              f"part). Équitable : écart de {s.trade_fair_margin:.0%} au plus.")
+                              f"part). Équitable : écart de {s.trades_fair_margin_ratio:.0%} au plus.")
         await interaction.followup.send(embed=embed)
 
     @tree.command(name="echanges", description="Rendement de tes échanges : valeur donnée et reçue, échange par échange")

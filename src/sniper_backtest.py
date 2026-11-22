@@ -1,9 +1,9 @@
 """Rejeu du sniper (commande sniper-backtest) : qu'auraient donné d'autres réglages sur les ventes observées ?
 
 Chaque vente observée de la période est rejouée avec l'estimation que le bot avait à ce moment-là (médiane des
-PRICE_RECENT_SALES ventes précédentes de la carte, plafonnée par la cote du site déjà relevée, mêmes filtres de
+QUOTE_RECENT_SALES ventes précédentes de la carte, plafonnée par la cote du site déjà relevée, mêmes filtres de
 ventes disputées et d'écart), sans regarder les ventes suivantes. Pour un réglage :
-- mise : le prix de départ est sous notre plafond, et la mise poussée (SNIPER_BID_PUSH) atteint SNIPER_MIN_BID_SHARE ;
+- mise : le prix de départ est sous notre plafond, et la mise poussée (SNIPER_BID_PUSH_RATIO) atteint SNIPER_MIN_BID_RATIO ;
 - gagnée : notre plafond couvre la mise qui bat le prix final (+10 %, règle du site). On paie cette mise poussée
   vers le plafond, et on revend à l'estimation (× --resale).
 Le modèle suppose que le gagnant ne surenchérit pas au-delà du prix final : il est optimiste. Ses victoires sont
@@ -67,25 +67,25 @@ def cases_from(sales: Iterable, site: Iterable, since: datetime, s: Settings) ->
     cases = []
     for r in sales:
         end, past = parse_iso(r["ended_at"]), history.setdefault(r["card_id"], [])
-        last = past[-s.price_recent_sales:][::-1]  # plus récentes d'abord, comme observed_by_rarity
-        if end >= since and len(past) >= s.price_min_sales and last:  # type: ignore[operator]
+        last = past[-s.quote_recent_sales:][::-1]  # plus récentes d'abord, comme observed_by_rarity
+        if end >= since and len(past) >= s.quote_min_sales and last:  # type: ignore[operator]
             estimate = robust_median(trusted_prices(last))
             when, values = averages.get(r["card_id"], ([], []))
             if i := bisect_right(when, end):  # type: ignore[arg-type]
-                estimate = min(estimate, values[i - 1] * s.price_site_margin)
+                estimate = min(estimate, values[i - 1] * s.quote_site_margin_ratio)
             prices = [p for p, _ in last if p > 0]
             contested = sum(not single for _, single in last)
             spread = max(prices) / min(prices) if prices else None
             if contested >= s.sniper_min_contested_sales and not (
-                    s.sniper_max_price_spread > 0 and spread is not None and spread > s.sniper_max_price_spread):
+                    s.sniper_max_spread_ratio > 0 and spread is not None and spread > s.sniper_max_spread_ratio):
                 cases.append(Case(estimate, r["price"], r["base_amount"],
-                                  timeutils.in_window(end, s.night_start, s.night_end)))  # type: ignore[arg-type]
+                                  timeutils.in_window(end, s.sniper_night_start, s.sniper_night_end)))  # type: ignore[arg-type]
         past.append((r["price"], r["base_amount"] is not None and r["price"] <= r["base_amount"]))
     return cases
 
 
 def replay(cases: list[Case], combo: Combo, s: Settings, budget: int, resale: float = 1.0) -> Outcome:
-    need = max(s.portfolio_min_profit, int(budget * combo.profit_ratio))
+    need = max(s.resale_min_profit, int(budget * combo.profit_ratio))
     bids = wins = 0
     gain = 0.0
     for c in cases:
@@ -94,13 +94,13 @@ def replay(cases: list[Case], combo: Combo, s: Settings, budget: int, resale: fl
         if s.sniper_max_bid:
             ceiling = min(ceiling, s.sniper_max_bid)
         start = c.start or 0
-        if start > ceiling or start + s.sniper_bid_push * (ceiling - start) < combo.min_share * c.estimate:
-            continue  # pas de mise : trop chère dès le départ, ou mise sous SNIPER_MIN_BID_SHARE
+        if start > ceiling or start + s.sniper_bid_push_ratio * (ceiling - start) < combo.min_share * c.estimate:
+            continue  # pas de mise : trop chère dès le départ, ou mise sous SNIPER_MIN_BID_RATIO
         bids += 1
         beat = min_next_bid(c.final, 0)
         if ceiling >= beat:
             wins += 1
-            gain += c.estimate * resale - (beat + s.sniper_bid_push * (ceiling - beat))
+            gain += c.estimate * resale - (beat + s.sniper_bid_push_ratio * (ceiling - beat))
     return Outcome(combo, bids, wins, gain)
 
 
@@ -111,7 +111,7 @@ def grid(current: Combo) -> list[Combo]:
 
 
 def current_combo(s: Settings) -> Combo:
-    return Combo(s.sniper_deal_ratio_max, s.night_deal_ratio_max, s.portfolio_min_profit_ratio, s.sniper_min_bid_share)
+    return Combo(s.sniper_max_deal_ratio, s.sniper_night_max_deal_ratio, s.resale_min_profit_ratio, s.sniper_min_bid_ratio)
 
 
 def render(cases: list[Case], actual, s: Settings, budget: int, days: float, resale: float = 1.0,
@@ -141,6 +141,6 @@ def render(cases: list[Case], actual, s: Settings, budget: int, days: float, res
         mark = "  ← actuel" if c == current else ""
         lines.append(f"{c.day:5.2f} {c.night:5.2f} {c.profit_ratio:7.2f} {c.min_share:5.2f} {o.bids:6d} "
                      f"{o.wins * factor:8.1f} {gain:9.0f} {gain / max(o.bids, 1):6.1f} {at_quota:13.0f}{mark}")
-    lines += ["", "jour/nuit : SNIPER_DEAL_RATIO_MAX / NIGHT_DEAL_RATIO_MAX · rentab. : PORTFOLIO_MIN_PROFIT_RATIO · "
-                  "min : SNIPER_MIN_BID_SHARE"]
+    lines += ["", "jour/nuit : SNIPER_MAX_DEAL_RATIO / SNIPER_NIGHT_MAX_DEAL_RATIO · rentab. : RESALE_MIN_PROFIT_RATIO · "
+                  "min : SNIPER_MIN_BID_RATIO"]
     return "\n".join(lines)

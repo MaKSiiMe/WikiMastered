@@ -7,7 +7,7 @@ réglages changés sur Discord. Perdue, le sniper n'estime plus rien pendant des
   du bot continuent, la copie est cohérente.
 - La copie est vérifiée (PRAGMA quick_check) avant d'être gardée : une sauvegarde abîmée ne remplace rien.
 - Compressée (gzip, ≈ ÷ 4) dans BACKUP_DIR (un volume à part : le volume des données peut être perdu sans elle),
-  nommée wikimastered-AAAA-MM-JJ-HHMM.db.gz ; les BACKUP_KEEP plus récentes sont gardées.
+  nommée wikimastered-AAAA-MM-JJ-HHMM.db.gz ; les BACKUP_KEEP_COUNT plus récentes sont gardées.
 - Restauration : docs/INSTALLATION.md, « Sauvegardes ».
 """
 
@@ -101,7 +101,7 @@ def backup_sync(source: Path, directory: Path, keep: int) -> Backup:
 async def run_backup(ctx: Context) -> Backup:
     """Sauvegarde maintenant ; garde le résultat en base et dans le contexte (affiché par /etat)."""
     s = ctx.settings
-    result = await asyncio.to_thread(backup_sync, ctx.db.path, s.backup_dir, s.backup_keep)
+    result = await asyncio.to_thread(backup_sync, ctx.db.path, s.backup_dir, s.backup_keep_count)
     ctx.last_backup = result.info()
     await ctx.db.kv_set(KV_KEY, ctx.last_backup)
     log.info("sauvegarde %s : %d Mo (base %d Mo) en %.0f s", result.path.name, result.size >> 20,
@@ -118,13 +118,13 @@ def describe(info: dict | None) -> str:
 
 
 async def purge_observed(ctx: Context) -> int:
-    """Efface les ventes observées de plus de OBSERVED_KEEP_DAYS jours (voir Database.purge_observed). La place est
+    """Efface les ventes observées de plus de QUOTE_OBSERVED_KEEP_DAYS jours (voir Database.purge_observed). La place est
     reprise par les ventes suivantes : le fichier ne grossit plus, la sauvegarde rétrécit tout de suite."""
-    days = ctx.settings.observed_keep_days
+    days = ctx.settings.quote_observed_keep_days
     if days <= 0:
         return 0
     try:
-        purged = await ctx.db.purge_observed(utcnow() - timedelta(days=days), ctx.settings.price_recent_sales)
+        purged = await ctx.db.purge_observed(utcnow() - timedelta(days=days), ctx.settings.quote_recent_sales)
     except Exception:  # noqa: BLE001 - une purge ratée ne doit pas empêcher la sauvegarde
         log.exception("Purge des ventes observées impossible")
         return 0
@@ -141,12 +141,12 @@ async def backup_loop(ctx: Context) -> None:
     while True:
         await sleep_until(next_local(ctx.settings.backup_time))
         await purge_observed(ctx)
-        if not (ctx.settings.enable_backup and ctx.settings.backup_keep > 0):
+        if not (ctx.settings.backup_enabled and ctx.settings.backup_keep_count > 0):
             continue
         try:
             result = await run_backup(ctx)
             ctx.notifier.info("Sauvegarde faite", f"{result.path.name} : {result.size >> 20} Mo en "
-                              f"{result.seconds:.0f} s, {ctx.settings.backup_keep} gardées.", important=False)
+                              f"{result.seconds:.0f} s, {ctx.settings.backup_keep_count} gardées.", important=False)
         except Exception as exc:  # noqa: BLE001 - une sauvegarde ratée ne doit pas arrêter le bot
             log.exception("Sauvegarde impossible")
             ctx.notifier.warning("Sauvegarde impossible", f"{type(exc).__name__} : {exc}"[:500], important=True)

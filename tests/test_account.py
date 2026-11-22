@@ -167,7 +167,7 @@ def test_daily_report_says_when_estimates_run_low():
 
     text = calibration_text({"lost": [1.02, 1.06, 1.08] * 4, "sold": [0.9, 1.0, 1.1] * 4})
     assert text == ("⚠️ Trop basses : les enchères perdues ont fini à ×1,06 de l'estimation (12). "
-                    "Les prix montent, `PRICE_SITE_MARGIN` est à relever.")
+                    "Les prix montent, `QUOTE_SITE_MARGIN_RATIO` est à relever.")
     assert calibration_text({"lost": [1.0] * 12, "sold": []}) == ""  # justes : rien à dire
     assert calibration_text({"lost": [1.2] * 9, "sold": [1.0] * 3}) == ""  # trop peu de mises pour conclure
 

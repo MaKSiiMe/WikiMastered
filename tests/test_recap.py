@@ -37,7 +37,7 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
         await db.record_bid(auction_id=f"a{i}", card_id="c", title="t", rarity="C", is_shiny=False, amount=16,
                             reference_price=300, reason="revente ~300 WB", night=False, dry_run=True,
                             status="sim_won", end_at=now)
-    ctx = SimpleNamespace(settings=Settings(_env_file=None, portfolio_max_positions=15), db=db, client=SimpleNamespace(session_ok=True))
+    ctx = SimpleNamespace(settings=Settings(_env_file=None, resale_max_positions=15), db=db, client=SimpleNamespace(session_ok=True))
     workers = [
         worker("sniper", last_ok=now, next_due=now + timedelta(seconds=3),
                lines=["40 enchère(s) examinée(s) : pas assez vue vendue 30 · misée 10"]),
@@ -111,7 +111,7 @@ async def test_recap_live_counts_only_real_positions_against_the_cap(tmp_path):
         await hold(i, True)
     for i in range(6, 9):
         await hold(i, False)
-    live = SimpleNamespace(settings=Settings(_env_file=None, dry_run=False, portfolio_max_positions=5), db=db,
+    live = SimpleNamespace(settings=Settings(_env_file=None, dry_run=False, resale_max_positions=5), db=db,
                            client=SimpleNamespace(session_ok=True))
     stats = await db.recap_stats(now - timedelta(hours=4))
     pending = await db.pending_bids()

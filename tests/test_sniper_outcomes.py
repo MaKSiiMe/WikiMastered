@@ -340,7 +340,7 @@ async def test_missed_collection_card_counted_apart(tmp_path, caplog):
     missed = [r.getMessage() for r in caplog.records if "manquée" in r.getMessage()]
     assert len(missed) == 1 and "14 octobre" in missed[0] and "dernière lecture il y a 50 s" in missed[0]
     assert "1 passage(s), le plus long 43 s (« relecture Miley Cyrus » 41 s)" in missed[0]
-    window = max(sniper.settings.sniper_window_seconds, sniper.settings.night_window_seconds)
+    window = max(sniper.settings.sniper_window_seconds, sniper.settings.sniper_night_window_seconds)
     assert f"plus longue pause entre deux {max(window - 5 - 45, 2)} s" in missed[0]  # avant le passage, ou après
     await db.close()
 
@@ -383,7 +383,7 @@ async def test_slow_pass_is_logged_with_its_slowest_step(tmp_path, caplog):
 @pytest.mark.parametrize("simulate, open_positions", [([], 1), (["sniper"], 7)])
 @pytest.mark.asyncio
 async def test_live_sniper_ignores_simulated_positions_in_its_cap(tmp_path, simulate, open_positions):
-    """Passage en réel le 16/10 avec PORTFOLIO_MAX_POSITIONS=5 : les 6 positions simulées ne bloquent pas les achats."""
+    """Passage en réel le 16/10 avec RESALE_MAX_POSITIONS=5 : les 6 positions simulées ne bloquent pas les achats."""
     def handler(request):
         if request.url.path == "/api/wikibidous":
             return httpx.Response(200, json={"balance": 3300})
@@ -393,7 +393,7 @@ async def test_live_sniper_ignores_simulated_positions_in_its_cap(tmp_path, simu
             return httpx.Response(200, json={"bidding": [], "selling": []})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=simulate, portfolio_max_positions=5,
+    client, notifier = make_client(tmp_path, handler, dry_run=False, simulate=simulate, resale_max_positions=5,
                                    sniper_max_bid=500)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
@@ -440,7 +440,7 @@ async def test_position_bid_pushed_then_straight_to_ceiling(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, dry_run=False, sniper_resale_rarities=["L"],
-                                   sniper_max_bid=500, sniper_bid_push=0.5)
+                                   sniper_max_bid=500, sniper_bid_push_ratio=0.5)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     for card in ("card-a", "card-b"):
@@ -681,6 +681,6 @@ async def test_unquoted_wish_takes_the_site_price_history(tmp_path):
     khufu = Auction.model_validate(sale("k", "Pyramide de Khéops", 600, base=634))
     sniper.ctx.prices._history[khufu.catalog_id] = (datetime.now(UTC), {khufu.rarity: Quote(820.0, 3)})
     assert await sniper._wish_cap(khufu) == 820
-    sniper.settings.price_history_fallback = False
+    sniper.settings.quote_history_fallback = False
     assert await sniper._wish_cap(khufu) is None  # 634 > 100 sans cote : pas de mise
     await db.close()

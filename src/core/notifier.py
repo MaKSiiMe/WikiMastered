@@ -134,7 +134,7 @@ class _Message:
         return self.level is Level.WARNING and self.important is not False and self.topic is not Topic.RECAP
 
 
-# DISCORD_ACTIVITY_WEBHOOK_URL=off : les messages d'activité ne vont que dans les logs.
+# DISCORD_WEBHOOK_ACTIVITY=off : les messages d'activité ne vont que dans les logs.
 _OFF = {"off", "none", "aucun", "0", "false"}
 
 

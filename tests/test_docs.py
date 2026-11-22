@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from src.config import Settings
+from src.config import RENAMED, Settings
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_EXAMPLE = ROOT / ".env.example"
@@ -24,9 +24,9 @@ COMMANDS = ROOT / "docs" / "COMMANDES.md"
 PAGES = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
 
 # Valeurs à remplacer par les tiennes : pas des valeurs par défaut.
-PLACEHOLDERS = {"WM_COOKIE", "DISCORD_WEBHOOK_URL"}
+PLACEHOLDERS = {"WM_COOKIE", "DISCORD_WEBHOOK_MAIN"}
 # Mots en majuscules cités dans la doc qui ne sont pas des réglages : texte affiché par `inspect`, constante du code.
-NOT_SETTINGS = {"ERREUR", "WRITE_GROUPS"}
+NOT_SETTINGS = {"ERREUR", "WRITE_GROUPS", "RENAMED"}
 # Guide d'une extension communautaire, cité comme source d'une route (config/endpoints.yaml) : pas un guide d'ici.
 EXTERNAL_GUIDES = {"docs/TECHNIQUE.md"}
 
@@ -149,7 +149,7 @@ def test_every_worker_is_in_the_readme():
 @pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
 def test_settings_cited_in_the_doc_exist(page):
     cited = set(re.findall(r"`([A-Z][A-Z0-9_]{3,})(?:=[^`]*)?`", page.read_text(encoding="utf-8")))
-    unknown = cited - {name.upper() for name in Settings.model_fields} - NOT_SETTINGS
+    unknown = cited - {name.upper() for name in Settings.model_fields} - NOT_SETTINGS - set(RENAMED)  # anciens noms
     assert not unknown, f"{page.name} cite des réglages inconnus : {sorted(unknown)}"
 
 

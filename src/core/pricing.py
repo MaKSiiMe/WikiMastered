@@ -4,7 +4,7 @@ Le prix suit surtout les tendances (actualité, pop culture, mèmes) plus que la
 la moyenne du site peut être très datée (relevé réel : GMMTV vendue 157 WB, moyenne 391).
 Sources, de la plus fiable à la moins fiable :
 1. **Ventes observées** par le sniper lui-même (table observed_sales) : médiane des
-   PRICE_RECENT_SALES dernières. Gratuit, sans requête, et à jour des tendances.
+   QUOTE_RECENT_SALES dernières. Gratuit, sans requête, et à jour des tendances.
 2. Historique du site /api/marketplace/cards/{id}/sales [WP market.js] — refusé (403)
    aux comptes non PRO, donc rarement disponible.
 3. Moyenne ?scope=summary [KZ bridge/prices.js], sans nombre de ventes hors PRO.
@@ -12,7 +12,7 @@ Sources, de la plus fiable à la moins fiable :
    rareté. Seulement en secours, pour une carte gardée (souhaitée, de collection) sans autre cote : voir
    `history_quote`.
 
-Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence ; × PRICE_SITE_MARGIN :
+Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence ; × QUOTE_SITE_MARGIN_RATIO :
 la moyenne du site suit une hausse avec retard, voir `combine`), sauf pour un
 shiny : la moyenne du site ne les distingue pas (elle vaut ~10 % de leurs ventes), ventes shiny observées seules.
 Contre la manipulation des cotes (ventes factices entre comptes, relevé par la presse et JVFlux) :

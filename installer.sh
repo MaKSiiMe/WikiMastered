@@ -101,7 +101,7 @@ ask WM_USER_AGENT "User-agent" "user-agent" "^Mozilla/" \
 
 say "2/3  Webhook Discord"
 echo "Sur ton serveur Discord : Modifier le salon > Intégrations > Webhooks > Nouveau webhook > Copier l'URL."
-ask DISCORD_WEBHOOK_URL "URL du webhook" "url" "^https://([a-z]+\.)?discord(app)?\.com/api/webhooks/" \
+ask DISCORD_WEBHOOK_MAIN "URL du webhook" "url" "^https://([a-z]+\.)?discord(app)?\.com/api/webhooks/" \
     "Une URL de webhook commence par « https://discord.com/api/webhooks/ »."
 
 # --- Lancement ------------------------------------------------------------------------

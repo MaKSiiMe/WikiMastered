@@ -1,4 +1,4 @@
-"""Temps réel du site (ENABLE_REALTIME) : les événements que le site pousse à ses pages, reçus par le bot.
+"""Temps réel du site (REALTIME_ENABLED) : les événements que le site pousse à ses pages, reçus par le bot.
 
 Relevé du 21/11 dans le code du site (client Supabase Realtime, canaux privés) :
 - `auction:<id>` : « BID » à chaque mise (payload {bid: {amount, bidder_id, bidder}, end_at}) et « UPDATE » ;
@@ -190,7 +190,7 @@ class Realtime:
 
 
 async def _websocket(url: str) -> Any:
-    from websockets.asyncio.client import connect  # chargé seulement avec ENABLE_REALTIME
+    from websockets.asyncio.client import connect  # chargé seulement avec REALTIME_ENABLED
 
     return await connect(url, open_timeout=20, ping_interval=None, max_size=2 ** 20,
                          user_agent_header="Mozilla/5.0")

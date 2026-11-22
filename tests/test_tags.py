@@ -24,8 +24,8 @@ async def test_missing_tags_are_created_with_their_emoji_and_colour(tmp_path):
         return httpx.Response(200, json=[{"id": 1, "name": "⚽ football", "color": "#22c55e", "icon": "ball"},
                                          {"id": 2, "name": "🎬 Film", "color": "#f87171"}])
 
-    client, notifier = make_client(tmp_path, handler, dry_run=False, enable_theme_tags=True, showcase_tag="Exposée",
-                                   wish_tag="", position_unsold_tag="", manual_resale_tag="",
+    client, notifier = make_client(tmp_path, handler, dry_run=False, themes_enabled=True, tag_showcase="Exposée",
+                                   tag_wish="", tag_unsold="", tag_manual_resale="",
                                    supabase_anon_key="anon-key", wm_cookie=cookie_for("a1", "r1", 3600))
     ctx = await make_context(tmp_path, client, notifier)
     status, found = await tags.site_tags(ctx)
@@ -55,7 +55,7 @@ async def test_nothing_is_created_in_dry_run(tmp_path):
 def test_themes_are_only_wanted_when_theme_tags_are_on(tmp_path):
     class Ctx:
         from src.config import Settings
-        settings = Settings(_env_file=None, showcase_tag="", wish_tag="Souhait")
+        settings = Settings(_env_file=None, tag_showcase="", tag_wish="Souhait")
 
     names = [t.name for t in tags.wanted(Ctx)]
     assert "Football" not in names and "Souhait" in names

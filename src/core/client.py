@@ -725,8 +725,8 @@ class WikiMastersClient:
 
     def _backoff(self, reason: str, *, limited: bool, retry_after: float = 0.0) -> float:
         self._failures = min(self._failures + 1, 10)
-        base = self.settings.backoff_rate_limit_base_seconds if limited else self.settings.backoff_base_seconds
-        delay = min(self.settings.backoff_max_seconds, base * 2 ** (self._failures - 1))
+        base = self.settings.http_backoff_rate_limit_seconds if limited else self.settings.http_backoff_seconds
+        delay = min(self.settings.http_backoff_max_seconds, base * 2 ** (self._failures - 1))
         delay += random.uniform(0, delay * 0.2)
         delay = max(delay, retry_after)
         self._pause_until = max(self._pause_until, time.monotonic() + delay)
@@ -755,8 +755,8 @@ class WikiMastersClient:
         """Pause limitée à une route : les autres workers continuent."""
         _, failures = self._route_pause.get(name, (0.0, 0))
         failures = min(failures + 1, 10)
-        delay = min(self.settings.backoff_max_seconds,
-                    self.settings.backoff_rate_limit_base_seconds * 2 ** (failures - 1))
+        delay = min(self.settings.http_backoff_max_seconds,
+                    self.settings.http_backoff_rate_limit_seconds * 2 ** (failures - 1))
         delay = max(delay + random.uniform(0, delay * 0.2), retry_after)
         self._route_pause[name] = (time.monotonic() + delay, failures)
         self._route_refused.add(name)
@@ -782,7 +782,7 @@ class WikiMastersClient:
         self._server_error_route = name
         _, failures = self._route_pause.get(name, (0.0, 0))
         failures = min(failures + 1, 10)
-        delay = min(self.settings.backoff_max_seconds, self.settings.backoff_base_seconds * 2 ** (failures - 1))
+        delay = min(self.settings.http_backoff_max_seconds, self.settings.http_backoff_seconds * 2 ** (failures - 1))
         delay += random.uniform(0, delay * 0.2)
         self._route_pause[name] = (time.monotonic() + delay, failures)
         self._route_refused.discard(name)
@@ -876,7 +876,7 @@ class WikiMastersClient:
             reloaded = self._consume_cookie_drop()
             refreshed = not reloaded and (self.adopt_saved_session()
                                           or (self.can_refresh and await self.refresh_session()))
-            due = time.monotonic() - last_probe >= self.settings.session_recheck_minutes * 60
+            due = time.monotonic() - last_probe >= self.settings.session_check_minutes * 60
             if not (reloaded or refreshed or due):
                 continue
             last_probe = time.monotonic()

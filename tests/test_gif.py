@@ -54,7 +54,7 @@ def test_gif_duplicates_are_never_discarded():
 
     groups = group_by_card([copy("a1", "franks", FRANKS), copy("a2", "franks", FRANKS),
                             copy("b1", "avatar", AVATAR), copy("b2", "avatar", AVATAR)])
-    chosen = select_for_discard(groups, {}, set(), s.model_copy(update={"discard_unknown_price_is_worthless": True}))
+    chosen = select_for_discard(groups, {}, set(), s.model_copy(update={"discard_unquoted": True}))
     assert [c.owned.id for c in chosen] == ["b2"]  # le doublon GIF est gardé
 
 

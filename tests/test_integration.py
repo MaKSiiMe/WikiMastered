@@ -47,15 +47,15 @@ def make_client(tmp_path: Path, handler, **overrides) -> tuple[WikiMastersClient
     s = Settings(_env_file=None, **{
         "data_dir": tmp_path, "wm_cookie": "a=b", "wm_user_id": ME, "http_min_spacing_seconds": 0,
         "http_jitter_seconds": 0, "http_write_spacing_seconds": 0,
-        "backoff_base_seconds": 0.01, "backoff_rate_limit_base_seconds": 0.01,
+        "http_backoff_seconds": 0.01, "http_backoff_rate_limit_seconds": 0.01,
         # Les tests du sniper revendent toutes les raretés (par défaut : aucune).
         "sniper_resale_rarities": list(RARITIES),
         # Fenêtre de mise des tests écrits avant le 16/10 (enchères à ~15 s de la fin) : 20 s → 11 s.
-        "sniper_window_seconds": 20, "sniper_min_seconds_left": 11, "night_window_seconds": 20,
-        # Tests écrits avant le 17/10 : mise au minimum (SNIPER_BID_PUSH a ses propres tests).
-        "sniper_bid_push": 0.0,
-        # Avant le 21/10 : mises basses face à l'estimation (SNIPER_MIN_BID_SHARE a ses propres tests).
-        "sniper_min_bid_share": 0.0, **overrides})
+        "sniper_window_seconds": 20, "sniper_min_seconds_left": 11, "sniper_night_window_seconds": 20,
+        # Tests écrits avant le 17/10 : mise au minimum (SNIPER_BID_PUSH_RATIO a ses propres tests).
+        "sniper_bid_push_ratio": 0.0,
+        # Avant le 21/10 : mises basses face à l'estimation (SNIPER_MIN_BID_RATIO a ses propres tests).
+        "sniper_min_bid_ratio": 0.0, **overrides})
     notifier = Recorder()
     client = WikiMastersClient(s, Endpoints.load(ROOT / "config" / "endpoints.yaml"), notifier)
     client._http = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=client._http.cookies)
@@ -200,7 +200,7 @@ async def test_sniper_respects_concurrent_bid_limit(tmp_path):
         raise AssertionError(f"route inattendue {request.url}")
 
     client, notifier = make_client(tmp_path, handler, collection_sets=["jours"], collection_max_price=15,
-                                   portfolio_max_positions=10,
+                                   resale_max_positions=10,
                                    sniper_max_concurrent_bids=5)  # limite volontaire (le site n'en a pas)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
@@ -286,7 +286,7 @@ async def test_lone_server_error_pauses_only_its_route(tmp_path):
             return httpx.Response(502, text="<html>Bad gateway</html>")
         return httpx.Response(200, json={"balance": 3})
 
-    client, _ = make_client(tmp_path, handler, backoff_base_seconds=60)
+    client, _ = make_client(tmp_path, handler, http_backoff_seconds=60)
     with pytest.raises(RateLimited):
         await client.get("sales_summary", card_id="x", wait=False)
     assert client.route_paused_for("sales_summary") > 50
@@ -296,7 +296,7 @@ async def test_lone_server_error_pauses_only_its_route(tmp_path):
         await client.get("sales_summary", card_id="x", wait=False)  # toujours en pause, sans requête
 
     # Des 500 sur deux routes sans succès entre les deux : panne générale, tout le bot attend.
-    client, _ = make_client(tmp_path, handler, backoff_base_seconds=60)
+    client, _ = make_client(tmp_path, handler, http_backoff_seconds=60)
     with pytest.raises(RateLimited):
         await client.get("sales_summary", card_id="x", wait=False)
     task = asyncio.create_task(client.get("market_page"))
@@ -376,8 +376,8 @@ async def test_listings_respect_concurrent_limit(tmp_path):
             return httpx.Response(200, json={"id": "new"})
         raise AssertionError(f"route inattendue {request.url}")
 
-    # SELL_ANYTIME=false : un doublon vise le soir ; sans place, il est reporté au lendemain.
-    client, notifier = make_client(tmp_path, handler, dry_run=False, sell_anytime=False)
+    # DUPLICATES_ANYTIME=false : un doublon vise le soir ; sans place, il est reporté au lendemain.
+    client, notifier = make_client(tmp_path, handler, dry_run=False, duplicates_anytime=False)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
@@ -455,7 +455,7 @@ async def test_portfolio_simulated_buy_then_resale(tmp_path):
             return httpx.Response(200, json={"auction": auction(status="settled_unsold")})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, listing_min_duration_minutes=60)
+    client, notifier = make_client(tmp_path, handler, duplicates_min_duration_minutes=60)
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     await seed_observed(db, "c1", [400, 420, 390])
@@ -596,7 +596,7 @@ def test_position_floor_allows_a_small_loss_after_unsold_listings():
     from src.workers.inventory_manager import position_floor
     s = Settings(_env_file=None)
     assert [position_floor(6119, n, s) for n in (0, 1, 2, 3)] == [6120, 6120, 5508, 5508]
-    assert position_floor(6119, 5, Settings(_env_file=None, position_max_loss=0)) == 6120
+    assert position_floor(6119, 5, Settings(_env_file=None, resale_max_loss_ratio=0)) == 6120
 
 
 @pytest.mark.asyncio
@@ -695,7 +695,7 @@ async def test_protected_tags_are_never_sold_or_discarded(tmp_path):
             return httpx.Response(200, json={"summary": {"C": {"average": 50}}})
         raise AssertionError(f"route inattendue {request.url}")
 
-    client, notifier = make_client(tmp_path, handler, protected_tags=["date"])
+    client, notifier = make_client(tmp_path, handler, tag_protected=["date"])
     ctx = await make_context(tmp_path, client, notifier)
     db = ctx.db
     inv = InventoryManager(ctx)
@@ -771,7 +771,7 @@ async def test_lone_timeout_pauses_only_its_route(tmp_path):
             raise httpx.ReadTimeout("lent", request=request)
         return httpx.Response(200, json={"balance": 3})
 
-    client, _ = make_client(tmp_path, handler, backoff_base_seconds=60)
+    client, _ = make_client(tmp_path, handler, http_backoff_seconds=60)
     with pytest.raises(RateLimited):
         await client.get("sales_summary", card_id="x", wait=False)
     assert client.route_paused_for("sales_summary") > 50 and client._failures == 0

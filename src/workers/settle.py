@@ -14,9 +14,9 @@ _asked: set[str] = set()  # enchères déjà finalisées par le bot (une demande
 
 async def nudge_settle(worker, auction: Auction) -> bool:
     """Enchère finie depuis SETTLE_AFTER mais pas encore réglée par le site (« Finalisation… » sur la fiche, relevé du
-    21/11) : le bot la finalise lui-même, comme le lien de la fiche, une seule fois par enchère (SETTLE_STUCK_AUCTIONS).
+    21/11) : le bot la finalise lui-même, comme le lien de la fiche, une seule fois par enchère (SNIPER_SETTLE_STUCK).
     La carte (ou les WikiBidous d'une vente) arrive plus tôt. True si la demande est partie."""
-    if not worker.settings.settle_stuck_auctions or auction.id in _asked \
+    if not worker.settings.sniper_settle_stuck or auction.id in _asked \
             or auction.seconds_left() > -SETTLE_AFTER.total_seconds():
         return False
     if len(_asked) > 5000:
