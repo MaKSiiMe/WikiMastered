@@ -118,8 +118,8 @@ endpoints:
     path: /api/trades
     params: {active: "1"}
 
-  trades:                       # tous tes échanges, terminés compris (supposé : la même route sans `active`) ;
-    method: GET                 #   lue une fois par échange terminé, pour relever son statut final
+  trades:                       # tous tes échanges, terminés compris, chaque carte avec sa fiche `card` (la page
+    method: GET                 #   /trades du site s'en sert) : lue à chaque passage du worker trades
     path: /api/trades
 
   # --- Écriture (bloquées tant que DRY_RUN=true, jamais rejouées) -------------------

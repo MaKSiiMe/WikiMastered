@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from urllib.parse import parse_qs
 
@@ -94,10 +95,12 @@ def test_kept_copy_is_the_oldest_and_sale_takes_the_newest():
     assert copies[0].id == "fav"
 
 
-def wikidata_handler(qids: dict[str, str], targets: dict[str, list[tuple[str, str]]],
-                     details: dict[str, dict] | None = None):
-    """Faux Wikipédia (titre -> élément) et faux SPARQL (élément -> classes atteintes, puis détails)."""
-    details = details or {}
+def wikidata_handler(qids: dict[str, str], claims: dict[str, dict[str, list[str]]],
+                     parents: dict[str, dict[str, list[str]]] | None = None, calls: list[str] | None = None):
+    """Faux Wikipédia (titre -> élément) et faux SPARQL : liens directs des éléments (propriété -> valeurs, ou
+    « description »), puis parents des classes (propriété -> classe -> parents ; absente : aucun parent)."""
+    parents = parents or {}
+    uri = "http://www.wikidata.org/entity/"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "fr.wikipedia.org":
@@ -106,14 +109,20 @@ def wikidata_handler(qids: dict[str, str], targets: dict[str, list[tuple[str, st
                      for t in titles]
             return httpx.Response(200, json={"query": {"pages": pages}})
         query = parse_qs(request.content.decode())["query"][0]
-        uri = "http://www.wikidata.org/entity/"
-        items = [q for q in set(qids.values()) if f"wd:{q} " in query + " "]
-        if "?via" in query:
-            rows = [{"item": {"value": uri + q}, "via": {"value": via}, "target": {"value": uri + t}}
-                    for q in items for via, t in targets.get(q, [])]
+        items = re.findall(r"wd:(Q\d+)", query)
+        if calls is not None:
+            calls.append("parents" if "?parent" in query else "claims")
+        if "?parent" in query:
+            prop = re.search(r"wdt:(P\d+) \?parent", query).group(1)
+            rows = [{"item": {"value": uri + q}, "parent": {"value": uri + p}}
+                    for q in items for p in parents.get(prop, {}).get(q, [])]
         else:
-            rows = [{"item": {"value": uri + q}, **{k: {"value": v} for k, v in details.get(q, {}).items()}}
-                    for q in items]
+            rows = [{"item": {"value": uri + q},
+                     "p": {"value": "description" if prop == "description" else
+                           "http://www.wikidata.org/prop/direct/" + prop},
+                     "o": {"value": v if prop == "description" else uri + v}}
+                    for q in items for prop, values in claims.get(q, {}).items()
+                    for v in ([values] if prop == "description" else values)]
         return httpx.Response(200, json={"results": {"bindings": rows}})
     return handler
 
@@ -150,8 +159,8 @@ async def test_pass_tags_kept_copy_marks_duplicates_and_unmarks_kept_copy(tmp_pa
                                    wm_cookie=cookie_for("a1", "r1", 3600))
     ctx = await make_context(tmp_path, client, notifier)
     wiki = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(wikidata_handler(
-        {"Japon": "Q17", "France": "Q142"}, {"Q17": [("n", "Q6256"), ("n", "Q23442")], "Q142": [("n", "Q6256")]}))),
-        spacing=0)
+        {"Japon": "Q17", "France": "Q142"}, {"Q17": {"P31": ["Q6256", "Q23442"]}, "Q142": {"P31": ["Q900"]}},
+        {"P279": {"Q900": ["Q901"], "Q901": ["Q6256"]}}))), spacing=0)  # France : pays par deux sous-classes
     from src.workers.themes import run_pass
 
     state = await run_pass(ctx, wiki)
@@ -317,3 +326,82 @@ async def test_theme_tags_message_comes_every_six_hours_with_the_total(monkeypat
     await worker.step()  # 6 h après : le cumul depuis le dernier message
     assert sent[1] == "18 posée(s), 1 retirée(s) ; reste 0."
 
+
+
+def test_hierarchy_reaches_classes_like_the_sparql_paths():
+    """(P31/P279*)|P279+ pour les natures, P106/P279* pour les métiers, P171* (l'élément compris) pour les taxons."""
+    from src.core.wikidata import Claims, Hierarchy
+
+    tree = Hierarchy({"P279": {"Q10": ["Q11"], "Q11": ["Q12", "Q10"], "Q12": [], "Q20": ["Q21"], "Q21": [],
+                               "Q30": ["Q31"], "Q31": []},
+                      "P171": {"Q40": ["Q41"], "Q41": []}})
+    item = Claims("Q1", instance_of={"Q10"}, subclass_of={"Q30"}, occupations={"Q20"}, parent_taxa={"Q40"})
+    assert tree.complete(item)
+    facts = tree.facts(item, {"Q1", "Q10", "Q12", "Q31", "Q21"}, {"Q21", "Q12"}, {"Q1", "Q41"})
+    # Cycle Q10 <-> Q11 sans fin ; l'élément lui-même n'est pas sa propre classe ; un métier n'est pas une nature.
+    assert facts.natures == {"Q10", "Q12", "Q31"} and facts.jobs == {"Q21"} and facts.taxa == {"Q1", "Q41"}
+    assert not tree.complete(Claims("Q2", instance_of={"Q99"}))
+    assert tree.missing({"Q10", "Q98"}, "P279") == {"Q98"}
+
+
+@pytest.mark.asyncio
+async def test_rules_change_reads_nothing_and_old_format_is_read_again(tmp_path):
+    """22/11 : les sous-thèmes changeaient l'empreinte des règles, et les 18 659 cartes étaient à relire."""
+    from src.workers.themes import FACTS_FORMAT, Rules, Theme, classify
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
+    ctx = await make_context(tmp_path, client, notifier)
+    await ctx.db.card_facts_put({"Japon": {"qid": "Q17", "natures": ["Q6256"]}}, "06133f10d4e0")  # ancien format
+    calls: list[str] = []
+    wiki = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(wikidata_handler(
+        {"Japon": "Q17", "Lion": "Q140"}, {"Q17": {"P31": ["Q6256"], "description": "pays d'Asie"},
+                                           "Q140": {"P171": ["Q127960"]}},
+        {"P279": {"Q6256": ["Q7275"]}, "P171": {"Q127960": ["Q729"]}}, calls))), spacing=0)
+    rules = Rules((Theme("Pays", frozenset({"Q6256"})), Theme("Animal", taxa=frozenset({"Q729"}))))
+    themes, pending = await classify(ctx, wiki, {"Japon", "Lion"}, rules, 10)
+    assert themes == {"Japon": ["Pays"], "Lion": ["Animal"]} and pending == 0
+    assert calls == ["claims"] + ["parents"] * 4  # classes Q6256 puis Q7275 ; taxons Q127960 puis Q729
+    assert {t: v for t, (_, v, _) in (await ctx.db.card_facts()).items()} == {"Japon": FACTS_FORMAT,
+                                                                             "Lion": FACTS_FORMAT}
+    # Nouvelles règles : tout se recalcule en local, sans requête.
+    calls.clear()
+    rules = Rules((Theme("État", frozenset({"Q7275"})),))
+    assert (await classify(ctx, wiki, {"Japon", "Lion"}, rules, 10))[0] == {"Japon": ["État"], "Lion": []}
+    assert calls == []
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_class_parents_unread_leave_the_card_pending(tmp_path):
+    """Hiérarchie incomplète (Wikidata en panne entre deux lectures) : pas de thème plutôt qu'un thème faux."""
+    from src.workers.themes import Rules, Theme, classify
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(200, json={}))
+    ctx = await make_context(tmp_path, client, notifier)
+    good = wikidata_handler({"Japon": "Q17"}, {"Q17": {"P31": ["Q6256"]}})
+
+    def parents_down(request: httpx.Request) -> httpx.Response:
+        if b"parent" in request.content:
+            return httpx.Response(429)
+        return good(request)
+
+    wiki = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(parents_down)), spacing=0)
+    rules = Rules((Theme("Pays", frozenset({"Q6256"})),))
+    assert await classify(ctx, wiki, {"Japon"}, rules, 10) == ({}, 1)
+    wiki = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(good)), spacing=0)
+    assert await classify(ctx, wiki, {"Japon"}, rules, 10) == ({"Japon": ["Pays"]}, 0)
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_truncated_sparql_answer_is_an_api_error():
+    """22/11 : réponse coupée en plein JSON avec un statut 200 (« Unterminated string ») : l'erreur sortait du
+    worker (« erreurs répétées ») au lieu d'attendre le passage suivant."""
+    from src.core.client import ApiError
+
+    def cut(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"results": {"bindings": [{"item": {"value": "http://www.wiki')
+
+    wiki = Wikidata(httpx.AsyncClient(transport=httpx.MockTransport(cut)), spacing=0)
+    with pytest.raises(ApiError, match="coupée"):
+        await wiki.claims(["Q1"])

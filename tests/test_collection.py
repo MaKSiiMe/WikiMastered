@@ -598,7 +598,8 @@ async def test_sniper_follows_an_announced_sale_without_searching_its_title(tmp_
 async def test_a_card_you_wishlist_yourself_is_bought_up_to_its_quote_and_tagged(tmp_path):
     """12/11 : une carte ajoutée à la main à la liste de souhaits est achetée par le sniper, sans /sniper demander : toute
     rareté au-dessus de celle possédée, jusqu'à sa cote et au plus WISH_MAX_PRICE ; gagnée, elle est étiquetée et
-    reste souhaitée pour une rareté plus haute. Les cartes mises dans la liste par le bot ne comptent pas."""
+    sort de la liste (22/11 : plus de mise une fois obtenue). Les cartes mises dans la liste par le bot ne comptent
+    pas."""
     import json
 
     from datetime import datetime, timedelta
@@ -616,10 +617,13 @@ async def test_a_card_you_wishlist_yourself_is_bought_up_to_its_quote_and_tagged
         market[aid]["card"]["id"] = "c-ada"
     owned = [{"id": "o-r", "card_id": "c-ada", "obtained_at": "2026-10-01T10:00:00+00:00",
               "card": {"id": "c-ada", "wikipedia_title": "Ada Lovelace", "rarity": "R"}}]
-    tagged = []
+    tagged, unwished = [], []
 
     def handler(request):
         path, params = request.url.path, request.url.params
+        if path == "/rest/v1/wishlist_items" and request.method == "DELETE":
+            unwished.append(params["card_id"])
+            return httpx.Response(204)
         if path == "/rest/v1/wishlist_items":
             return httpx.Response(200, json=[{"card_id": "c-ada"}, {"card_id": "c-14"}])
         if path == "/rest/v1/cards":
@@ -688,12 +692,15 @@ async def test_a_card_you_wishlist_yourself_is_bought_up_to_its_quote_and_tagged
     await sniper._close_bid(bids[0], won=True, simulated=False)
     assert (await db.get_bid(bids[0]["id"]))["closed"] == 1  # gardée, pas une position à revendre
     assert ("SUCCESS", "Carte souhaitée obtenue !") in notifier.sent
-    assert [s.above for s in sniper._wishes.values()] == [3]  # reste souhaitée, au-dessus de la SR
+    assert sniper._wishes == {}  # obtenue : plus de mise, même sur l'UR
     owned.append({"id": "o-sr", "card_id": "c-ada", "obtained_at": datetime.now(UTC).isoformat(),
                   "card": {"id": "c-ada", "wikipedia_title": "Ada Lovelace", "rarity": "SR"}})
     await watch.step()
     assert tagged == [{"user_card_id": "o-sr", "tag_id": "t-wish"}]
-    assert (await db.kv_get(wishes.KV_KEY))["to_tag"] == []
+    assert unwished == ["in.(c-ada)"]  # retirée de ta liste de souhaits ; la carte du bot (c-14) n'est pas touchée
+    assert ("INFO", "Cartes souhaitées obtenues") in notifier.sent
+    state = await db.kv_get(wishes.KV_KEY)
+    assert state["to_tag"] == [] and state["cards"] == {}
     await db.close()
 
 
@@ -858,3 +865,50 @@ def test_old_french_keys_of_the_config_files_are_still_read(tmp_path, monkeypatc
     theme = themes.load_rules(rules).themes[0]
     assert (theme.natures, theme.taxa, theme.jobs, theme.unless, theme.alone, theme.removable) == (
         frozenset({"Q1"}), frozenset({"Q2"}), frozenset({"Q3"}), ("Autre",), True, True)
+
+
+@pytest.mark.asyncio
+async def test_wished_card_from_a_pack_leaves_the_wishlist_but_an_older_copy_does_not(tmp_path):
+    """22/11 : « enlever les cartes de la liste de souhaits une fois obtenues ». Une carte déjà possédée avant son
+    ajout reste souhaitée (rareté plus haute) ; un exemplaire arrivé ensuite (paquet, échange) la retire. Simulé :
+    rien n'est retiré du site, mais la carte n'est plus misée."""
+    from datetime import datetime, timedelta
+
+    from src.workers import wishes
+    from tests.test_session import cookie_for
+
+    owned = [{"id": "o-r", "card_id": "c-ada", "obtained_at": "2026-10-01T10:00:00+00:00",
+              "card": {"id": "c-ada", "wikipedia_title": "Ada Lovelace", "rarity": "R"}}]
+    unwished = []
+
+    def handler(request):
+        path = request.url.path
+        if path == "/rest/v1/wishlist_items" and request.method == "DELETE":
+            unwished.append(request.url.params["card_id"])
+            return httpx.Response(204)
+        if path == "/rest/v1/wishlist_items":
+            return httpx.Response(200, json=[{"card_id": "c-ada"}])
+        if path == "/rest/v1/cards":
+            return httpx.Response(200, json=[{"id": "c-ada", "wikipedia_title": "Ada Lovelace"}])
+        if path == "/api/my-collection":
+            return httpx.Response(200, json={"collection": owned})
+        raise AssertionError(f"route inattendue {request.method} {request.url}")
+
+    for simulated in (True, False):
+        client, notifier = make_client(tmp_path / str(simulated), handler, dry_run=False, wish_max_price=200,
+                                       simulate=["wishes"] if simulated else [], supabase_anon_key="k",
+                                       wm_cookie=cookie_for("a1", "r1", 3600))
+        ctx = await make_context(tmp_path / str(simulated), client, notifier)
+        start = datetime.now(UTC)
+        assert (await wishes.sync(ctx, start))["obtained"] == []
+        assert list(await wishes.load(ctx.db, 200)) and unwished == []  # la R d'avant l'ajout ne compte pas
+        owned.append({"id": "o-ur", "card_id": "c-ada", "obtained_at": (start + timedelta(hours=1)).isoformat(),
+                      "card": {"id": "c-ada", "wikipedia_title": "Ada Lovelace", "rarity": "UR"}})
+        changed = await wishes.sync(ctx, start + timedelta(hours=7))
+        assert await wishes.load(ctx.db, 200) == {}
+        if simulated:
+            assert changed["obtained"] == [] and unwished == []
+        else:
+            assert changed["obtained"] == ["Ada Lovelace"] and unwished == ["in.(c-ada)"]
+        owned.pop()
+        await ctx.db.close()

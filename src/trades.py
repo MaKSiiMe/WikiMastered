@@ -220,26 +220,68 @@ async def evaluate(ctx: Context, given: list[Priced], received: list[Priced], wb
     return e
 
 
-async def item_details(ctx: Context, item: TradeItem, me: str, owned: bool = False) -> tuple[str, str | None, bool]:
+LOOKUP_BATCH = 100  # identifiants par requête à Supabase (la liste passe dans l'adresse)
+
+
+async def _rows(ctx: Context, table: str, select: str, ids: set[str]) -> dict[str, dict]:
+    """Lignes d'une table Supabase par identifiant ; table illisible (droits, panne) : {}, on se rabat sur le reste."""
+    out: dict[str, dict] = {}
+    wanted = sorted(ids)
+    for start in range(0, len(wanted), LOOKUP_BATCH):
+        try:
+            status, rows = await ctx.client.supabase("GET", table, background=True, params={
+                "select": select, "id": f"in.({','.join(wanted[start:start + LOOKUP_BATCH])})"})
+        except ApiError as exc:
+            log.debug("cartes d'échange : %s illisible (%s)", table, exc)
+            return out
+        if status != 200 or not isinstance(rows, list):
+            log.info("cartes d'échange : table %s illisible (HTTP %s)", table, status)
+            return out
+        out.update({str(r["id"]): r for r in rows if isinstance(r, dict) and r.get("id")})
+    return out
+
+
+async def lookup_items(ctx: Context, items: list[TradeItem]) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Cartes d'un échange données sans leur fiche (`card`) : (catalogue par card_id : titre et rareté de la carte,
+    table Supabase `cards` ; exemplaires par user_card_id : rareté figée et shiny, table `user_cards`)."""
+    bare = [i for i in items if not i.card]
+    catalog = await _rows(ctx, "cards", "id,wikipedia_title,rarity", {i.card_id for i in bare if i.card_id})
+    copies = await _rows(ctx, "user_cards", "id,card_id,snapshot_rarity,is_shiny",
+                         {i.user_card_id for i in bare if i.user_card_id})
+    return catalog, copies
+
+
+async def item_details(ctx: Context, item: TradeItem, me: str, owned: bool = False,
+                       catalog: dict[str, dict] | None = None,
+                       copies: dict[str, dict] | None = None) -> tuple[str, str | None, bool]:
     """(titre, rareté, shiny) d'une carte d'échange. Le 01/11, le site n'en donnait que les identifiants (« ? · ? » pour
-    les 7 cartes demandées par Lpancho) : titre lu sur la route des ventes de la carte, rareté de ton exemplaire lue
-    dans ta collection. Rareté d'une carte de l'autre joueur : inconnue. Depuis le 20/11, la route des ventes ne donne
-    plus le titre : il vient d'abord de ce que le bot a vu sur le marché."""
+    les 7 cartes demandées par Lpancho). Depuis la mise à jour du site du 20-21/11, la route des ventes ne donne plus
+    le titre : toutes les cartes des échanges sortaient « ? · ? » (Isillion et ForceTrq, 22/11). D'abord les tables
+    Supabase (`lookup_items`) ; sinon, titre vu par le bot sur le marché, rareté d'un exemplaire déjà mis en vente par
+    le bot ou lue dans ta collection. Rareté d'une carte de l'autre joueur introuvable : inconnue."""
     title, rarity, shiny = item.title or "?", item.rarity, item.shiny
     if item.card or not item.card_id:
         return title, rarity, shiny
-    # Exemplaire que le bot a déjà mis en vente : sa rareté est connue, même s'il a quitté la collection.
-    known = await ctx.db.known_copy(item.user_card_id) if item.user_card_id else None
+    card = (catalog or {}).get(item.card_id) or {}
+    copy = (copies or {}).get(item.user_card_id or "")
+    if copy is not None:  # la rareté figée de l'exemplaire, sinon celle de la carte (comme la fiche du site)
+        rarity = copy.get("snapshot_rarity") or card.get("rarity") or rarity
+        shiny = shiny or bool(copy.get("is_shiny"))
+    title = str(card.get("wikipedia_title") or "") or await ctx.db.title_of(item.card_id) or "?"
+    known = await ctx.db.known_copy(item.user_card_id) if item.user_card_id and not rarity else None
     try:
-        title = (await ctx.db.title_of(item.card_id)
-                 or (await ctx.api.sales_summary(item.card_id, background=True)).wikipedia_title or "?")
+        if title == "?":
+            title = (await ctx.api.sales_summary(item.card_id, background=True)).wikipedia_title or "?"
+        if rarity:
+            return title, rarity, shiny
+        # Exemplaire que le bot a déjà mis en vente : sa rareté est connue, même s'il a quitté la collection.
         if known:
             return title, known[0], known[1]
         # Le tien, ou celui que tu as reçu d'un échange terminé : cherché dans ta collection.
         if title != "?" and ((item.offered_by or "").lower() == me or owned):
-            async for copy in ctx.api.iter_collection(q=title, background=True):
-                if copy.id == item.user_card_id:
-                    return title, copy.rarity, copy.is_shiny
+            async for found in ctx.api.iter_collection(q=title, background=True):
+                if found.id == item.user_card_id:
+                    return title, found.rarity, found.is_shiny
     except (ApiError, RateLimited) as exc:
         log.debug("carte d'échange %s illisible (%s)", item.card_id, exc)
     return title, rarity, shiny
@@ -251,8 +293,9 @@ async def evaluate_trade(ctx: Context, trade: Trade, me: str, offers: bool = Tru
     sans chercher de contre-offre (échange que tu proposes toi-même). `at` : ancien échange, cartes à leur valeur
     de cette date."""
     given, received = [], []
+    catalog, copies = await lookup_items(ctx, trade.items)
     for item in trade.items:
-        title, rarity, shiny = await item_details(ctx, item, me, owned=at is not None)
+        title, rarity, shiny = await item_details(ctx, item, me, at is not None, catalog, copies)
         priced = await card_value(ctx, item.card_id or (item.card.id if item.card else None), title, rarity, shiny,
                                   at)
         (given if (item.offered_by or "").lower() == me else received).append(priced)

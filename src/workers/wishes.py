@@ -6,10 +6,11 @@ deviennent des cartes souhaitées (kv « wishes »), avec leur titre et la plus 
 
 Le sniper les mise comme une carte demandée sur Discord (/sniper demander), au minimum, jusqu'à la cote de la carte dans la rareté
 en vente et jamais au-dessus de WISH_MAX_PRICE. Sans cote connue : jusqu'à WISH_UNQUOTED_MAX_PRICE (0 = pas de mise).
-Il prend toute rareté plus haute que
-celle que tu possèdes : une carte obtenue en R peut encore être rachetée en SR, tant qu'elle reste dans ta liste.
-Une carte gagnée est gardée (pas revendue) et reçoit l'étiquette TAG_WISH. Le bot ne retire rien de ta liste : retire
-la carte toi-même pour arrêter.
+Il prend toute rareté plus haute que celle que tu possèdes déjà : une carte que tu as en R, ajoutée à ta liste, est
+achetée en SR ou au-dessus.
+Une carte gagnée est gardée (pas revendue) et reçoit l'étiquette TAG_WISH. Depuis le 22/11, une carte obtenue après son
+ajout (gagnée par le sniper, ou arrivée par un paquet ou un échange) n'est plus misée et sort de ta liste de souhaits
+(groupe d'écriture « wishes ») ; remets-la dans ta liste pour viser une rareté plus haute.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ async def load(db: Database, max_price: int) -> dict[str, Snipe]:
     out: dict[str, Snipe] = {}
     for card in (await _state(db))["cards"].values():
         best = int(card.get("best", -1))
-        if card.get("title") and best < len(RARITIES) - 1:
+        if card.get("title") and best < len(RARITIES) - 1 and not card.get("obtained"):
             snipe = Snipe(card["title"], max_price, added_at=card.get("since", ""), wish=True, above=best)
             out[snipe.key] = snipe
     return out
@@ -64,17 +65,20 @@ async def load(db: Database, max_price: int) -> dict[str, Snipe]:
 async def card_ids(db: Database) -> dict[str, str]:
     """Id de carte -> clé de titre, pour reconnaître les ventes annoncées par le site."""
     return {cid: collection_key(card["title"]) for cid, card in (await _state(db))["cards"].items()
-            if card.get("title")}
+            if card.get("title") and not card.get("obtained")}
 
 
 async def record_win(db: Database, title: str, rarity: str | None, at: datetime | None = None) -> None:
-    """Carte souhaitée gagnée : sa rareté devient celle possédée, et l'exemplaire attend son étiquette."""
+    """Carte souhaitée gagnée : plus de mise, elle sort de ta liste au prochain passage, et l'exemplaire attend son
+    étiquette."""
     state = await _state(db)
     key = collection_key(title)
+    when = (at or utcnow()).isoformat()
     for card in state["cards"].values():
         if card.get("title") and collection_key(card["title"]) == key:
             card["best"] = max(int(card.get("best", -1)), RARITY_RANK.get(rarity or "", -1))
-    state["to_tag"].append({"title": title, "rarity": rarity, "since": (at or utcnow()).isoformat(), "tries": 0})
+            card["obtained"] = when
+    state["to_tag"].append({"title": title, "rarity": rarity, "since": when, "tries": 0})
     await db.kv_set(KV_KEY, state)
 
 
@@ -106,7 +110,9 @@ def best_rank(rows: list[OwnedCard]) -> int:
 
 
 async def sync(ctx: Context, now: datetime | None = None) -> dict:
-    """Aligne les cartes souhaitées sur ta liste de souhaits. Renvoie {"added": titres, "removed": titres}."""
+    """Aligne les cartes souhaitées sur ta liste de souhaits et retire de ta liste celles obtenues depuis leur ajout.
+    Renvoie {"added": titres, "removed": titres retirés par toi, "obtained": titres retirés par le bot,
+    "error": problème du site}."""
     now = now or utcnow()
     state = await _state(ctx.db)
     cards: dict[str, dict] = state["cards"]
@@ -125,11 +131,36 @@ async def sync(ctx: Context, now: datetime | None = None) -> dict:
         if checked and now - datetime.fromisoformat(checked) < OWNED_FRESH:
             continue
         with contextlib.suppress(ApiError):  # relue au passage suivant
+            copies = await _copies(ctx, card["title"])
             # Jamais sous la rareté d'une carte gagnée : l'exemplaire met un moment à arriver dans la collection.
-            card["best"] = max(int(card.get("best", -1)), best_rank(await _copies(ctx, card["title"])))
+            card["best"] = max(int(card.get("best", -1)), best_rank(copies))
             card["checked"] = now.isoformat()
+            # Arrivée par un paquet ou un échange depuis son ajout : obtenue aussi.
+            since = datetime.fromisoformat(card["since"]) if card.get("since") else now
+            if not card.get("obtained") and any(c.obtained_at and c.obtained_at >= since for c in copies):
+                card["obtained"] = now.isoformat()
+    obtained, error = await _remove_obtained(ctx, cards)
     await ctx.db.kv_set(KV_KEY, state)
-    return {"added": added, "removed": removed}
+    return {"added": added, "removed": removed, "obtained": obtained, "error": error}
+
+
+async def _remove_obtained(ctx: Context, cards: dict[str, dict]) -> tuple[list[str], str]:
+    """Retire de ta liste de souhaits du site les cartes obtenues (elles quittent aussi l'état). Simulé : rien n'est
+    retiré, la carte reste marquée obtenue et n'est plus misée. Renvoie (titres retirés, problème)."""
+    done = [cid for cid, card in cards.items() if card.get("obtained")]
+    if not done:
+        return [], ""
+    if not ctx.settings.is_live(wishlist.WRITE):
+        return [], ""
+    try:
+        status, data = await ctx.client.supabase(
+            "DELETE", "wishlist_items", prefer="return=minimal",
+            params={"user_id": f"eq.{ctx.client.user_id}", "card_id": f"in.({','.join(done)})"})
+    except ApiError as exc:
+        return [], f"retrait de ta liste de souhaits impossible : {exc}"
+    if status not in (200, 204):
+        return [], f"retrait de ta liste de souhaits refusé (HTTP {status}) : {str(data)[:200]}"
+    return [cards.pop(cid).get("title", cid) for cid in done], ""
 
 
 async def tag_won(ctx: Context) -> tuple[int, str]:
@@ -221,11 +252,18 @@ class WishWatch(Worker):
             self.log.info("carte souhaitée : %s, suivie par le sniper", title)
         for title in changed["removed"]:
             self.log.info("carte souhaitée : %s retirée de ta liste, plus suivie", title)
+        if changed["obtained"]:
+            self.log.info("cartes souhaitées obtenues, retirées de ta liste : %s", ", ".join(changed["obtained"]))
+            self.notifier.info("Cartes souhaitées obtenues", ", ".join(changed["obtained"])
+                               + " : retirées de ta liste de souhaits, plus de mise.")
+        if changed["error"]:
+            self.log.warning("cartes souhaitées : %s", changed["error"])
         if changed["added"]:
             self.notifier.info(
                 "Cartes souhaitées suivies", ", ".join(changed["added"]) + " : le sniper les mise jusqu'à leur cote "
                 f"(au plus {self.settings.wish_max_price} WB), toute rareté au-dessus de celle que tu possèdes. "
-                "Gagnée, la carte est gardée" + (f" avec l'étiquette « {tag} »." if tag else "."), important=True)
+                "Gagnée, la carte est gardée" + (f" avec l'étiquette « {tag} »" if tag else "")
+                + " et sort de ta liste de souhaits.", important=True)
         done, problem = await tag_won(self.ctx)
         if done:
             self.log.info("étiquette « %s » posée sur %d carte(s) souhaitée(s)", tag, done)

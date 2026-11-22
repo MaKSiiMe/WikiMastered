@@ -689,6 +689,14 @@ async def run_bot(settings: Settings) -> None:
                         ", ".join(f"{old} → {new}" for old, new in legacy))
             ctx.notifier.warning(f"{len(legacy)} réglage(s) sous leur ancien nom",
                                  f"Encore lus, mais à renommer dans Portainer (ou le .env) :\n{lines}"[:3900])
+        if unused := settings.unused_names:
+            log.warning("Variables que le bot ne lit pas (à retirer de Portainer ou du .env) : %s", ", ".join(unused))
+            ctx.notifier.warning(f"{len(unused)} variable(s) que le bot ne lit pas",
+                                 "Réglage retiré du bot, ou nom mal écrit : sans effet, à retirer de Portainer (ou du "
+                                 f".env), ou à corriger si c'est une faute de frappe :\n{chr(10).join(unused)}"[:3900])
+        if same := settings.default_names:
+            log.info("Réglages égaux au défaut du dépôt (%d, sans effet aujourd'hui mais gardés si le défaut change) : "
+                     "%s", len(same), ", ".join(same))
 
         # Chaque tâche est supervisée à part : si l'une plante, elle est relancée et les autres continuent.
         started_at = utcnow()

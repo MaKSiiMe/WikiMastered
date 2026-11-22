@@ -406,7 +406,7 @@ Le site laisse passer environ 9 ou 10 mises par vérification anti-bot. Avec `CO
 
 ## Souhaits
 
-Le worker `wishes` achète les cartes que tu ajoutes toi-même à ta liste de souhaits du site, jusqu'à leur cote, dans toute rareté plus haute que celle que tu possèdes. Gagnée, la carte est gardée et reçoit `TAG_WISH`.
+Le worker `wishes` achète les cartes que tu ajoutes toi-même à ta liste de souhaits du site, jusqu'à leur cote, dans toute rareté plus haute que celle que tu possèdes. Gagnée, la carte est gardée, reçoit `TAG_WISH` et sort de ta liste de souhaits (comme une carte arrivée par un paquet ou un échange après son ajout).
 
 ```sh
 WISH_MAX_PRICE=0                        # cartes de ta liste de souhaits achetées jusqu'à leur cote, au plus N WB ; 0 = désactivé
