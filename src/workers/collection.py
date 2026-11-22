@@ -376,6 +376,10 @@ async def tag_showcase(ctx: Context, copies: dict[str, list[OwnedCard]], active:
         # Une carte de collection ne perd l'étiquette qu'une fois son exemplaire gardé étiqueté.
         if (key := collection_key(row.title)) in kept and kept[key].id not in done:
             continue
+        # 22/11 : des centaines d'exemplaires de collection à libérer d'un coup ; la suite au passage suivant.
+        if out["untagged"] >= ctx.settings.tag_collection_max_per_run:
+            out["to_untag"] = out.get("to_untag", 0) + 1
+            continue
         if not live:
             log.info("[DRY RUN] étiquette « %s » retirée de %s (%s)", tag, row.title, row.rarity)
             continue
@@ -432,7 +436,7 @@ class CollectionWorker(Worker):
         if (shown := state.get("showcase") or {}).get("tagged") or shown.get("untagged"):
             self.notifier.info("Collection : étiquette des vitrines",
                                f"« {shown['tag']} » ajoutée à {shown['tagged']} carte(s), retirée de "
-                               f"{shown['untagged']} ; reste {shown['to_tag']}.")
+                               f"{shown['untagged']} ; reste {shown['to_tag'] + shown.get('to_untag', 0)}.")
         if shown.get("error"):
             self.log.warning("étiquette des vitrines : %s", shown["error"])
         if state.get("tag_error"):
