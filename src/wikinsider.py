@@ -3,7 +3,7 @@
 Le bot ne se connecte pas à Wikinsider : il prépare seulement, pour chaque opération réelle, les champs de son
 formulaire (« Noter un achat » : shiny, type, nom exact, prix, lien de l'enchère ; « Noter une vente » : la carte et
 le prix). Le bouton « ✅ Noté » efface le message : le salon ne garde que ce qu'il reste à noter.
-Seulement les shiny et les L (et au-dessus) : le reste ne se note pas sur Wikinsider (choix du 22/11).
+Seulement les shiny (la rareté au-dessus de L, « L+ ») : aucune autre carte, L comprise (choix du 22/11).
 Rien sans DISCORD_WEBHOOK_WIKINSIDER, et rien en simulation.
 """
 
@@ -11,13 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.config import RARITY_RANK
 from src.core.notifier import Level, Topic, auction_url
 
 
 def worth_noting(shiny: bool, rarity: str | None) -> bool:
-    """Shiny, ou L et au-dessus."""
-    return shiny or RARITY_RANK.get(rarity or "", -1) >= RARITY_RANK["L"]
+    """Shiny seulement, quelle que soit la rareté de la carte ; une L ordinaire ne se note pas."""
+    return shiny
 
 
 def _common(title: str, price: int, shiny: bool, rarity: str | None, link: str | None) -> list[tuple[str, str]]:

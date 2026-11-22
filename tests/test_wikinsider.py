@@ -47,13 +47,13 @@ def test_only_its_own_channel_never_another():
 @pytest.mark.asyncio
 async def test_messages_hold_the_wikinsider_form_fields_and_a_noted_button():
     cap = Capture()
-    wikinsider.note_buy(cap, BASE, bid_id=12, title="Ana de Armas", price=8800, shiny=False, rarity="L",
+    wikinsider.note_buy(cap, BASE, bid_id=12, title="Ana de Armas", price=8800, shiny=True, rarity="L",
                         auction_id="a1")
-    wikinsider.note_sale(cap, BASE, listing_id=7, title="Ana de Armas", price=9600, shiny=False, rarity="L",
+    wikinsider.note_sale(cap, BASE, listing_id=7, title="Ana de Armas", price=9600, shiny=True, rarity="L",
                          auction_id="a2", bought=8800)
     buy, sale = cap.sent
     assert buy["title"] == "Achat à noter : Ana de Armas" and buy["topic"] is Topic.WIKINSIDER and buy["live"]
-    assert dict(buy["columns"]) == {"Nom exact": "`Ana de Armas`", "Prix": "`8800`", "Shiny": "non",
+    assert dict(buy["columns"]) == {"Nom exact": "`Ana de Armas`", "Prix": "`8800`", "Shiny": "oui",
                                     "Type": "Marché", "Rareté": "L",
                                     "Lien de l'enchère": f"{BASE}/marketplace/a1"}
     assert "Noter un achat" in buy["description"] and buy["actions"] == {"kind": "wikinsider", "bid": 12}
@@ -96,9 +96,9 @@ async def test_a_real_sale_of_a_position_is_to_be_noted(tmp_path):
     await db.close()
 
 
-def test_only_shiny_and_legendary_cards_are_noted():
-    assert worth_noting(False, "L") and worth_noting(True, "C") and worth_noting(True, None)
-    assert not worth_noting(False, "UR") and not worth_noting(False, None)
+def test_only_shiny_cards_are_noted_never_a_plain_legendary():
+    assert worth_noting(True, "L") and worth_noting(True, "C") and worth_noting(True, None)
+    assert not worth_noting(False, "L") and not worth_noting(False, "UR") and not worth_noting(False, None)
     cap = Capture()
     wikinsider.note_buy(cap, BASE, bid_id=1, title="Fer", price=300, shiny=False, rarity="UR", auction_id="a")
     wikinsider.note_sale(cap, BASE, listing_id=2, title="Fer", price=400, shiny=False, rarity="UR", auction_id="b")
