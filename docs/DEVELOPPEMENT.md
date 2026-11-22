@@ -34,7 +34,7 @@ src/
 ├── workers/             une boucle par worker (voir README), base commune dans base.py
 ├── discord_bot.py       commandes slash et boutons : pilotage
 ├── discord_cards.py     commandes slash et boutons : cartes et ventes
-├── tools/               parse_curl, browser_login, gif_list ; inspect_api sert la commande inspect
+├── tools/               parse_curl, browser_login, site_map, gif_list ; inspect_api sert la commande inspect
 └── …                    bilan (account.py), récap (recap.py), sauvegarde (backup.py), échanges (trades.py)…
 config/
 ├── endpoints.yaml       routes du site
@@ -76,6 +76,7 @@ Le site peut changer sans prévenir. `python -m src.main inspect` compare ses r�
 |---|---|
 | Corriger une route | Copier la requête depuis les DevTools (« Copier comme cURL (bash) »), puis `python -m src.tools.parse_curl --name place_bid --write < requete.curl` : écrit `config/endpoints.local.yaml`, prioritaire et ignoré par git |
 | Découvrir une route | `python -m src.tools.browser_login --record`, puis naviguer : les appels vont dans `data/inspect/capture/` |
+| Voir ce qu'une mise à jour du site a changé | `python -m src.tools.site_map` : carte et différences dans `data/site-map/` |
 
 Une correction durable va dans [`config/endpoints.yaml`](../config/endpoints.yaml), et une réponse différente dans `src/core/models.py`. Chaque route y cite sa source : garde cette habitude, et n'invente aucune route.
 
