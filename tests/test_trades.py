@@ -311,3 +311,42 @@ async def test_concluded_trade_values_the_card_received_from_the_collection(tmp_
     assert kept["received"][0]["rarity"] == "L" and kept["received_total"] == 5675
     assert kept["given_total"] == 5500
     await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_trade_cards_with_ids_only_are_read_in_the_site_tables(tmp_path):
+    """22/11, Isillion et ForceTrq : depuis la mise à jour du site, la route des ventes ne donne plus le titre et
+    toutes les cartes sortaient « ? · ? ». Titre et rareté de la carte : table `cards` ; rareté figée de
+    l'exemplaire et shiny : table `user_cards`, les deux côtés de l'échange en une requête chacune."""
+    from tests.test_session import cookie_for
+
+    reads = []
+
+    def handler(request):
+        if request.url.host.endswith("supabase.co"):
+            table = request.url.path.rsplit("/", 1)[-1]
+            ids = request.url.params["id"].removeprefix("in.(").removesuffix(")").split(",")
+            reads.append((table, sorted(ids)))
+            rows = {"cards": [{"id": "emma", "wikipedia_title": "Emma Watson", "rarity": "SR"},
+                              {"id": "zendaya", "wikipedia_title": "Zendaya", "rarity": "R"}],
+                    "user_cards": [{"id": "u-emma", "card_id": "emma", "snapshot_rarity": "L", "is_shiny": False},
+                                   {"id": "u-z", "card_id": "zendaya", "snapshot_rarity": None, "is_shiny": True}]}
+            return httpx.Response(200, json=[r for r in rows[table] if r["id"] in ids])
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, supabase_anon_key="anon-key",
+                                   wm_cookie=cookie_for("a1", "r1", 3600))
+    ctx = await make_context(tmp_path, client, notifier)
+    now = datetime.now(UTC)
+    await ctx.db.db.executemany(
+        "INSERT INTO observed_sales (auction_id, card_id, title, rarity, price, ended_at) VALUES (?, ?, ?, 'L', ?, ?)",
+        [(f"e{i}", "emma", "Emma Watson", p, (now - timedelta(hours=i + 1)).isoformat())
+         for i, p in enumerate(SALES["emma"][1])])
+    await ctx.db.db.commit()
+    raw = trade("t", AUTRE, ME, [{"card_id": "emma", "user_card_id": "u-emma", "offered_by": ME},
+                               {"card_id": "zendaya", "user_card_id": "u-z", "offered_by": AUTRE}])
+    e = await trades.evaluate_trade(ctx, Trade.model_validate(raw), ME)
+    assert (e.given[0].label, e.given[0].value) == ("L · Emma Watson", 5500)
+    assert e.received[0].label == "R · Zendaya ✨"  # pas de rareté figée : celle de la carte
+    assert reads == [("cards", ["emma", "zendaya"]), ("user_cards", ["u-emma", "u-z"])]
+    await ctx.db.close()

@@ -1,9 +1,10 @@
 """Échanges proposés : chacun est évalué une fois (src/trades.py) et annoncé sur Discord, avec la contre-offre à
 envoyer s'il est défavorable.
 
-Toutes les TRADES_CHECK_MINUTES min, relit les échanges actifs (/api/trades?active=1, requête de fond). Un échange en
-attente dont tu es le destinataire (on te le propose, contre-offres comprises) est annoncé une seule fois, dans le salon
-principal. Le bot ne répond jamais à ta place : il n'existe pas de route connue pour accepter, refuser ou contrer.
+Toutes les TRADES_CHECK_MINUTES min, relit tes échanges (/api/trades, requête de fond), comme la page des échanges du
+site : chaque carte y vient avec sa fiche, alors que /api/trades?active=1 ne donne que ses identifiants (le site ne
+s'en sert que pour savoir quelles cartes sont engagées). Un échange en attente dont tu es le destinataire (on te le
+propose, contre-offres comprises) est annoncé une seule fois, dans le salon principal. Le bot ne répond jamais à ta place : il n'existe pas de route connue pour accepter, refuser ou contrer.
 
 Chaque échange en attente, proposé par toi ou reçu, est aussi gardé avec la valeur de chaque côté (kv « trades_log »),
 puis son statut final quand il n'est plus en cours : c'est la base du rendement de tes échanges.
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import random
 from datetime import datetime
+from typing import Any
 
 from src import trades
 from src.core.client import ApiError, RateLimited
@@ -33,12 +35,12 @@ class TradeWatch(Worker):
     topic = Topic.TRADES
 
     async def step(self) -> float:
-        raw = await self.ctx.client.get("active_trades", background=True)
+        raw = await self.ctx.client.get("trades", background=True)
         listed = TradesList.model_validate(raw)
         me = (self.ctx.client.user_id or "").lower()
         seen = set(await self.db.kv_get(KV_KEY) or [])
         history: dict[str, dict] = await self.db.kv_get(LOG_KEY) or {}
-        active = {t.id for t in listed.trades if t.id}
+        active = {t.id for t in listed.trades if t.id and t.status == "pending"}
         for trade in listed.trades:
             if not trade.id or trade.status != "pending" or not me:
                 continue
@@ -58,28 +60,22 @@ class TradeWatch(Worker):
                                columns=e.columns, sections=[("\u200b", e.notes)] if e.notes else [],
                                url=f"{self.ctx.client.endpoints.base_url}/trades", important=True,
                                alert=True)  # à accepter ou refuser sur le site
-        await self._close_ended(history, active, me)
+        await self._close_ended(history, active, me, raw)
         if me and not await self.db.kv_get(BACKFILL_KEY):
-            await self._backfill(history, me)
+            await self._backfill(history, me, raw)
         await self.db.kv_set(KV_KEY, sorted(seen & active))
         await self.db.kv_set(LOG_KEY, dict(sorted(history.items(), key=lambda kv: kv[1]["seen"])[-LOG_MAX:]))
         minutes = self.settings.trades_check_minutes
         return random.uniform(0.8, 1.2) * minutes * 60
 
-    async def _close_ended(self, history: dict[str, dict], active: set[str], me: str) -> None:
-        """Échanges qui ne sont plus en cours : statut final relu sur le site (accepté, refusé, annulé…), sinon
-        « ended ». Un échange conclu avec des cartes sans valeur est réévalué (`_revalue`). Le premier est écrit en
-        entier dans les logs : ses champs réels restent à relever."""
+    async def _close_ended(self, history: dict[str, dict], active: set[str], me: str, raw: Any) -> None:
+        """Échanges qui ne sont plus en cours : statut final lu dans la liste du site (accepté, refusé, annulé…),
+        sinon « ended ». Un échange conclu avec des cartes sans valeur est réévalué (`_revalue`)."""
         ended = [t for tid, t in history.items() if t["status"] == "pending" and tid not in active]
         if not ended:
             return
-        final: dict[str, dict] = {}
-        try:
-            raw = await self.ctx.client.get("trades", background=True)
-            final = {str(t.get("id")): t for t in (raw.get("trades") or [] if isinstance(raw, dict) else [])
-                     if isinstance(t, dict)}
-        except (ApiError, RateLimited) as exc:
-            self.log.info("échanges terminés illisibles (%s) : statut final inconnu", exc)
+        final = {str(t.get("id")): t for t in (raw.get("trades") or [] if isinstance(raw, dict) else [])
+                 if isinstance(t, dict)}
         for t in ended:
             found = final.get(t["id"])
             status = str((found or {}).get("status") or "")
@@ -109,16 +105,11 @@ class TradeWatch(Worker):
         t["received_total"] = round(sum(c.get("value") or 0 for c in t["received"]) + t["wb_received"])
         t["unknown"] = sum(c.get("value") is None for c in t["given"] + t["received"])
 
-    async def _backfill(self, history: dict[str, dict], me: str) -> None:
+    async def _backfill(self, history: dict[str, dict], me: str, raw: Any) -> None:
         """Une seule fois : tes échanges terminés avant le suivi (12/11), si le site les donne encore. Chaque carte
         est comptée à sa valeur de la date de l'échange quand ses ventes de l'époque sont encore en base, sinon à
         l'estimation d'aujourd'hui ; la rareté d'une carte qui a quitté ta collection sans passer par le bot reste
-        inconnue. Route illisible : nouvel essai au passage suivant."""
-        try:
-            raw = await self.ctx.client.get("trades", background=True)
-        except (ApiError, RateLimited) as exc:
-            self.log.info("anciens échanges illisibles (%s) : nouvel essai au prochain passage", exc)
-            return
+        inconnue."""
         rows = [t for t in (raw.get("trades") or [] if isinstance(raw, dict) else []) if isinstance(t, dict)]
         old = [t for t in rows if t.get("id") and t["id"] not in history and str(t.get("status") or "") != "pending"
                and me in (str(t.get("initiator_id") or "").lower(), str(t.get("recipient_id") or "").lower())]
