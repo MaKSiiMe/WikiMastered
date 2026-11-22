@@ -44,7 +44,7 @@ BASE_URL = "https://www.wiki-masters.com"
 SEEDS = ["/", "/marketplace", "/collection", "/packs", "/trades", "/profile", "/achievements", "/friends", "/guilds",
          "/wishlist", "/leaderboard", "/settings", "/shop", "/pro", "/notifications", "/chat", "/rules", "/battle",
          "/dms", "/guild", "/iceberg", "/pulls"]
-NEVER = ("/logout", "/signout", "/api/", "/_next/", "/auth/")  # pages jamais ouvertes
+NEVER = ("/logout", "/signout", "/api/", "/_next/", "/auth/", "/admin", "/moderation")  # pages jamais ouvertes
 MAX_PAGES = 45
 PER_PATTERN = 2          # pages ouvertes au plus par motif (/profile/{x} : deux profils suffisent)
 PAGE_PAUSE = 3.0         # secondes entre deux pages
