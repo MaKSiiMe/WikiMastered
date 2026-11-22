@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from src.tools.site_map import analyse_js, build_map, diff, pattern, shape, template_path
+import pytest
+
+from src.tools.site_map import analyse_js, cookies_from_header, build_map, diff, pattern, shape, template_path
 
 JS_OLD = ('fetch(`/api/marketplace/cards/${e}/sales?scope=summary`);s.from("wishlist_items").select();'
           's.rpc("get_my_profile");s.channel(`auction:${id}`).on("broadcast",{event:"BID"},f);'
@@ -43,3 +45,11 @@ def test_diff_lists_what_is_new_with_its_context_and_changed_responses():
     assert "**+ `marketplace_price_alert`**" in report and "**+ `/iceberg`**" in report
     assert "**réponse changée** `GET /api/marketplace/cards/{id}/sales`" in report
     assert "modifiés" in report and "Première carte" in diff(None, new, {})
+
+
+def test_session_cookie_is_taken_from_document_cookie():
+    cookies = cookies_from_header("cf=1; sb-abc-auth-token.0=base64-xx; sb-abc-auth-token.1=yy=", "www.wiki-masters.com")
+    assert [c["name"] for c in cookies] == ["cf", "sb-abc-auth-token.0", "sb-abc-auth-token.1"]
+    assert cookies[2]["value"] == "yy=" and cookies[0]["domain"] == "www.wiki-masters.com"
+    with pytest.raises(SystemExit):
+        cookies_from_header("cf=1", "www.wiki-masters.com")

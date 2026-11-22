@@ -1,8 +1,17 @@
 """Carte du site et changements depuis la carte précédente (à lancer après une mise à jour du site).
 
     pip install -r requirements-tools.txt && playwright install chromium
-    python -m src.tools.browser_login     # une fois : tu te connectes toi-même dans la fenêtre (profil local)
-    python -m src.tools.site_map          # ouvre les pages avec ce profil, sans fenêtre (--headed pour la voir)
+    python -m src.tools.site_map --import-cookie FICHIER   # une fois : session prise dans ton navigateur
+    python -m src.tools.site_map                           # ensuite : ouvre les pages avec ce profil, sans fenêtre
+
+La connexion se fait dans ton navigateur habituel : Cloudflare refuse la vérification de la page de connexion dans
+un navigateur piloté (relevé le 22/11), et on ne cherche pas à le tromper. Dans une fenêtre privée, connecte-toi,
+puis dans la console (F12) : le fichier téléchargé contient `document.cookie` (cookie de session Supabase).
+
+    a=document.createElement('a');a.href=URL.createObjectURL(new Blob([document.cookie]));a.download='wm-session.txt';a.click()
+
+Ferme ensuite la fenêtre privée sans te déconnecter (se déconnecter fermerait aussi cette session-là). Le cookie est
+gardé dans le profil local (data/browser-profile), que le navigateur de l'outil tient à jour à chaque passage.
 
 Lecture seule : les pages sont ouvertes comme par un joueur, sans aucun clic ; seules les requêtes que la page fait
 d'elle-même partent. Images, médias et polices ne sont pas chargés. Les fichiers JS (publics) sont gardés pour lire le
@@ -174,7 +183,22 @@ def diff(old: dict | None, new: dict, js_text: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-async def crawl(base_url: str, profile: Path, headed: bool, js_dir: Path) -> tuple[dict, dict, dict[str, str]]:
+def cookies_from_header(header: str, host: str) -> list[dict]:
+    """Cookies d'un en-tête « a=b; c=d » (`document.cookie`), pour le domaine du site. Sans cookie de session
+    Supabase (sb-<ref>-auth-token[.N]) : erreur, le fichier n'est pas le bon."""
+    cookies = []
+    for part in header.strip().split(";"):
+        name, sep, value = part.strip().partition("=")
+        if sep and name:
+            cookies.append({"name": name, "value": value, "domain": host, "path": "/", "secure": True,
+                            "sameSite": "Lax"})
+    if not any(re.match(r"^sb-[a-z0-9]+-auth-token(\.\d+)?$", c["name"], re.I) for c in cookies):
+        raise SystemExit("Pas de cookie de session (sb-…-auth-token) dans ce fichier : connecte-toi d'abord sur le site.")
+    return cookies
+
+
+async def crawl(base_url: str, profile: Path, headed: bool, js_dir: Path,
+                cookies: list[dict] | None = None) -> tuple[dict, dict, dict[str, str]]:
     from playwright.async_api import async_playwright  # dépendance optionnelle
 
     pages: dict[str, dict] = {}
@@ -210,6 +234,8 @@ async def crawl(base_url: str, profile: Path, headed: bool, js_dir: Path) -> tup
 
     async with async_playwright() as p:
         context = await p.chromium.launch_persistent_context(str(profile), headless=not headed, locale="fr-FR")
+        if cookies:
+            await context.add_cookies(cookies)
         await context.route("**/*", lambda route: route.abort() if route.request.resource_type in
                             ("image", "media", "font") else route.continue_())
         context.on("response", lambda r: pending.append(("r", asyncio.ensure_future(on_response(r)))))
@@ -242,7 +268,7 @@ async def crawl(base_url: str, profile: Path, headed: bool, js_dir: Path) -> tup
             if final == "/login" and path != "/login":
                 if path == "/marketplace":
                     await context.close()
-                    raise SystemExit("Session absente ou expirée : relance `python -m src.tools.browser_login`.")
+                    raise SystemExit("Session absente ou expirée : reprends-la de ton navigateur avec --import-cookie.")
                 continue
             links = await page.eval_on_selector_all("a[href^='/']", "els => els.map(e => e.getAttribute('href'))")
             queue += [link.split("?")[0].split("#")[0] for link in links if link]
@@ -274,11 +300,16 @@ def main() -> None:
     parser.add_argument("--profile", default="data/browser-profile")
     parser.add_argument("--out", default="data/site-map")
     parser.add_argument("--headed", action="store_true", help="montre la fenêtre du navigateur")
+    parser.add_argument("--import-cookie", type=Path, help="fichier contenant document.cookie, pris dans ton navigateur")
     args = parser.parse_args()
+    cookies = None
+    if args.import_cookie:
+        cookies = cookies_from_header(args.import_cookie.read_text(encoding="utf-8"),
+                                      urlsplit(args.base_url).hostname or "")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     taken_at = datetime.now().strftime("%Y-%m-%d_%H%M")
-    pages, calls, js = asyncio.run(crawl(args.base_url, Path(args.profile), args.headed, out / "js"))
+    pages, calls, js = asyncio.run(crawl(args.base_url, Path(args.profile), args.headed, out / "js", cookies))
     new = build_map(taken_at, pages, calls, js)
     report = diff(latest(out, taken_at), new, js)
     (out / f"{taken_at}.json").write_text(json.dumps(new, ensure_ascii=False, indent=1), encoding="utf-8")
