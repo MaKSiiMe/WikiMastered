@@ -56,7 +56,7 @@ def test_a_well_sold_card_takes_the_week_average_like_the_site():
 
 @pytest.mark.asyncio
 async def test_site_quote_comes_from_the_price_history_in_one_request(tmp_path):
-    """Depuis le 22/11, ?scope=summary ne renvoie plus de moyenne : la cote du site (plafond du sniper, cote des
+    """Depuis le 20/11, ?scope=summary ne renvoie plus de moyenne : la cote du site (plafond du sniper, cote des
     collections) vient de l'historique des prix, une requête pour toutes les raretés, gardée pour `history_quote`."""
     asked = []
 
@@ -77,7 +77,7 @@ async def test_site_quote_comes_from_the_price_history_in_one_request(tmp_path):
 
 @pytest.mark.asyncio
 async def test_refused_price_history_falls_back_on_the_last_sales_by_rarity(tmp_path):
-    """Historique refusé : médiane des 5 dernières ventes, rareté par rareté (champ `rarity` depuis le 22/11)."""
+    """Historique refusé : médiane des 5 dernières ventes, rareté par rareté (champ `rarity` depuis le 20/11)."""
     def handler(request):
         if request.url.path.endswith("/price-history"):
             return httpx.Response(404, json={"error": "not found"})

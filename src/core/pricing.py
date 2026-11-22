@@ -7,10 +7,10 @@ Sources, de la plus fiable à la moins fiable :
    QUOTE_RECENT_SALES dernières. Gratuit, sans requête, et à jour des tendances.
 2. Cote du site : historique des prix /api/marketplace/cards/{id}/price-history (onglet « Marché » de la fiche) :
    moyennes par semaine et par rareté, une requête pour toutes les raretés (`history_quotes`). Depuis la mise à jour
-   du 22/11, ?scope=summary ne renvoie plus de moyenne (seulement `recent`, les 5 dernières ventes) : sans ce
+   du 20/11 au soir, ?scope=summary ne renvoie plus de moyenne (seulement `recent`, les 5 dernières ventes) : sans ce
    changement, le bot n'avait plus de cote du site, ni plafond pour le sniper ni cote pour les collections.
 3. Secours si l'historique est refusé : les 5 dernières ventes de /api/marketplace/cards/{id}/sales (`recent`,
-   ouvertes à tous depuis le 22/11, avec leur rareté).
+   ouvertes à tous depuis le 20/11, avec leur rareté).
 
 Estimation = médiane observée, plafonnée par la moyenne du site quand elle existe (prudence ; × QUOTE_SITE_MARGIN_RATIO :
 la moyenne du site suit une hausse avec retard, voir `combine`), sauf pour un

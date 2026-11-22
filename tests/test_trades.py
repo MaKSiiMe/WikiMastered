@@ -122,7 +122,7 @@ def test_card_text_is_parsed():
 async def test_trade_items_with_ids_only_are_named_and_priced(tmp_path):
     """Lpancho, 01/11 : le site ne donne que les identifiants. Ma carte : titre et rareté retrouvés, cotée ; la sienne :
     titre retrouvé, rareté inconnue, donc pas de valeur inventée. Titre lu d'abord dans ce que le bot a vu (Emma Watson,
-    ventes observées) : la route des ventes ne le donne plus depuis le 22/11."""
+    ventes observées) : la route des ventes ne le donne plus depuis le 20/11."""
     def handler(request):
         path = request.url.path
         if path.endswith("/emma/sales") and request.url.params.get("scope") == "summary":

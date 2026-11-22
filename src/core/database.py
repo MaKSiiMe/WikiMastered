@@ -474,7 +474,7 @@ class Database:
 
     async def title_of(self, card_id: str) -> str | None:
         """Titre d'une carte d'après ce que le bot a vu sur le marché (cartes d'échange : le site n'en donne que
-        l'identifiant, et la route des ventes ne renvoie plus le titre depuis le 22/11)."""
+        l'identifiant, et la route des ventes ne renvoie plus le titre depuis le 20/11)."""
         for table in ("auctions_seen", "observed_sales", "bids", "listings"):
             row = await self._one(f"SELECT title FROM {table} WHERE card_id = ? AND title IS NOT NULL AND title != '' "
                                   "LIMIT 1", (card_id,))
