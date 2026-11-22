@@ -303,12 +303,29 @@ def discard_affects_count(s: Settings) -> bool:
     return s.achievements_count_mode == "total" or bool(s.discard_last_copy_rarities)
 
 
+def collection_kept(ctx: Context, rows: list[OwnedCard]) -> set[str]:
+    """Exemplaire gardé (keep_order) de chaque carte des collections actives : jamais vendu ni défaussé, même sans
+    étiquette. Jusqu'au 22/11, TAG_SHOWCASE le protégeait ; les collections sans étiquette propre (pays) n'avaient
+    rien d'autre."""
+    from src.workers.collection import collection_key, targets  # import local : collection importe ce module
+
+    wanted = targets(ctx)
+    kept: dict[str, OwnedCard] = {}
+    for row in rows:
+        key = collection_key(row.title)
+        if key in wanted and (key not in kept or keep_order(row) < keep_order(kept[key])):
+            kept[key] = row
+    return {row.id for row in kept.values()}
+
+
 async def excluded_copies(ctx: Context, rows: list[OwnedCard]) -> set[str]:
     """Exemplaires jamais vendus ni défaussés : engagés dans un échange, déjà en vente ou programmés, portant une
-    étiquette de TAG_PROTECTED (casse ignorée), ou d'une carte gardée sur Discord (/cartes garder)."""
+    étiquette de TAG_PROTECTED (casse ignorée), d'une carte gardée sur Discord (/cartes garder), ou exemplaire gardé
+    d'une carte des collections actives."""
     excluded = await ctx.api.protected_owned_ids({r.id for r in rows})
     excluded |= await ctx.db.scheduled_owned_ids()
     excluded |= keeps.protected(rows, await keeps.load(ctx.db))
+    excluded |= collection_kept(ctx, rows)
     return excluded | {r.id for r in rows if r.tag_names & ctx.settings.protected_tag_keys}
 
 
