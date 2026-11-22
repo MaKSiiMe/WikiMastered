@@ -194,7 +194,7 @@ Crée un salon et son webhook pour chaque catégorie voulue, puis ajoute son URL
 | `DISCORD_WEBHOOK_COLLECTION` | Cartes de collection, étiquettes, succès |
 | `DISCORD_WEBHOOK_REPORT` | Bilan de 23:00, récap des workers toutes les 4 h |
 | `DISCORD_WEBHOOK_SYSTEM` | Démarrage, session, réseau, sauvegardes |
-| `DISCORD_WEBHOOK_WIKINSIDER` | Facultatif : chaque achat et revente réels du bot d'un shiny ou d'une L, avec les champs à recopier sur Wikinsider (site d'un groupe de traders) ; le bouton « ✅ Noté » efface le message. Les achats gardés (collection, souhaits) avec `DISCORD_WIKINSIDER_KEPT=true` |
+| `DISCORD_WEBHOOK_WIKINSIDER` | Facultatif : chaque achat et revente réels du bot d'un shiny (aucune autre carte), avec les champs à recopier sur Wikinsider (site d'un groupe de traders) ; le bouton « ✅ Noté » efface le message. Les achats gardés (collection, souhaits) avec `DISCORD_WIKINSIDER_KEPT=true` |
 
 `DISCORD_MENTION=@here` ajoute une mention aux alertes critiques. Les commandes répondent dans le salon où tu les tapes : un salon `#commandes` n'a pas besoin de webhook.
 

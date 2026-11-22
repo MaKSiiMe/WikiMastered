@@ -302,7 +302,7 @@ async def test_vanished_auction_won_when_the_card_arrived(tmp_path):
     bid = await db.last_bid("qd")
     assert (bid["status"], bid["closed"], bid["final_price"]) == ("won", 0, 444)  # une position, à revendre
     assert ("SUCCESS", "Position achetée !") in notifier.sent
-    assert ("INFO", "Achat à noter : Quentin Dupieux") in notifier.sent  # salon #wikinsider
+    assert ("INFO", "Achat à noter : Quentin Dupieux") not in notifier.sent  # L ordinaire : pas pour #wikinsider
     assert ("WARNING", "Mise à vérifier") not in notifier.sent
     await db.close()
 
