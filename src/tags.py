@@ -2,12 +2,14 @@
 
 Table Supabase `tags` : {id, user_id, name, color, …}, créée par l'éditeur du site ou par une extension avec
 {user_id, name, color} [WP tags.js]. L'émoji fait partie du nom (« 📅 Jour ») ; le bot compare les noms sans émojis
-ni casse (tag_key). Émoji et couleur des étiquettes à créer : config/etiquettes.yaml (`emoji`, `couleur` d'un thème, et
-section `autres` pour les étiquettes qui ne sont pas des thèmes).
+ni casse (tag_key). Émoji et couleur : config/etiquettes.yaml (`emoji`, `couleur` d'un thème, et section `autres` pour
+les étiquettes qui ne sont pas des thèmes), à la création et pour harmoniser les étiquettes existantes (PATCH du nom et de
+la couleur, comme l'éditeur du site).
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,14 +41,69 @@ def _style(spec: Any) -> tuple[str, str]:
     return str(spec.get("emoji") or "").strip(), str(spec.get("couleur") or "").strip()
 
 
+def styles() -> dict[str, Wanted]:
+    """Style de chaque étiquette du fichier (thèmes et `autres`), par clé de nom (tag_key)."""
+    raw = yaml.safe_load(RULES_FILE.read_text(encoding="utf-8")) or {}
+    out = {}
+    for name, spec in {**(raw.get("themes") or {}), **(raw.get("autres") or {})}.items():
+        emoji, color = _style(spec)
+        if emoji or color:
+            out[tag_key(str(name))] = Wanted(str(name), emoji, color)
+    return out
+
+
+def split_name(name: str) -> tuple[str, str]:
+    """(émoji en tête, reste) : « 📅 Jour » -> (« 📅 », « Jour ») ; « L+ » -> (« », « L+ »)."""
+    match = re.match(r"^([^\w]*)(.*)$", name.strip())
+    return (match[1].strip(), match[2].strip()) if match else ("", name.strip())
+
+
+@dataclass(frozen=True)
+class Restyle:
+    id: Any
+    old_name: str
+    old_color: str
+    name: str
+    color: str
+
+
+def restyles(tags: list[dict[str, Any]], known: dict[str, Wanted]) -> list[Restyle]:
+    """Étiquettes du site dont le nom ou la couleur diffère du fichier. Sans émoji dans le fichier, celui du site est
+    gardé ; avec, le nom devient « émoji + nom du fichier » (« revente » -> « 💰 Revente »)."""
+    out = []
+    for t in tags:
+        name = str(t.get("name") or "")
+        style = known.get(tag_key(name))
+        if style is None or t.get("id") is None:
+            continue
+        emoji = style.emoji or split_name(name)[0]
+        new_name = f"{emoji} {style.name}" if emoji else style.name
+        new_color = style.color or str(t.get("color") or "")
+        if new_name != name or new_color.lower() != str(t.get("color") or "").lower():
+            out.append(Restyle(t["id"], name, str(t.get("color") or ""), new_name, new_color))
+    return out
+
+
+async def restyle(ctx: Context, change: Restyle) -> tuple[bool, str]:
+    """Renomme et recolore une étiquette du site. Une ligne renvoyée prouve le changement (la base filtre sans erreur
+    les lignes qu'elle refuse). (fait, problème)."""
+    if not ctx.settings.is_live("tag_card"):
+        return True, ""
+    status, data = await ctx.client.supabase("PATCH", "tags", prefer="return=representation",
+                                             params={"id": f"eq.{change.id}", "user_id": f"eq.{ctx.api.user_id}"},
+                                             json_body={"name": change.name, "color": change.color})
+    if status in (200, 201) and data:
+        return True, ""
+    return False, f"HTTP {status} : {str(data)[:150] if data else 'aucune ligne modifiée (refusée par le site ?)'}"
+
+
 def wanted(ctx: Context) -> list[Wanted]:
     """Étiquettes que le bot pose avec les réglages actuels : thèmes (si ENABLE_THEME_TAGS), Doublon, GIF, collections,
     vitrines, souhaits, cartes invendues, reventes à la main. Dans l'ordre du fichier, puis des réglages."""
     from src.workers import collection  # import local : collection importe les workers
 
     s = ctx.settings
-    raw = yaml.safe_load(RULES_FILE.read_text(encoding="utf-8")) or {}
-    styles = {tag_key(str(k)): _style(v) for k, v in {**(raw.get("themes") or {}), **(raw.get("autres") or {})}.items()}
+    known = styles()
     names: list[str] = []
     if s.enable_theme_tags:
         rules = load_rules()
@@ -58,8 +115,8 @@ def wanted(ctx: Context) -> list[Wanted]:
     out: dict[str, Wanted] = {}
     for name in (n.strip() for n in names):
         if name and tag_key(name) not in out:
-            emoji, color = styles.get(tag_key(name), ("", ""))
-            out[tag_key(name)] = Wanted(name, emoji, color)
+            style = known.get(tag_key(name))
+            out[tag_key(name)] = Wanted(name, style.emoji, style.color) if style else Wanted(name)
     return list(out.values())
 
 

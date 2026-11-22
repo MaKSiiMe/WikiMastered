@@ -18,17 +18,21 @@
 #                ne retire pas un thème trouvé par la description ou le métier (une personne les cumule)
 #   seul         seulement si la carte n'a aucun autre thème
 #   retirer      retiré d'une carte qui n'a plus ce thème, une fois un autre de ses thèmes posé
-#   emoji, couleur  pour créer l'étiquette sur le site (/etiquettes creer) ; sans effet sur une étiquette existante
+#   emoji, couleur  style de l'étiquette sur le site : à la création (/etiquettes creer) et pour harmoniser les
+#                existantes (/etiquettes harmoniser) ; sans émoji, celui du site est gardé
 # Modifier natures, taxons ou metiers fait relire Wikidata pour toutes les cartes au passage suivant.
 
 themes:
   Personne:
+    couleur: "#3b82f6"
     natures: [Q5]  # être humain
 
   Pays:
+    couleur: "#14532d"
     natures: [Q6256, Q3624078]  # pays, État souverain
 
   Lieu:
+    couleur: "#f97316"
     natures:
       - Q486972   # établissement humain (ville, commune, village)
       - Q56061    # entité territoriale administrative (région, département)
@@ -45,6 +49,7 @@ themes:
     sauf: [Pays, Histoire]  # une gare ou une église reste aussi un lieu, comme les cartes déjà étiquetées
 
   Nature:
+    couleur: "#22c55e"
     natures:
       - Q8502     # montagne
       - Q4022     # cours d'eau
@@ -59,6 +64,7 @@ themes:
     sauf: [Pays, Lieu, Histoire, Animal, Spatial, Nourriture / Boisson]
 
   Animal:
+    couleur: "#78350f"
     taxons: [Q729]  # animaux
     natures:
       - Q39367     # race de chien
@@ -66,11 +72,13 @@ themes:
     sauf: [Personne]  # pour Wikidata, l'être humain est un animal
 
   Astéroïde:
+    couleur: "#a5b4fc"
     natures:
       - Q3863     # astéroïde
       - Q1022867  # planète mineure (couvre les objets numérotés type (505476) 2013 UL15)
 
   Spatial:
+    couleur: "#4f46e5"
     natures:
       - Q634      # planète
       - Q523      # étoile
@@ -89,6 +97,7 @@ themes:
     sauf: [Astéroïde]
 
   Cinéma / Série:
+    couleur: "#ef4444"
     natures:
       - Q11424    # film
       - Q24856    # série de films
@@ -106,6 +115,7 @@ themes:
     sauf: [Jeu vidéo, Littérature / BD, Religion]  # évite de capter les persos de JV, de BD ou bibliques via Q95074
 
   Musique:
+    couleur: "#a855f7"
     natures:
       - Q7366       # chanson
       - Q134556     # single (35 cartes sans thème récupérées)
@@ -124,6 +134,7 @@ themes:
     metiers: [Q639669, Q177220, Q2252262, Q36834, Q130857]  # musicien, chanteur, rappeur, compositeur, DJ
 
   Sport:
+    couleur: "#84cc16"
     natures:
       - Q349       # sport
       - Q847017    # club sportif
@@ -145,6 +156,7 @@ themes:
     metiers: [Q2066131, Q378622, Q41583, Q16029547]  # sportif, pilote, entraîneur, biathlète
 
   Jeu vidéo:
+    couleur: "#0891b2"
     natures:
       - Q7889     # jeu vidéo
       - Q7058673  # série de jeux vidéo
@@ -155,6 +167,7 @@ themes:
                   concepteur de jeux vidéo]
 
   Littérature / BD:
+    couleur: "#c2410c"
     natures:
       - Q7725634   # œuvre littéraire
       - Q571       # livre
@@ -176,6 +189,7 @@ themes:
     sauf: [Jeu vidéo, Musique, Science]
 
   Art:
+    couleur: "#d81b60"
     natures:
       - Q3305213  # peinture (77 cartes sans thème récupérées)
       - Q860861   # sculpture (sort le Buste de Beethoven d'Objet)
@@ -188,6 +202,7 @@ themes:
     sauf: [Lieu, Littérature / BD, Cinéma / Série, Musique]
 
   Science:
+    couleur: "#0d9488"
     natures:
       - Q11862829  # discipline académique
       - Q11173     # composé chimique (~40 cartes sans thème récupérées)
@@ -212,6 +227,7 @@ themes:
     sauf: [Nature, Animal, Technologie]
 
   Politique:
+    couleur: "#881337"
     natures:
       - Q7278      # parti politique (sort des sans thème)
       - Q40231     # élection
@@ -228,6 +244,7 @@ themes:
     sauf: [Pays, Entreprise / Marque, Sport, Musique, Science, Religion]
 
   Militaire:
+    couleur: "#991b1b"
     natures:
       - Q176799    # unité militaire (~18 cartes sans thème récupérées)
       - Q728       # arme (sorti d'Objet)
@@ -245,6 +262,7 @@ themes:
     metiers: [Q47064, Q189290]  # militaire, officier
 
   Religion:
+    couleur: "#8d6e63"
     natures:
       - Q9174      # religion
       - Q179461    # texte religieux
@@ -263,6 +281,7 @@ themes:
     metiers: [Q250867, Q42603, Q29182, Q1234713]  # prélat catholique, prêtre, évêque, théologien
 
   Transport:
+    couleur: "#0284c7"
     natures:
       - Q55488     # gare ferroviaire (ex. Gare d'Azilda : 64 d'Objet + 17 de Lieu unifiées)
       - Q55678     # halte ferroviaire (ex. Gare d'Azilda)
@@ -280,6 +299,7 @@ themes:
     sauf: [Voiture, Militaire, Spatial, Histoire]  # navire de guerre -> Militaire ; épave -> Histoire
 
   Nourriture / Boisson:
+    couleur: "#fde047"
     natures:
       - Q2095      # nourriture
       - Q746549    # mets
@@ -290,6 +310,7 @@ themes:
     description: [cuisinier, cuisinière, chef cuisinier, cheffe cuisinière, pâtissier, pâtissière, œnologue]
 
   Entreprise / Marque:
+    couleur: "#64748b"
     natures:
       - Q4830453  # entreprise
       - Q431289   # marque
@@ -301,6 +322,7 @@ themes:
     sauf: [Science, Transport, Jeu vidéo, Littérature / BD]  # évite universités, écoles, studios JV, éditeurs
 
   Voiture:
+    couleur: "#1e3a8a"
     natures:
       - Q3231690   # modèle d'automobile
       - Q59773381  # série de modèles d'automobile
@@ -308,6 +330,7 @@ themes:
       - Q786820   # constructeur automobile
 
   Technologie:
+    couleur: "#22d3ee"
     natures:
       - Q11016     # technologie
       - Q7397      # logiciel
@@ -326,6 +349,7 @@ themes:
     sauf: [Jeu vidéo, Voiture, Transport, Militaire]
 
   Objet:
+    couleur: "#b6a99a"
     natures:
       - Q8205328  # objet artificiel physique
       - Q39546    # outil
@@ -337,6 +361,7 @@ themes:
     retirer: true  # les cartes classées Objet avant l'arrivée de Transport, Militaire, Art...
 
   Histoire:
+    couleur: "#d4a373"
     natures:
       - Q13418847  # événement historique
       - Q178561    # bataille
@@ -356,7 +381,7 @@ themes:
   # Pages sans sujet propre, qui restaient sans thème (relevé du 21/11 : ~1 400 cartes).
   Année:
     emoji: "🗓️"
-    couleur: "#94a3b8"
+    couleur: "#99f6e4"
     natures:
       - Q577       # année (« 1194 »)
       - Q29964144  # année avant Jésus-Christ
@@ -367,13 +392,13 @@ themes:
 
   Liste:
     emoji: "📋"
-    couleur: "#a1a1aa"
+    couleur: "#d9f99d"
     natures: [Q13406463]  # page de liste de Wikimédia (discographies, bibliographies…)
     sauf: [Année]  # un article chronologique est aussi une liste
 
   Nom:
     emoji: "🏷️"
-    couleur: "#c4b5fd"
+    couleur: "#c026d3"
     natures:
       - Q101352    # nom de famille
       - Q202444    # prénom
@@ -381,54 +406,64 @@ themes:
 
   Homonymie:
     emoji: "🔀"
-    couleur: "#9ca3af"
+    couleur: "#94a3b8"
     natures: [Q4167410]  # page d'homonymie de Wikimédia
 
   # Sous-thèmes, en plus du thème large (un film garde « Cinéma / Série ») : des familles de cartes assez grandes pour
   # les échanges.
   Football:
-    emoji: "⚽"
-    couleur: "#22c55e"
+    emoji: "🥅"
+    couleur: "#4d7c0f"
     natures:
       - Q476028    # club de football
       - Q26887310  # saison d'une équipe de football
     description: [footballeu]  # footballeur, footballeuse (pas « joueur de football américain »)
 
   Film:
-    emoji: "🎬"
-    couleur: "#f87171"
+    emoji: "📽️"
+    couleur: "#fca5a5"
     natures: [Q11424]  # film (téléfilms, courts métrages, films d'animation compris)
 
   Plante:
-    emoji: "🌿"
-    couleur: "#4ade80"
+    emoji: "🌱"
+    couleur: "#86efac"
     taxons: [Q756]  # plantes
 
   Insecte / Araignée:
     emoji: "🕷️"
-    couleur: "#a3e635"
+    couleur: "#d97706"
     taxons: [Q1360]  # arthropodes : insectes, araignées, scorpions, mille-pattes, crustacés
 
   Royauté / Noblesse:
     emoji: "👑"
-    couleur: "#fbbf24"
+    couleur: "#5b21b6"
     description: [roi, reine, empereur, impératrice, pharaon, prince, monarque, sultan, tsar, souverain, régent,
                   calife, khan, shah, duc, duchesse, archiduc, comte, vicomte, marquis, baron, noble, aristocrate,
                   seigneur, landgrave, margrave]
 
   Personnage de fiction:
     emoji: "🦸"
-    couleur: "#f472b6"
+    couleur: "#2563eb"
     natures:
       - Q95074     # personnage de fiction
       - Q4271324   # personnage mythologique
 
 # Babie : posée à la main sur le site, le bot ne la pose pas (et n'enlève jamais un thème).
 
-# Émoji et couleur des étiquettes qui ne sont pas des thèmes, pour /etiquettes creer (les thèmes ont `emoji` et
-# `couleur` dans leur règle). Sans couleur : celle de la palette de l'extension.
+# Émoji et couleur des étiquettes qui ne sont pas des thèmes (les thèmes ont `emoji` et `couleur` dans leur règle),
+# pour /etiquettes creer et harmoniser. Une étiquette absente de ce fichier n'est jamais touchée.
 autres:
-  Vitrine: {emoji: "🏛️", couleur: "#60a5fa"}
+  Doublon: {couleur: "#27272a"}
+  GIF: {couleur: "#ff2d95"}
+  Jour: {emoji: "📅", couleur: "#2dd4bf"}
+  Élément: {emoji: "⚗️", couleur: "#bae6fd"}
+  Vitrine: {emoji: "🏛️", couleur: "#fef9c3"}
+  Souhait: {emoji: "💫", couleur: "#f0abfc"}
+  Invendue: {emoji: "⏳", couleur: "#0c4a6e"}
+  Revente: {emoji: "💰", couleur: "#10b981"}
+  Collection: {couleur: "#eab308"}
+  L+: {couleur: "#be123c"}
+  Babie: {couleur: "#f472b6"}
 
 # Corrections à la main, prioritaires sur Wikidata : titre exact de la carte -> ses thèmes (remplacent ceux trouvés ;
 # [] : aucun thème).

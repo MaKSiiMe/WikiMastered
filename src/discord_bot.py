@@ -899,39 +899,49 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         embed.color = GREEN if ok else ORANGE
         await interaction.edit_original_response(embed=embed, view=None)
 
-    @tree.command(name="etiquettes", description="Tes étiquettes du site (couleur, émoji) ; créer celles que le bot pose")
-    @app_commands.describe(creer="créer sur le site les étiquettes que le bot pose et qui manquent (confirmation)")
-    async def etiquettes(interaction: discord.Interaction, creer: bool = False) -> None:
+    @tree.command(name="etiquettes", description="Tes tags du site (couleur, émoji) ; créer ou harmoniser ceux du bot")
+    @app_commands.describe(creer="créer sur le site les tags que le bot pose et qui manquent (confirmation)",
+                           harmoniser="donner aux tags du site l'émoji et la couleur de config/etiquettes.yaml "
+                                      "(confirmation)")
+    async def etiquettes(interaction: discord.Interaction, creer: bool = False, harmoniser: bool = False) -> None:
         await interaction.response.defer()
         try:
             status, found = await tags.site_tags(ctx)
         except ApiError as exc:
             status, found = 0, []
-            log.warning("Discord : étiquettes illisibles : %s", exc)
+            log.warning("Discord : tags illisibles : %s", exc)
         if status != 200:
-            await interaction.edit_original_response(content=f"⚠️ Étiquettes illisibles (HTTP {status}) : "
+            await interaction.edit_original_response(content=f"⚠️ Tags illisibles (HTTP {status}) : "
                                                              "SUPABASE_ANON_KEY et la session sont nécessaires.")
             return
         todo = tags.missing(found, tags.wanted(ctx))
+        changes = tags.restyles(found, tags.styles())
         todo_text = "\n".join(f"• {t.label} · `{t.color}`" for t in todo)
-        embed = discord.Embed(title=f"🏷️ Étiquettes du site ({len(found)})", color=COLOR,
+        change_text = "\n".join(f"• {c.old_name} `{c.old_color or '—'}` → {c.name} `{c.color}`" for c in changes)
+        embed = discord.Embed(title=f"🏷️ Tags du site ({len(found)})", color=COLOR,
                               description=tags.overview(found)[:3000])
         if todo:
-            embed.add_field(name=f"Posées par le bot, absentes du site ({len(todo)})", value=todo_text[:1000],
+            embed.add_field(name=f"Posés par le bot, absents du site ({len(todo)})", value=todo_text[:1000],
                             inline=False)
-        if not creer or not todo:
-            embed.set_footer(text="/etiquettes creer:True pour créer celles qui manquent. Émoji et couleur : "
-                                  "config/etiquettes.yaml ; tu peux les changer ensuite sur le site.")
+        if changes:
+            embed.add_field(name=f"Différents de config/etiquettes.yaml ({len(changes)})", value=change_text[:1000],
+                            inline=False)
+        todo, changes = (todo if creer else []), (changes if harmoniser else [])
+        if not todo and not changes:
+            embed.set_footer(text="/etiquettes creer:True crée ceux qui manquent, harmoniser:True applique l'émoji et "
+                                  "la couleur du fichier. Un tag absent du fichier n'est jamais touché.")
             await interaction.edit_original_response(embed=embed)
             return
-        embed.title = f"🏷️ Créer {len(todo)} étiquette(s) sur le site ?"
+        embed = discord.Embed(title="🏷️ Modifier les tags du site ?", color=COLOR, description=(
+            (f"**Créer ({len(todo)})**\n{todo_text[:1500]}\n\n" if todo else "")
+            + (f"**Harmoniser ({len(changes)})**\n{change_text[:2000]}" if changes else "")))
         if not s.is_live("tag_card"):
-            embed.description = "ℹ️ Écritures simulées (DRY_RUN / SIMULATE) : rien ne sera créé.\n\n" + embed.description
+            embed.description = "ℹ️ Écritures simulées (DRY_RUN / SIMULATE) : rien ne sera modifié.\n\n" + embed.description
         view = Confirm(s.discord_owner_id)
         await interaction.edit_original_response(embed=embed, view=view)
         await view.wait()
         if not view.value:
-            embed.title, embed.color = "Aucune étiquette créée", GREY
+            embed.title, embed.color = "Aucun tag modifié", GREY
             await interaction.edit_original_response(embed=embed, view=None)
             return
         done, errors = [], []
@@ -940,12 +950,18 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                 ok, why = await tags.create(ctx, tag)
             except ApiError as exc:
                 ok, why = False, str(exc)
-            (done if ok else errors).append(tag.label if ok else f"{tag.label} : {why}")
-        log.info("Discord : %d étiquette(s) créée(s), %d refusée(s)", len(done), len(errors))
-        embed = discord.Embed(title=f"🏷️ {len(done)} étiquette(s) créée(s)", color=ORANGE if errors else GREEN,
-                              description="\n".join(f"• {t}" for t in done)[:3000] or "Aucune.")
+            (done if ok else errors).append(f"créé : {tag.label}" if ok else f"{tag.label} : {why}")
+        for change in changes:
+            try:
+                ok, why = await tags.restyle(ctx, change)
+            except ApiError as exc:
+                ok, why = False, str(exc)
+            (done if ok else errors).append(f"{change.name} `{change.color}`" if ok else f"{change.old_name} : {why}")
+        log.info("Discord : %d tag(s) créé(s) ou harmonisé(s), %d refusé(s)", len(done), len(errors))
+        embed = discord.Embed(title=f"🏷️ {len(done)} tag(s) modifié(s)", color=ORANGE if errors else GREEN,
+                              description="\n".join(f"• {t}" for t in done)[:3000] or "Aucun.")
         if errors:
-            embed.add_field(name="Refusées", value="\n".join(errors)[:1000], inline=False)
+            embed.add_field(name="Refusés", value="\n".join(errors)[:1000], inline=False)
         await interaction.edit_original_response(embed=embed, view=None)
 
     async def snipe_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
