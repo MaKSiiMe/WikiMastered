@@ -411,6 +411,9 @@ class Settings(BaseSettings):
     # toutes les ventes de SNIPER_RESALE_RARITIES. Montée, le favori passe au nouvel exemplaire et l'ancien redevient
     # vendable. Écritures : groupe « favorites ».
     favorites_upgrade: bool = False
+    # Favori posé par le bot sur l'exemplaire gardé de chaque carte des collections actives (COLLECTION_SETS) et sur
+    # les cartes de tes vitrines, une fois par carte ; jamais retiré. Écritures : groupe « favorites ».
+    favorites_auto: bool = False
     favorites_check_minutes: float = 60.0  # lecture de tes favoris
     trades_check_minutes: float = 10.0
     trades_fair_margin_ratio: float = 0.1

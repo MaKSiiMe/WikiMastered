@@ -132,9 +132,11 @@ def rank(copy: dict, card: dict) -> int:
     return RARITY_RANK.get(copy.get("snapshot_rarity") or card.get("rarity") or "", -1)
 
 
-def plan(copies: dict[str, list[dict]], catalog: dict[str, dict]) -> tuple[dict[str, dict], list[tuple[dict, list[dict], str]]]:
+def plan(copies: dict[str, list[dict]], catalog: dict[str, dict], shown: set[str] = frozenset()
+         ) -> tuple[dict[str, dict], list[tuple[dict, list[dict], str]]]:
     """(favoris suivis : id de carte -> {title, best} ; favoris à déplacer : (meilleur exemplaire, exemplaires plus bas
-    à sortir des favoris, titre)). Une carte avec un exemplaire shiny est déjà au plus haut : ni suivie ni touchée."""
+    à sortir des favoris, titre)). Une carte avec un exemplaire shiny est déjà au plus haut : ni suivie ni touchée. Un
+    exemplaire exposé dans une vitrine (`shown`) reste en favori : le meilleur est ajouté à côté."""
     cards: dict[str, dict] = {}
     moves: list[tuple[dict, list[dict], str]] = []
     for cid, rows in copies.items():
@@ -146,6 +148,7 @@ def plan(copies: dict[str, list[dict]], catalog: dict[str, dict]) -> tuple[dict[
         cards[cid] = {"title": title, "best": rank(best, card)}
         lower = [r for r in rows if r.get("starred") and rank(r, card) < rank(best, card)]
         if not best.get("starred") and lower:
+            lower = [r for r in lower if str(r["id"]) not in shown]
             moves.append((best, lower, title))
     return cards, moves
 
@@ -161,7 +164,8 @@ async def sync(ctx: Context) -> dict[str, Any]:
     Renvoie {"tracked", "added", "removed", "moved", "error"}."""
     live = ctx.settings.is_live(WRITE)
     copies, catalog = await read(ctx)
-    cards, moves = plan(copies, catalog)
+    shown = set((await ctx.db.kv_get("auto_favorites") or {}).get("shown") or [])  # vitrines lues par « collection »
+    cards, moves = plan(copies, catalog, shown)
     state = await _state(ctx.db)
     added: dict[str, str] = state["added"]
     result: dict[str, Any] = {"tracked": sum(1 for c in cards.values() if c["best"] < TOP), "added": 0,
