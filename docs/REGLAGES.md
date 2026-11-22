@@ -102,7 +102,7 @@ DISCORD_WEBHOOK_RESALE=                 # un message par position, ventes, défa
 DISCORD_WEBHOOK_COLLECTION=             # cartes de collection, étiquettes, succès
 DISCORD_WEBHOOK_REPORT=                 # bilan de 23:00, récap des workers toutes les 4 h
 DISCORD_WEBHOOK_SYSTEM=                 # démarrage, session, réseau, sauvegardes
-DISCORD_WEBHOOK_WIKINSIDER=             # achats et reventes à noter à la main sur Wikinsider, bouton « Noté » ; vide = rien
+DISCORD_WEBHOOK_WIKINSIDER=             # achats et reventes (shiny et L) à noter à la main sur Wikinsider, bouton « Noté » ; vide = rien
 DISCORD_WIKINSIDER_KEPT=false           # true = aussi les achats gardés (collection, souhaits, cartes demandées)
 DISCORD_MENTION=                        # ex. @here : mention des alertes rouges
 DISCORD_NOTIFY_EACH_BID=false           # true = un message Discord par enchère (très bavard)

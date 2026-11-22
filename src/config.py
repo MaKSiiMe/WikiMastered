@@ -327,8 +327,8 @@ class Settings(BaseSettings):
     discord_webhook_collection: str = ""  # cartes de collection, étiquettes, succès
     discord_webhook_report: str = ""       # bilan de 23:00, récap des workers toutes les 4 h
     discord_webhook_system: str = ""     # démarrage, session, réseau, sauvegardes
-    # Salon #wikinsider : ce qu'il reste à noter à la main sur Wikinsider (achats et reventes réels du bot), un message
-    # par opération avec un bouton « Noté » qui l'efface. Vide = rien (jamais de repli sur un autre salon).
+    # Salon #wikinsider : ce qu'il reste à noter à la main sur Wikinsider (achats et reventes réels du bot, shiny et L),
+    # un message par opération avec un bouton « Noté » qui l'efface. Vide = rien (jamais de repli sur un autre salon).
     discord_webhook_wikinsider: str = ""
     discord_wikinsider_kept: bool = False  # aussi les achats gardés (collection, souhaits, cartes demandées)
     discord_mention: str = ""
