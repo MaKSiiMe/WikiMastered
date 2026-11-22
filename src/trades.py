@@ -223,7 +223,7 @@ async def evaluate(ctx: Context, given: list[Priced], received: list[Priced], wb
 async def item_details(ctx: Context, item: TradeItem, me: str, owned: bool = False) -> tuple[str, str | None, bool]:
     """(titre, rareté, shiny) d'une carte d'échange. Le 01/11, le site n'en donnait que les identifiants (« ? · ? » pour
     les 7 cartes demandées par Lpancho) : titre lu sur la route des ventes de la carte, rareté de ton exemplaire lue
-    dans ta collection. Rareté d'une carte de l'autre joueur : inconnue. Depuis le 22/11, la route des ventes ne donne
+    dans ta collection. Rareté d'une carte de l'autre joueur : inconnue. Depuis le 20/11, la route des ventes ne donne
     plus le titre : il vient d'abord de ce que le bot a vu sur le marché."""
     title, rarity, shiny = item.title or "?", item.rarity, item.shiny
     if item.card or not item.card_id:

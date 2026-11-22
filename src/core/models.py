@@ -208,7 +208,7 @@ class SalesSummary(_Model):
 class SaleRow(_Model):
     final_price: int | None = None
     snapshot_rarity: str | None = None
-    rarity: str | None = None  # nom du champ depuis la mise à jour du 22/11
+    rarity: str | None = None  # nom du champ depuis la mise à jour du 20/11
     is_shiny: bool = False
     settled_at: datetime | None = None
 
@@ -218,7 +218,7 @@ class SaleRow(_Model):
 
 
 class SalesHistory(_Model):
-    """/api/marketplace/cards/{id}/sales [WP market.js] : `recent` d'abord, sinon `sales`. Depuis le 22/11, ouverte à
+    """/api/marketplace/cards/{id}/sales [WP market.js] : `recent` d'abord, sinon `sales`. Depuis le 20/11, ouverte à
     tous : les 5 dernières ventes {id, final_price, settled_at, rarity}, toutes raretés (?rarity=X : une seule)."""
     recent: list[Any] = []
     sales: list[Any] = []

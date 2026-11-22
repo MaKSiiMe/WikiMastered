@@ -46,7 +46,7 @@ class Recorder(DiscordNotifier):
 
 
 def legacy_quotes(handler):
-    """La cote du site vient de l'historique des prix depuis le 22/11 (avant : /sales?scope=summary -> {summary}).
+    """La cote du site vient de l'historique des prix depuis le 20/11 (avant : /sales?scope=summary -> {summary}).
     Les faux sites des tests écrits avant répondent encore à /sales : leur `summary` est traduit en historique d'une
     semaine. Un faux site qui sert lui-même /price-history (réponse avec `by_rarity`) est gardé tel quel."""
     def wrapped(request: httpx.Request) -> httpx.Response:
