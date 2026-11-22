@@ -1,10 +1,11 @@
-"""Commandes Discord : ROI par jour, cartes demandées au sniper (/snipe)."""
+"""Commandes Discord : ROI par jour, cartes demandées au sniper (/sniper demander)."""
 
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 
 import httpx
+from discord import app_commands
 import pytest
 
 from src import snipes
@@ -124,15 +125,14 @@ async def test_discord_commands_are_registered(tmp_path):
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(404), discord_owner_id=42)
     ctx = await make_context(tmp_path, client, notifier)
     bot = build_client(ctx, [], sys.modules["src.main"])
-    names = {c.name for c in bot.tree.get_commands()}  # type: ignore[attr-defined]
-    assert names == {"bilan", "roi", "solde", "positions", "ventes", "prix", "collection", "sniper", "snipe",
-                     "snipes", "annuler", "etat", "verif-faite", "pause", "reprise", "garder", "gardees", "liberer",
-                     "sauvegarde",
-                     "vendre", "plafond-collection", "carte", "opportunites", "top", "defausse", "doublons",
-                     "valeur", "echange", "echanges", "souhaits", "collection-joueur", "shiny", "amis",
-                     "vitrines", "vitrine", "etiquettes"}
+    top = {c.name: c for c in bot.tree.get_commands()}  # type: ignore[attr-defined]
+    assert set(top) == {"bot", "compte", "sniper", "vente", "marche", "cartes", "collection", "profil", "echanges",
+                        "verif-faite", "menu"}
+    subs = {f"{g.name} {c.name}" for g in top.values() if isinstance(g, app_commands.Group) for c in g.commands}
+    assert len(subs) == 35 and {"sniper demander", "vente en-cours", "profil tags", "echanges evaluer",
+                                "collection plafond", "cartes fiche"} <= subs
     assert src.main.roi_status  # les fonctions appelées par les commandes existent
-    # Boutons de /etat et /valeur : persistants, branchés même après un redémarrage.
+    # Boutons de /bot etat et /compte valeur : persistants, branchés même après un redémarrage.
     assert {"etat", "etatverif", "etatpause", "etatreprise", "recount", "valuehist", "stalefire", "stalekeep",
             "price"} <= set(bot.wm_handlers)
     embed, file = text_embed("t", "ligne\n" * 1000)
@@ -173,7 +173,7 @@ async def test_paused_worker_skips_its_passes_until_resumed(tmp_path):
     worker = Counter(ctx)
     task = asyncio.create_task(worker.run())
     await asyncio.sleep(0.2)
-    assert worker.steps == 0 and worker.paused == "en pause jusqu'à /reprise"
+    assert worker.steps == 0 and worker.paused == "en pause jusqu'à /bot reprise"
     await pauses.resume(ctx, ["sniper"])
     await asyncio.sleep(1.5)
     assert worker.steps > 0 and worker.paused is None
@@ -215,7 +215,7 @@ def _http_error(code: int):
 
 @pytest.mark.asyncio
 async def test_expired_followup_is_posted_in_the_channel():
-    """/collection-joueur du 16/11 : plus de 15 min de lecture, Discord refuse la suite (50027) ; elle part dans le
+    """/collection joueur du 16/11 : plus de 15 min de lecture, Discord refuse la suite (50027) ; elle part dans le
     salon. Une autre erreur Discord n'est pas cachée."""
     from unittest.mock import AsyncMock, MagicMock
 

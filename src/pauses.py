@@ -1,6 +1,6 @@
-"""Pauses demandées sur Discord (/pause, /reprise) : un worker en pause ne fait plus aucun passage.
+"""Pauses demandées sur Discord (/bot pause, /bot reprise) : un worker en pause ne fait plus aucun passage.
 
-Gardées en base (kv « pauses » : nom du worker -> fin, ou None jusqu'à /reprise) pour survivre à un
+Gardées en base (kv « pauses » : nom du worker -> fin, ou None jusqu'à /bot reprise) pour survivre à un
 redémarrage, et en mémoire dans le contexte (lues à chaque passage, sans requête). La garde des sanctions
 n'est jamais mise en pause.
 """
@@ -35,7 +35,7 @@ async def _save(ctx: Context) -> None:
 
 
 async def pause(ctx: Context, names: list[str], until: datetime | None) -> list[str]:
-    """Met ces workers en pause jusqu'à `until` (None : jusqu'à /reprise) ; renvoie ceux mis en pause."""
+    """Met ces workers en pause jusqu'à `until` (None : jusqu'à /bot reprise) ; renvoie ceux mis en pause."""
     names = [n for n in names if n not in NEVER_PAUSED]
     ctx.pauses.update(dict.fromkeys(names, until))
     await _save(ctx)

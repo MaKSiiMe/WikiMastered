@@ -1,4 +1,4 @@
-"""Étiquettes du site (commande Discord /etiquettes) : les lire, et créer celles que le bot pose et qui manquent.
+"""Étiquettes du site (commande Discord /profil tags) : les lire, et créer celles que le bot pose et qui manquent.
 
 Table Supabase `tags` : {id, user_id, name, color, …}, créée par l'éditeur du site ou par une extension avec
 {user_id, name, color} [WP tags.js]. L'émoji fait partie du nom (« 📅 Jour ») ; le bot compare les noms sans émojis

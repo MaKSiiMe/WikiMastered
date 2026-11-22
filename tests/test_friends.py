@@ -1,4 +1,4 @@
-"""/amis : les cartes manquantes chez les amis, en lecture seule."""
+"""/collection amis : les cartes manquantes chez les amis, en lecture seule."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Réglages changés sur Discord (/plafond-collection…) : gardés en base (kv « overrides ») et appliqués au démarrage
+"""Réglages changés sur Discord (/collection plafond…) : gardés en base (kv « overrides ») et appliqués au démarrage
 par-dessus les variables d'environnement, sans redéployer. Seuls les réglages de ALLOWED peuvent l'être."""
 
 from __future__ import annotations

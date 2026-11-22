@@ -1,7 +1,7 @@
 """Statistiques de fonctionnement : durée des passages de chaque worker, requêtes au site par route.
 
 Comptées en continu et relevées toutes les LOG_STATS_MINUTES (src/main.py, stats_loop) : une ligne lisible en console,
-le détail dans le journal (événement « stats »), le dernier relevé dans /etat.
+le détail dans le journal (événement « stats »), le dernier relevé dans /bot etat.
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def network_lines(net: dict[str, Any], seconds: float, top: int = 6) -> list[str
 
 
 def network_brief(net: dict[str, Any], lane: str = "sniper") -> str:
-    """« 1 830 requêtes · aucun échec · attente sniper 0,1 s » (/etat)."""
+    """« 1 830 requêtes · aucun échec · attente sniper 0,1 s » (/bot etat)."""
     routes: dict[str, dict[str, Any]] = net["routes"]
     total = sum(r["n"] for r in routes.values())
     failed = sum(n for r in routes.values() for status, n in r["codes"].items() if is_failure(status))

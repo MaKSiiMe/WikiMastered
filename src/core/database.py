@@ -142,11 +142,11 @@ HELD = "status IN ('won', 'sim_won') AND closed = 0"
 # hors des chiffres du sniper (mises, gagnées, dépenses du jour).
 MANUAL_REASON = "achat manuel"
 NOT_MANUAL = f"reason NOT LIKE '{MANUAL_REASON}%'"
-# Carte gagnée par le bot et gardée sans vente (favori, collection, /snipe, souhait) : son achat peut être repris.
+# Carte gagnée par le bot et gardée sans vente (favori, collection, /sniper demander, souhait) : son achat peut être repris.
 KEPT_BY_BOT = f"closed = 1 AND sale_price IS NULL AND dry_run = 0 AND reason NOT LIKE '{MANUAL_REASON}%'"
 # Motif des reventes à 1 WB, retirées le 10/11 : celles qui restaient programmées sont annulées au démarrage.
 OLD_FIRE_SALE_REASON = "liquidation"
-# Vente demandée sur Discord (/vendre) : publiée à la première place libre, avant les autres.
+# Vente demandée sur Discord (/vente vendre) : publiée à la première place libre, avant les autres.
 MANUAL_SALE_REASON = "vente manuelle"
 # Vente observée suspecte : vendeur = acheteur, ou paire vendeur -> acheteur déjà vue (alias o).
 SUSPECT_SALE = ("(o.seller_id IS NOT NULL AND o.buyer_id IS NOT NULL AND (o.seller_id = o.buyer_id OR "
@@ -462,12 +462,12 @@ class Database:
             "WHERE b.status IN ('won', 'sim_won') AND b.closed = 0 ORDER BY b.dry_run, b.settled_at")
 
     async def open_listings(self) -> list[aiosqlite.Row]:
-        """Ventes programmées ou en cours (commande Discord /ventes), les plus proches de la fin d'abord."""
+        """Ventes programmées ou en cours (commande Discord /vente en-cours), les plus proches de la fin d'abord."""
         return await self._all(f"SELECT * FROM listings WHERE status IN {LISTING_OPEN} "
                                "ORDER BY COALESCE(target_end, post_at)")
 
     async def known_titles(self, text: str, limit: int = 25) -> list[str]:
-        """Titres de cartes vues sur le marché contenant `text` (autocomplétion de /snipe et /prix)."""
+        """Titres de cartes vues sur le marché contenant `text` (autocomplétion de /sniper demander et /marche prix)."""
         rows = await self._all("SELECT DISTINCT title FROM auctions_seen WHERE title LIKE ? ORDER BY length(title) "
                                "LIMIT ?", (f"%{text}%", limit))
         return [r["title"] for r in rows if r["title"]]
@@ -522,7 +522,7 @@ class Database:
                           since: datetime, until: datetime) -> aiosqlite.Row | None:
         """Ta dernière vente observée de cette carte (même rareté, shiny ou non), finie entre `since` et `until`, et
         pas déjà une position (du bot ou un achat manuel repris) en cours ou vendue. Une carte gagnée par le bot puis
-        gardée (favori, collection, /snipe) compte : le 18/11, Hermann Göring ✨ (achetée 12 526 par le bot, mise en
+        gardée (favori, collection, /sniper demander) compte : le 18/11, Hermann Göring ✨ (achetée 12 526 par le bot, mise en
         favori, puis étiquetée « revente ») était reprise à 0 WB, et sa vente à 33 333 comptée en bénéfice entier."""
         return await self._one(
             "SELECT auction_id, title, price, ended_at FROM observed_sales WHERE card_id = ? AND rarity IS ? "
@@ -701,7 +701,7 @@ class Database:
         return await self._one("SELECT * FROM listings WHERE id = ?", (listing_id,))
 
     async def cancel_scheduled(self, bid_id: int) -> int:
-        """Annule les ventes pas encore publiées de cette position (/garder, bouton « Garder »)."""
+        """Annule les ventes pas encore publiées de cette position (/cartes garder, bouton « Garder »)."""
         cur = await self.db.execute("UPDATE listings SET status = 'cancelled', settled_at = ? WHERE bid_id = ? "
                                     "AND status IN ('scheduled', 'waiting')", (iso(utcnow()), bid_id))
         await self.db.commit()
@@ -728,7 +728,7 @@ class Database:
         return int(row["n"]) if row else 0
 
     async def cancel_scheduled_duplicates(self) -> int:
-        """Annule les doublons programmés pas encore publiés (/doublons désactiver) ; pas les ventes manuelles."""
+        """Annule les doublons programmés pas encore publiés (/cartes doublons désactiver) ; pas les ventes manuelles."""
         cur = await self.db.execute(
             "UPDATE listings SET status = 'cancelled', settled_at = ? WHERE bid_id IS NULL "
             f"AND status IN ('scheduled', 'waiting') AND reason NOT LIKE '{MANUAL_SALE_REASON}%'", (iso(utcnow()),))
@@ -875,7 +875,7 @@ class Database:
 
     async def observed_for_cards(self, card_ids: Iterable[str], limit: int
                                  ) -> dict[tuple[str, bool], dict[str, tuple[list[tuple[int, bool]], int]]]:
-        """`observed_by_rarity` de beaucoup de cartes à la fois (valeur de la collection, /valeur) : par (carte,
+        """`observed_by_rarity` de beaucoup de cartes à la fois (valeur de la collection, /compte valeur) : par (carte,
         shiny), puis par rareté. Requêtes groupées par 500 cartes."""
         ids = sorted(set(card_ids))
         groups: dict[tuple[str, bool], dict[str, list[tuple[int, bool]]]] = {}
@@ -905,7 +905,7 @@ class Database:
         return out
 
     async def top_prices(self, since: datetime, shiny: bool, limit: int, min_sales: int) -> list[aiosqlite.Row]:
-        """Cartes les plus chères en moyenne (commande /top) : ventes observées depuis `since`, par carte et rareté,
+        """Cartes les plus chères en moyenne (commande /marche top) : ventes observées depuis `since`, par carte et rareté,
         au moins `min_sales` ventes (une vente isolée ne fait pas un prix), ventes suspectes exclues."""
         return await self._all(
             "SELECT card_id, MAX(title) AS title, rarity, COUNT(*) AS sales, AVG(price) AS average, "
@@ -914,7 +914,7 @@ class Database:
             (int(shiny), iso(since), min_sales, limit))
 
     async def shiny_on_sale(self, now: datetime, sort: str = "end", max_price: int | None = None) -> list[aiosqlite.Row]:
-        """Shiny en vente vus par le sniper (commande /shiny), `min_price` : mise minimale à la dernière lecture. `sort` :
+        """Shiny en vente vus par le sniper (commande /marche shiny), `min_price` : mise minimale à la dernière lecture. `sort` :
         « end » (fin la plus proche), « low » ou « high » (mise minimale)."""
         order = {"end": "end_at", "low": "min_price, end_at", "high": "min_price DESC, end_at"}[sort]
         rows = await self._all(

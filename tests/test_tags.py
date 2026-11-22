@@ -1,4 +1,4 @@
-"""Étiquettes du site (/etiquettes) : celles que le bot pose, celles qui manquent, création comme l'extension."""
+"""Étiquettes du site (/profil tags) : celles que le bot pose, celles qui manquent, création comme l'extension."""
 
 from __future__ import annotations
 

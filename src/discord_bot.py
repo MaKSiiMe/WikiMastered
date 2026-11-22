@@ -4,11 +4,11 @@ Un bot Discord (DISCORD_BOT_TOKEN) tourne dans le même processus que les worker
 par le même client du site (mêmes écarts entre requêtes). Les webhooks gardent les messages du bot ; ce bot-ci
 ne fait que répondre, et seulement à DISCORD_OWNER_ID.
 
-- Lecture : /bilan, /roi, /solde, /positions, /ventes, /prix, /collection, /sniper.
-- Actions : /snipe (confirmée par un bouton), /snipes, /annuler. Voir src/snipes.py.
-- Pilotage : /etat (avec boutons), /pause, /reprise (src/pauses.py), /verif-faite. L'alerte « vérification
+- Lecture : /compte bilan, /compte roi, /compte solde, /vente positions, /vente en-cours, /marche prix, /collection avancement, /sniper recap.
+- Actions : /sniper demander (confirmée par un bouton), /sniper demandes, /sniper annuler. Voir src/snipes.py.
+- Pilotage : /bot etat (avec boutons), /bot pause, /bot reprise (src/pauses.py), /verif-faite. L'alerte « vérification
   anti-bot demandée » arrive avec un bouton « C'est fait » ; levée, elle passe au vert, sans bouton ni mention.
-- Cartes : /garder, /vendre, /carte, /opportunites, /top, /echange… et les boutons des messages de vente (src/discord_cards.py).
+- Cartes : /cartes garder, /vente vendre, /cartes fiche, /sniper opportunites, /marche top, /echanges evaluer… et les boutons des messages de vente (src/discord_cards.py).
 - Connecté, le bot envoie lui-même les messages à boutons, dans le salon de leur webhook ; déconnecté, ou sans accès
   à ce salon, ils repartent par le webhook, sans boutons. Jamais de message privé (choix du 28/10).
 """
@@ -47,14 +47,27 @@ TEXT_LIMIT = 3900  # description d'un embed : 4096 au plus, avec le bloc de code
 CONFIRM_SECONDS = 120
 RARITIES = ["C", "PC", "R", "SR", "UR", "L"]
 COLOR, GREEN, ORANGE, RED, GREY = colors.INFO, colors.OK, colors.WARN, colors.ALERT, colors.OFF  # src/core/colors.py
-# /pause et /reprise : ce qui est mis en pause (None : tous les workers, sauf la garde des sanctions).
-# « ventes » arrête aussi la revente des positions du sniper : pour la défausse ou les doublons seuls, /defausse et
-# /doublons.
+# /bot pause et /bot reprise : ce qui est mis en pause (None : tous les workers, sauf la garde des sanctions).
+# « ventes » arrête aussi la revente des positions du sniper : pour la défausse ou les doublons seuls, /cartes defausse et
+# /cartes doublons.
 PAUSE_TARGETS = {"sniper": ["sniper"], "ventes": ["inventory"], "cotes": ["value_scan"], "tout": None}
-PAUSE_MINUTES = [("30 min", 30), ("1 h", 60), ("2 h", 120), ("6 h", 360), ("jusqu'à /reprise", 0)]
+# Groupes des commandes slash, dans l'ordre de /menu : nom -> (émoji, description). Chaque commande est
+# `/groupe sous-commande` (/sniper demander) ; /menu propose les mêmes en boutons ; /verif-faite reste seule.
+COMMAND_GROUPS: dict[str, tuple[str, str]] = {
+    "bot": ("🤖", "Santé du bot, pauses, sauvegarde"),
+    "compte": ("💰", "Bilan, solde, valeur du compte, ROI"),
+    "sniper": ("🎯", "Récap des enchères, cartes demandées au sniper"),
+    "vente": ("🏷️", "Positions, ventes en cours, vendre une carte"),
+    "marche": ("📈", "Prix d'une carte, cartes les plus chères, shiny en vente"),
+    "cartes": ("🃏", "Fiche d'une carte, cartes gardées, doublons, défausse"),
+    "collection": ("📚", "Avancement des collections, souhaits, amis"),
+    "profil": ("🏆", "Vitrines et tags du profil"),
+    "echanges": ("🤝", "Évaluer un échange, bilan des échanges"),
+}
+PAUSE_MINUTES = [("30 min", 30), ("1 h", 60), ("2 h", 120), ("6 h", 360), ("jusqu'à /bot reprise", 0)]
 VERIFY_ID = "wm:verif-faite"  # bouton de l'alerte anti-bot, encore actif après un redémarrage du bot
 WATCH_SECONDS = 15  # vérification anti-bot demandée : vue au plus tard après ce délai
-# Boutons en mémoire : actifs jusqu'au redémarrage du bot (ceux de /etat, /valeur et des ventes survivent à un
+# Boutons en mémoire : actifs jusqu'au redémarrage du bot (ceux de /bot etat, /compte valeur et des ventes survivent à un
 # redémarrage : src/discord_cards.py, MessageButton). Une confirmation expire, elle (CONFIRM_SECONDS).
 BUTTON_SECONDS: float | None = None
 
@@ -81,7 +94,7 @@ def text_embed(title: str, text: str, *, code: bool = True) -> tuple[discord.Emb
 
 async def followup(interaction: discord.Interaction, content: str | None = None, **kwargs) -> None:
     """Suite d'une commande différée. Discord ne l'accepte que 15 min : au-delà (une longue lecture, comme
-    /collection-joueur le 16/11 : « 401 Invalid Webhook Token »), la réponse est postée dans le salon de la commande."""
+    /collection joueur le 16/11 : « 401 Invalid Webhook Token »), la réponse est postée dans le salon de la commande."""
     try:
         await interaction.followup.send(content, **kwargs)
     except (discord.NotFound, discord.HTTPException) as exc:
@@ -111,9 +124,9 @@ def ago(delta: timedelta) -> str:
 
 
 def worker_cell(w: Worker, now: datetime, session_ok: bool) -> tuple[str, str | None]:
-    """(case de /etat : « ✅ sniper 3 s », problème à détailler sous la grille ou None)."""
+    """(case de /bot etat : « ✅ sniper 3 s », problème à détailler sous la grille ou None)."""
     if w.paused:
-        return f"⏸️ {w.name}", None  # voulue (/pause, défausse coupée) : pas un problème
+        return f"⏸️ {w.name}", None  # voulue (/bot pause, défausse coupée) : pas un problème
     if w.blocked:
         return f"🛑 {w.name}", f"{w.name} : {w.blocked}"
     stale = session_ok and w.next_due is not None and w.last_ok is not None and now - w.next_due > STALE_AFTER
@@ -128,7 +141,7 @@ def worker_cell(w: Worker, now: datetime, session_ok: bool) -> tuple[str, str | 
 
 
 def state_embed(ctx: Context, workers: list[Worker], started_at: datetime) -> discord.Embed:
-    """/etat : vert si tout va bien, orange si un worker ou la vérification anti-bot demande ton attention, rouge si
+    """/bot etat : vert si tout va bien, orange si un worker ou la vérification anti-bot demande ton attention, rouge si
     le bot ne peut plus rien faire (session perdue, arrêt de la garde). Les workers en grille, le réseau en bas."""
     now = utcnow()
     client = ctx.client
@@ -246,7 +259,7 @@ POSITION_GROUPS = [("🏷️ En vente", ("posted", "uncertain", "simulated")), (
 
 
 def positions_embed(rows) -> discord.Embed:
-    """/positions : le capital immobilisé et le gain visé en tête, puis les positions par état de leur vente, une ligne
+    """/vente positions : le capital immobilisé et le gain visé en tête, puis les positions par état de leur vente, une ligne
     chacune : achat → prix de vente (gain)."""
     if not rows:
         return discord.Embed(title="💼 Positions (0)", description="Aucune position détenue.", color=GREY)
@@ -278,7 +291,7 @@ LISTING_GROUPS = [("🏷️ En cours", ("posted",)), ("🕒 Programmées", ("sch
 
 
 def listings_embed(rows) -> discord.Embed:
-    """/ventes : par état (en cours, programmées…), une ligne par vente : prix, fin ou publication prévue."""
+    """/vente en-cours : par état (en cours, programmées…), une ligne par vente : prix, fin ou publication prévue."""
     if not rows:
         return discord.Embed(title="🏷️ Ventes (0)", description="Aucune vente programmée ni en cours.", color=GREY)
     mixed = len({r["rarity"] for r in rows}) > 1
@@ -380,6 +393,8 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     intents.guilds = True
     client = discord.Client(intents=intents)
     tree = client.tree = OwnerTree(client, s.discord_owner_id)  # type: ignore[attr-defined]
+    G = {name: app_commands.Group(name=name, description=description)  # groupes de commandes
+         for name, (_emoji, description) in COMMAND_GROUPS.items()}
     guild = discord.Object(id=s.discord_guild_id) if s.discord_guild_id > 0 else None
 
     # ------------------------------------------------------------ pilotage (boutons et commandes)
@@ -410,7 +425,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         return (worker.paused if worker else None) or ""
 
     def state_view() -> discord.ui.View:
-        """Boutons de /etat, encore actifs après un redémarrage du bot."""
+        """Boutons de /bot etat, encore actifs après un redémarrage du bot."""
         buttons: list[tuple[str, int, str, discord.ButtonStyle]] = []
         if sniper is not None and sniper.antibot_since:
             buttons.append(("etatverif", 0, "✅ Vérification faite", discord.ButtonStyle.success))
@@ -426,7 +441,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                                                 view=state_view())
 
     async def verify_and_refresh(interaction: discord.Interaction, _ref: int = 0) -> None:
-        await refresh(interaction, verify("bouton de /etat"))
+        await refresh(interaction, verify("bouton de /bot etat"))
 
     async def pause_sniper(interaction: discord.Interaction, _ref: int = 0) -> None:
         await pauses.pause(ctx, ["sniper"], utcnow() + timedelta(hours=1))
@@ -530,8 +545,8 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
 
     from src.discord_cards import message_view, persistent_view, register  # importe ce module : déjà chargé
 
-    register(client, tree, ctx, workers)
-    client.wm_handlers.update({  # type: ignore[attr-defined]  # boutons de /etat (persistants)
+    register(client, tree, ctx, workers, G)
+    client.wm_handlers.update({  # type: ignore[attr-defined]  # boutons de /bot etat (persistants)
         "etat": lambda interaction, _ref: refresh(interaction), "etatverif": verify_and_refresh,
         "etatpause": pause_sniper, "etatreprise": resume_sniper})
 
@@ -549,11 +564,11 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         ctx.notifier.bot_delete = bot_delete
     client.setup_hook = setup_hook  # type: ignore[method-assign]
 
-    @tree.command(name="etat", description="Santé du bot : session, vérification anti-bot, workers, pauses")
+    @G["bot"].command(name="etat", description="Santé du bot : session, vérification anti-bot, workers, pauses")
     async def etat(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(embed=state_embed(ctx, workers, started), view=state_view())
 
-    @tree.command(name="sauvegarde", description="Sauvegarder la base maintenant (avant un gros changement)")
+    @G["bot"].command(name="sauvegarde", description="Sauvegarder la base maintenant (avant un gros changement)")
     async def sauvegarde(interaction: discord.Interaction) -> None:
         if not s.backup_enabled:
             await interaction.response.send_message(embed=discord.Embed(
@@ -578,7 +593,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
     async def verif_faite(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(embed=verify_embed(verify("/verif-faite")), ephemeral=True)
 
-    @tree.command(name="pause", description="Mettre le sniper, les ventes ou tout le bot en pause")
+    @G["bot"].command(name="pause", description="Mettre le sniper, les ventes ou tout le bot en pause")
     @app_commands.describe(quoi="sniper par défaut", duree="1 h par défaut")
     @app_commands.choices(quoi=[app_commands.Choice(name=n, value=n) for n in PAUSE_TARGETS],
                           duree=[app_commands.Choice(name=n, value=m) for n, m in PAUSE_MINUTES])
@@ -593,8 +608,8 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             await interaction.response.send_message(embed=discord.Embed(
                 title="Rien à mettre en pause", description=f"« {what} » n'est pas actif.", color=GREY))
             return
-        log.info("Discord : pause de %s jusqu'à %s", ", ".join(paused), until or "/reprise")
-        end = f"Jusqu'à {until.astimezone(timeutils.PARIS):%H:%M}" if until else "Jusqu'à /reprise"
+        log.info("Discord : pause de %s jusqu'à %s", ", ".join(paused), until or "/bot reprise")
+        end = f"Jusqu'à {until.astimezone(timeutils.PARIS):%H:%M}" if until else "Jusqu'à /bot reprise"
         embed = discord.Embed(title=f"⏸️ En pause : {', '.join(paused)}", color=GREY,
                               description=f"{end}.\nLes mises déjà placées et les ventes en cours continuent ; leurs "
                                           "résultats sont relus à la reprise.")
@@ -607,7 +622,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         await interaction.response.send_message(embed=embed, view=Buttons(s.discord_owner_id, [
             ("▶️ Reprendre", discord.ButtonStyle.primary, resume_now)]))
 
-    @tree.command(name="reprise", description="Reprendre ce qui est en pause")
+    @G["bot"].command(name="reprise", description="Reprendre ce qui est en pause")
     @app_commands.describe(quoi="tout par défaut")
     @app_commands.choices(quoi=[app_commands.Choice(name=n, value=n) for n in PAUSE_TARGETS])
     async def reprise(interaction: discord.Interaction, quoi: app_commands.Choice[str] | None = None) -> None:
@@ -626,7 +641,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         return [app_commands.Choice(name=t[:100], value=t[:100]) for t in await ctx.db.known_titles(current)]
 
     # ------------------------------------------------------------ lecture
-    @tree.command(name="bilan", description="Le bilan du jour, comme celui du soir")
+    @G["compte"].command(name="bilan", description="Le bilan du jour, comme celui du soir")
     async def bilan(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         report = await cli.daily_report_parts(ctx)
@@ -638,7 +653,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             embed.add_field(name=name, value=value[:1024] or "—", inline=False)
         await followup(interaction, embed=embed)
 
-    @tree.command(name="roi", description="Bénéfice et ROI des reventes, jour par jour")
+    @G["compte"].command(name="roi", description="Bénéfice et ROI des reventes, jour par jour")
     @app_commands.describe(jours="nombre de jours, aujourd'hui compris (7 par défaut)")
     async def roi(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 60] = 7) -> None:
         report = await cli.roi_report(ctx, jours)
@@ -660,7 +675,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             embed.set_image(url="attachment://roi.png")
         await interaction.response.send_message(embed=embed, files=files)
 
-    @tree.command(name="solde", description="Solde du compte et capital immobilisé dans les positions")
+    @G["compte"].command(name="solde", description="Solde du compte et capital immobilisé dans les positions")
     async def solde(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         balance = await ctx.api.balance()
@@ -669,18 +684,18 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         embed.add_field(name="Positions", inline=True,
                         value=f"{wb(held['real_cost'])} WB ({plural(held['real_count'], 'carte')})")
         embed.add_field(name="Solde + positions", value=f"**{wb(balance + held['real_cost'])} WB**", inline=True)
-        embed.set_footer(text="/valeur : la valeur complète du compte (cartes, ventes en cours)")
+        embed.set_footer(text="/compte valeur : la valeur complète du compte (cartes, ventes en cours)")
         await followup(interaction, embed=embed)
 
-    @tree.command(name="positions", description="Cartes achetées pour la revente, pas encore revendues")
+    @G["vente"].command(name="positions", description="Cartes achetées pour la revente, pas encore revendues")
     async def positions(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(embed=positions_embed(await ctx.db.held_positions()))
 
-    @tree.command(name="ventes", description="Ventes programmées et en cours")
+    @G["vente"].command(name="en-cours", description="Ventes programmées et en cours")
     async def ventes(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(embed=listings_embed(await ctx.db.open_listings()))
 
-    @tree.command(name="prix", description="Ventes observées d'une carte, estimation du bot, ventes en cours")
+    @G["marche"].command(name="prix", description="Ventes observées d'une carte, estimation du bot, ventes en cours")
     @app_commands.describe(titre="titre exact de la carte", shiny="exemplaires shiny seulement (non par défaut)")
     @app_commands.autocomplete(titre=title_choices)
     async def prix(interaction: discord.Interaction, titre: str, shiny: bool = False) -> None:
@@ -689,7 +704,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         exact = next((t for t in known if t.casefold() == titre.strip().casefold()), None)
         if exact is None and known:  # « hitler » : les titres exacts qui le contiennent
             await reply(interaction, "Quelle carte ?", f"Pas de carte « {titre} » exactement. Titres vus sur le "
-                        "marché :\n" + "\n".join(f"• {t}" for t in known) + "\n\nRelance /prix en choisissant "
+                        "marché :\n" + "\n".join(f"• {t}" for t in known) + "\n\nRelance /marche prix en choisissant "
                         "dans la liste qui s'affiche pendant la frappe.", code=False)
             return
         name = f"{exact or titre} ✨" if shiny else exact or titre
@@ -701,7 +716,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             embed.set_thumbnail(url=image)
         await followup(interaction, embed=embed, **({"file": file} if file else {}))
 
-    @tree.command(name="collection", description="Avancement des collections et cartes manquantes")
+    @G["collection"].command(name="avancement", description="Avancement des collections et cartes manquantes")
     async def collection(interaction: discord.Interaction) -> None:
         state = await ctx.db.kv_get("collection")
         if not state:
@@ -724,10 +739,10 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         embed = discord.Embed(title="📅 " + (progress[0] if len(progress) == 1 else "Collection"),
                               description="\n".join(([*progress, ""] if len(progress) > 1 else []) + lines)[:4000],
                               color=COLOR if missing else GREEN)
-        embed.set_footer(text=f"Plafond par carte manquante : {s.collection_max_price} WB · /plafond-collection")
+        embed.set_footer(text=f"Plafond par carte manquante : {s.collection_max_price} WB · /collection plafond")
         await interaction.response.send_message(embed=embed)
 
-    @tree.command(name="collection-joueur", description="Collection publique d'un joueur, comparée à notre liste de GIF")
+    @G["collection"].command(name="joueur", description="Collection publique d'un joueur, comparée à notre liste de GIF")
     @app_commands.describe(pseudo="pseudo du joueur", etiquette="tag_id d'une de ses étiquettes (toute la collection sinon)")
     async def player_collection(interaction: discord.Interaction, pseudo: str, etiquette: str = "") -> None:
         await interaction.response.defer(thinking=True)
@@ -740,7 +755,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         await followup(interaction, embed=discord.Embed(title=f"🔎 Collection de {pseudo}",
                                                             description=summary_player(state)[:4000], color=COLOR))
 
-    @tree.command(name="amis", description="Tes cartes de collection manquantes que possèdent tes amis (rien ne leur est envoyé)")
+    @G["collection"].command(name="amis", description="Tes cartes de collection manquantes que possèdent tes amis (rien ne leur est envoyé)")
     @app_commands.describe(pseudo="le détail pour cet ami : valeur, doublons, offre équilibrée",
                            actualiser="relire le site, sinon la liste de moins d'une heure est reprise")
     async def friends_missing(interaction: discord.Interaction, pseudo: str = "", actualiser: bool = False) -> None:
@@ -761,10 +776,10 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             return
         embed = discord.Embed(title=title, description=text[:4000], color=COLOR)
         embed.set_footer(text="Rien n'est envoyé à tes amis : l'échange se propose sur le site"
-                              + ("" if name else " · /amis pseudo pour le détail"))
+                              + ("" if name else " · /collection amis pseudo pour le détail"))
         await followup(interaction, embed=embed)
 
-    @tree.command(name="sniper", description="Récap des enchères misées par le sniper")
+    @G["sniper"].command(name="recap", description="Récap des enchères misées par le sniper")
     @app_commands.describe(heures="période, en heures (24 par défaut)")
     async def sniper_report(interaction: discord.Interaction, heures: app_commands.Range[float, 1, 168] = 24) -> None:
         until = utcnow()
@@ -777,7 +792,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------ actions
-    @tree.command(name="snipe", description="Demander une carte au sniper : il la mise jusqu'à ta mise maximale")
+    @G["sniper"].command(name="demander", description="Demander une carte au sniper : il la mise jusqu'à ta mise maximale")
     @app_commands.describe(titre="titre exact de la carte", prix_max="mise maximale en WB",
                            rarete="une seule rareté (toutes par défaut)",
                            shiny="shiny seulement (non par défaut : shiny ou non)")
@@ -816,25 +831,25 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         embed.title, embed.color = f"🎯 Carte demandée : {added.label}", GREEN
         await interaction.edit_original_response(embed=embed, view=None)
 
-    @tree.command(name="snipes", description="Cartes demandées au sniper")
+    @G["sniper"].command(name="demandes", description="Cartes demandées au sniper")
     async def snipes_list(interaction: discord.Interaction) -> None:
         found = await snipes.load(ctx.db)
         embed = discord.Embed(title=f"🎯 Cartes demandées ({len(found)})", description=snipes_text(found)[:4000],
                               color=COLOR if found else GREY)
-        embed.set_footer(text="/snipe pour en ajouter une · /annuler pour en retirer une")
+        embed.set_footer(text="/sniper demander pour en ajouter une · /sniper annuler pour en retirer une")
         await interaction.response.send_message(embed=embed)
 
-    @tree.command(name="souhaits", description="Cartes de ta liste de souhaits suivies par le sniper, et leur plafond")
+    @G["collection"].command(name="souhaits", description="Cartes de ta liste de souhaits suivies par le sniper, et leur plafond")
     async def souhaits(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         text = await wishes.overview_text(ctx)
         embed = discord.Embed(title="💫 Cartes souhaitées", description=text[:4000],
                               color=COLOR if s.wish_max_price > 0 else GREY)
-        embed.set_footer(text="Ajoute ou retire une carte dans ta liste de souhaits du site. /snipe pour un prix "
+        embed.set_footer(text="Ajoute ou retire une carte dans ta liste de souhaits du site. /sniper demander pour un prix "
                               "choisi par toi.")
         await followup(interaction, embed=embed)
 
-    @tree.command(name="vitrines", description="Tes vitrines du profil : disposition et cartes")
+    @G["profil"].command(name="vitrines", description="Tes vitrines du profil : disposition et cartes")
     async def vitrines(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         try:
@@ -842,10 +857,10 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         except ApiError as exc:
             text = f"Vitrines illisibles : {exc}"
         embed = discord.Embed(title="🏆 Vitrines", description=text[:4000], color=COLOR)
-        embed.set_footer(text="/vitrine pour en remplir une avec ton meilleur exemplaire de chaque carte.")
+        embed.set_footer(text="/profil vitrine pour en remplir une avec ton meilleur exemplaire de chaque carte.")
         await followup(interaction, embed=embed)
 
-    @tree.command(name="vitrine", description="Remplir une vitrine avec ton meilleur exemplaire de chaque carte")
+    @G["profil"].command(name="vitrine", description="Remplir une vitrine avec ton meilleur exemplaire de chaque carte")
     @app_commands.describe(numero="vitrine à remplir (1 à 10 ; une de plus tous les 5 000 exemplaires)",
                            disposition="disposition de la vitrine", nom="nom affiché (vide : aucun)",
                            cartes="titres exacts, dans l'ordre, séparés par des points-virgules",
@@ -899,7 +914,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         embed.color = GREEN if ok else ORANGE
         await interaction.edit_original_response(embed=embed, view=None)
 
-    @tree.command(name="etiquettes", description="Tes tags du site (couleur, émoji) ; créer ou harmoniser ceux du bot")
+    @G["profil"].command(name="tags", description="Tes tags du site (couleur, émoji) ; créer ou harmoniser ceux du bot")
     @app_commands.describe(creer="créer sur le site les tags que le bot pose et qui manquent (confirmation)",
                            harmoniser="donner aux tags du site l'émoji et la couleur de config/themes.yaml "
                                       "(confirmation)")
@@ -928,7 +943,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
                             inline=False)
         todo, changes = (todo if creer else []), (changes if harmoniser else [])
         if not todo and not changes:
-            embed.set_footer(text="/etiquettes creer:True crée ceux qui manquent, harmoniser:True applique l'émoji et "
+            embed.set_footer(text="/profil tags creer:True crée ceux qui manquent, harmoniser:True applique l'émoji et "
                                   "la couleur du fichier. Un tag absent du fichier n'est jamais touché.")
             await interaction.edit_original_response(embed=embed)
             return
@@ -968,7 +983,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         return [app_commands.Choice(name=sn.label[:100], value=sn.title[:100])
                 for sn in (await snipes.load(ctx.db)).values() if current.casefold() in sn.title.casefold()][:25]
 
-    @tree.command(name="annuler", description="Ne plus demander une carte au sniper")
+    @G["sniper"].command(name="annuler", description="Ne plus demander une carte au sniper")
     @app_commands.describe(titre="carte demandée")
     @app_commands.autocomplete(titre=snipe_choices)
     async def annuler(interaction: discord.Interaction, titre: str) -> None:
@@ -987,6 +1002,11 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         if image := await card_image(ctx, removed.title):
             embed.set_thumbnail(url=image)
         await followup(interaction, embed=embed)
+
+    for group in G.values():
+        tree.add_command(group)
+    from src.discord_menu import register_menu
+    register_menu(tree, G, COMMAND_GROUPS, s.discord_owner_id)
 
     return client
 

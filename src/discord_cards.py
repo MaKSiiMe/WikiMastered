@@ -1,15 +1,15 @@
 """Commandes Discord sur les cartes, et boutons des messages de vente.
 
-- /garder, /gardees, /liberer : cartes jamais vendues ni défaussées (src/keeps.py) ; une revente en cours de la carte
+- /cartes garder, /cartes gardees, /cartes liberer : cartes jamais vendues ni défaussées (src/keeps.py) ; une revente en cours de la carte
   est arrêtée (ventes pas encore publiées annulées).
-- /vendre : vend un exemplaire au prix choisi, à la première place de vente libre (confirmée par un bouton).
-- /plafond-collection : mise maximale d'une carte de collection manquante, sans redéployer (src/overrides.py).
-- /carte : tes exemplaires d'une carte, sa cote, ce que le bot en fait ; boutons garder, vendre, demander.
-- /opportunites : les ventes suivies par le sniper et son plafond pour chacune.
-- /top : les cartes les plus chères en moyenne sur les ventes observées (normales ou shiny), et la mise conseillée
+- /vente vendre : vend un exemplaire au prix choisi, à la première place de vente libre (confirmée par un bouton).
+- /collection plafond : mise maximale d'une carte de collection manquante, sans redéployer (src/overrides.py).
+- /cartes fiche : tes exemplaires d'une carte, sa cote, ce que le bot en fait ; boutons garder, vendre, demander.
+- /sniper opportunites : les ventes suivies par le sniper et son plafond pour chacune.
+- /marche top : les cartes les plus chères en moyenne sur les ventes observées (normales ou shiny), et la mise conseillée
   pour les revendre.
-- /shiny : les shiny en vente vus par le sniper, sans requête au site ; 💰 et plafond si rentable, menu pour les demander au sniper.
-- /echange : un échange envisagé est-il équitable ? Valeur de chaque côté et contre-offre (src/trades.py).
+- /marche shiny : les shiny en vente vus par le sniper, sans requête au site ; 💰 et plafond si rentable, menu pour les demander au sniper.
+- /echanges evaluer : un échange envisagé est-il équitable ? Valeur de chaque côté et contre-offre (src/trades.py).
 - Boutons des messages « Revente sans acheteur », « Position invendue » : identifiant fixe
   (wm:<action>:<vente>), encore actifs après un redémarrage du bot.
 """
@@ -45,7 +45,7 @@ from src.workers.inventory_manager import InventoryManager, copies_of, newest_se
 log = logging.getLogger("wikimastered.discord")
 
 OPPORTUNITIES_SHOWN = 20
-TOP_DAYS = 7  # /top : moyenne des ventes observées de ces derniers jours
+TOP_DAYS = 7  # /marche top : moyenne des ventes observées de ces derniers jours
 TOP_MIN_SALES = 3  # … d'une carte vendue au moins ce nombre de fois
 TOP_SIZES = (10, 25, 50)
 TOP_PER_EMBED = 25
@@ -178,7 +178,7 @@ def switch_embed(title: str, on: bool, text: str, command: str) -> discord.Embed
 
 
 def value_embed(value: dict, snapshot: dict) -> discord.Embed:
-    """/valeur : le total en gros, puis d'où il vient, la collection par rareté et les cartes les plus chères."""
+    """/compte valeur : le total en gros, puis d'où il vient, la collection par rareté et les cartes les plus chères."""
     lines = [f"## {wb(value['total'])} WB"]
     if value["previous"]:
         day, before = value["previous"]
@@ -219,7 +219,7 @@ def sellable(copies: list[OwnedCard], excluded: set[str], rarity: str = "") -> t
 
 
 def top_bid(resale: float | None, fee: float) -> str:
-    """/top : mise conseillée pour revendre la carte (voir `advised_bid`) et bénéfice si elle est gagnée."""
+    """/marche top : mise conseillée pour revendre la carte (voir `advised_bid`) et bénéfice si elle est gagnée."""
     if resale is None:
         return ""
     bid, profit = advised_bid(resale, fee)
@@ -227,7 +227,7 @@ def top_bid(resale: float | None, fee: float) -> str:
 
 
 async def top_embeds(ctx: Context, size: int, shiny: bool) -> list[discord.Embed]:
-    """/top : les `size` cartes les plus chères en moyenne, normales ou shiny, avec la mise conseillée pour les
+    """/marche top : les `size` cartes les plus chères en moyenne, normales ou shiny, avec la mise conseillée pour les
     revendre ; TOP_PER_EMBED par embed (50 lignes dépassent les 4096 caractères d'une description)."""
     rows = await ctx.db.top_prices(utcnow() - timedelta(days=TOP_DAYS), shiny, size, TOP_MIN_SALES)
     lines = []
@@ -270,7 +270,7 @@ class ShinyPick:
 
 
 class ShinyPicker(discord.ui.View):
-    """Menu des lignes 💰 de /shiny, pour le seul propriétaire ; une carte choisie : son plafond à confirmer."""
+    """Menu des lignes 💰 de /marche shiny, pour le seul propriétaire ; une carte choisie : son plafond à confirmer."""
 
     def __init__(self, owner_id: int, picks: list[ShinyPick],
                  on_price: Callable[[discord.Interaction, ShinyPick, int], Awaitable[None]]):
@@ -299,8 +299,8 @@ class ShinyPicker(discord.ui.View):
 
 async def shiny_embeds(ctx: Context, size: int, sort: str = "end", max_price: int | None = None,
                        profitable: bool = False) -> tuple[list[discord.Embed], list[ShinyPick]]:
-    """/shiny : les shiny en vente d'après la dernière lecture du sniper, avec leur cote, 💰 et le plafond à donner à
-    /snipe si la mise minimale le permet ; TOP_PER_EMBED par embed. Renvoie aussi les cartes 💰 affichées, une fois
+    """/marche shiny : les shiny en vente d'après la dernière lecture du sniper, avec leur cote, 💰 et le plafond à donner à
+    /sniper demander si la mise minimale le permet ; TOP_PER_EMBED par embed. Renvoie aussi les cartes 💰 affichées, une fois
     chacune : une demande vaut pour la carte, pas pour une vente."""
     now = utcnow()
     rows = await ctx.db.shiny_on_sale(now, sort, max_price)
@@ -335,7 +335,8 @@ async def shiny_embeds(ctx: Context, size: int, sort: str = "end", max_price: in
     return embeds, list(picks.values())
 
 
-def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Context, workers: list[Worker]) -> None:
+def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Context, workers: list[Worker],
+             G: dict[str, app_commands.Group]) -> None:  # groupes de commandes (discord_bot)
     s = ctx.settings
     owner = s.discord_owner_id
     sniper = next((w for w in workers if isinstance(w, AuctionSniper)), None)
@@ -370,12 +371,12 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                          "bot ne peut pas annuler : retire-la toi-même si besoin.")
         embed = discord.Embed(title=f"🔒 Gardée : {keep.label}", description="\n".join(lines),
                               color=ORANGE if posted else GREEN)
-        embed.set_footer(text="/liberer pour qu'elle puisse de nouveau être vendue")
+        embed.set_footer(text="/cartes liberer pour qu'elle puisse de nouveau être vendue")
         if image := await card_image(ctx, keep.title):
             embed.set_thumbnail(url=image)
         return embed
 
-    @tree.command(name="garder", description="Ne jamais vendre ni défausser une carte (arrête aussi sa revente)")
+    @G["cartes"].command(name="garder", description="Ne jamais vendre ni défausser une carte (arrête aussi sa revente)")
     @app_commands.describe(carte="titre exact", rarete="une seule rareté (toutes par défaut)")
     @app_commands.autocomplete(carte=title_choices)
     @app_commands.choices(rarete=rarity_choices)
@@ -384,21 +385,21 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         await interaction.response.defer()
         await interaction.followup.send(embed=await keep_card(carte, rarete.value if rarete else ""))
 
-    @tree.command(name="gardees", description="Cartes gardées (jamais vendues ni défaussées)")
+    @G["cartes"].command(name="gardees", description="Cartes gardées (jamais vendues ni défaussées)")
     async def gardees(interaction: discord.Interaction) -> None:
         kept = await keeps.load(ctx.db)
         text = "\n".join(f"• **{k.label}**" + (f" · depuis le {paris(k.added_at)}" if k.added_at else "")
                          for k in kept) or "Aucune carte gardée."
         embed = discord.Embed(title=f"🔒 Cartes gardées ({len(kept)})", description=text[:4000],
                               color=COLOR if kept else GREY)
-        embed.set_footer(text="/garder pour en ajouter une · /liberer pour en retirer une")
+        embed.set_footer(text="/cartes garder pour en ajouter une · /cartes liberer pour en retirer une")
         await interaction.response.send_message(embed=embed)
 
     async def kept_choices(_interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         return [app_commands.Choice(name=k.label[:100], value=k.label[:100]) for k in await keeps.load(ctx.db)
                 if current.casefold() in k.label.casefold()][:25]
 
-    @tree.command(name="liberer", description="Ne plus garder une carte : elle peut de nouveau être vendue")
+    @G["cartes"].command(name="liberer", description="Ne plus garder une carte : elle peut de nouveau être vendue")
     @app_commands.describe(carte="carte gardée")
     @app_commands.autocomplete(carte=kept_choices)
     async def liberer(interaction: discord.Interaction, carte: str) -> None:
@@ -439,7 +440,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         return embed
 
     async def sale_check(title: str, price: int, rarity: str) -> tuple[discord.Embed, bool]:
-        """Embed de confirmation de /vendre ; False si rien n'est vendable."""
+        """Embed de confirmation de /vente vendre ; False si rien n'est vendable."""
         copies, excluded = await copies_of(ctx, title)
         copy, why = sellable(copies, excluded, rarity)
         if copy is None:
@@ -462,7 +463,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             embed.set_thumbnail(url=image)
         return embed, True
 
-    @tree.command(name="vendre", description="Vendre un exemplaire au prix choisi, à la première place libre")
+    @G["vente"].command(name="vendre", description="Vendre un exemplaire au prix choisi, à la première place libre")
     @app_commands.describe(carte="titre exact", prix="prix de départ en WB", rarete="rareté de l'exemplaire")
     @app_commands.autocomplete(carte=title_choices)
     @app_commands.choices(rarete=rarity_choices)
@@ -491,7 +492,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             timeout=CONFIRM_SECONDS))
 
     # ------------------------------------------------------------ réglages
-    @tree.command(name="plafond-collection", description="Mise maximale d'une carte de collection manquante")
+    @G["collection"].command(name="plafond", description="Mise maximale d'une carte de collection manquante")
     @app_commands.rename(wb_max="wb")
     @app_commands.describe(wb_max="nouveau plafond en WB (sans valeur : affiche le plafond actuel)")
     async def plafond_collection(interaction: discord.Interaction,
@@ -499,7 +500,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         if wb_max is None:
             embed = discord.Embed(title=f"📅 Plafond de collection : {wb(s.collection_max_price)} WB", color=COLOR,
                                   description="Mise maximale pour une carte de collection manquante.")
-            embed.set_footer(text="/plafond-collection wb:… pour le changer")
+            embed.set_footer(text="/collection plafond wb:… pour le changer")
             await interaction.response.send_message(embed=embed)
             return
         old = await overrides.set_value(ctx, "collection_max_price", wb_max)
@@ -511,7 +512,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
 
     switch = [app_commands.Choice(name="activer", value=1), app_commands.Choice(name="désactiver", value=0)]
 
-    @tree.command(name="defausse", description="Activer ou couper la défausse automatique (sans toucher aux reventes)")
+    @G["cartes"].command(name="defausse", description="Activer ou couper la défausse automatique (sans toucher aux reventes)")
     @app_commands.describe(etat="sans valeur : affiche l'état actuel")
     @app_commands.choices(etat=switch)
     async def defausse(interaction: discord.Interaction, etat: app_commands.Choice[int] | None = None) -> None:
@@ -519,7 +520,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             await interaction.response.send_message(embed=switch_embed(
                 "🗑️ Défausse automatique", s.discard_enabled,
                 "Le worker value_scan (cotes) est en pause (il ne sert qu'à elle)." if "value_scan" in ctx.pauses else "",
-                "/defausse activer" if not s.discard_enabled else "/defausse couper"))
+                "/cartes defausse activer" if not s.discard_enabled else "/cartes defausse couper"))
             return
         on = bool(etat.value)
         await overrides.set_value(ctx, "discard_enabled", on)
@@ -534,16 +535,16 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             "🗑️ Défausse automatique", on,
             "Le worker cotes reprend." if on else
             "Le worker cotes est en pause (il ne sert qu'à elle). Les reventes du sniper et tes ventes continuent.",
-            "/defausse couper" if on else "/defausse activer"))
+            "/cartes defausse couper" if on else "/cartes defausse activer"))
 
-    @tree.command(name="doublons", description="Activer ou couper la vente automatique des doublons")
+    @G["cartes"].command(name="doublons", description="Activer ou couper la vente automatique des doublons")
     @app_commands.describe(etat="sans valeur : affiche l'état actuel")
     @app_commands.choices(etat=switch)
     async def doublons(interaction: discord.Interaction, etat: app_commands.Choice[int] | None = None) -> None:
         if etat is None:
             await interaction.response.send_message(embed=switch_embed(
                 "💰 Vente automatique des doublons", s.duplicates_sell, "",
-                "/doublons couper" if s.duplicates_sell else "/doublons activer"))
+                "/cartes doublons couper" if s.duplicates_sell else "/cartes doublons activer"))
             return
         on = bool(etat.value)
         await overrides.set_value(ctx, "duplicates_sell", on)
@@ -554,10 +555,10 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             "💰 Vente automatique des doublons", on,
             ("Les doublons sont de nouveau mis en vente." if on else
              "Les places de vente restent aux reventes du sniper et à tes ventes.") + extra,
-            "/doublons couper" if on else "/doublons activer"))
+            "/cartes doublons couper" if on else "/cartes doublons activer"))
 
     # ------------------------------------------------------------ fiche d'une carte
-    @tree.command(name="carte", description="Tes exemplaires d'une carte, sa cote et ce que le bot en fait")
+    @G["cartes"].command(name="fiche", description="Tes exemplaires d'une carte, sa cote et ce que le bot en fait")
     @app_commands.describe(carte="titre exact")
     @app_commands.autocomplete(carte=title_choices)
     async def carte(interaction: discord.Interaction, carte: str) -> None:
@@ -675,14 +676,14 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                 raise
             await interaction.message.edit(content=None, embed=embed, view=view)
 
-    @tree.command(name="valeur", description="Valeur du compte : solde + cartes + ventes en cours + mises en tête")
+    @G["compte"].command(name="valeur", description="Valeur du compte : solde + cartes + ventes en cours + mises en tête")
     async def valeur(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         embed, view = await value_message(False)
         await interaction.followup.send(embed=embed, view=view)
 
     # ------------------------------------------------------------ ventes suivies
-    @tree.command(name="opportunites", description="Ventes suivies par le sniper et son plafond pour chacune")
+    @G["sniper"].command(name="opportunites", description="Ventes suivies par le sniper et son plafond pour chacune")
     async def opportunites(interaction: discord.Interaction) -> None:
         if sniper is None:
             await interaction.response.send_message(embed=discord.Embed(
@@ -707,7 +708,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             description=("\n".join(lines) or "Aucune vente suivie pour l'instant.") + more + legend))
 
     # ------------------------------------------------------------ cartes les plus chères
-    @tree.command(name="top", description="Cartes les plus chères en moyenne (ventes observées ces 7 derniers jours)")
+    @G["marche"].command(name="top", description="Cartes les plus chères en moyenne (ventes observées ces 7 derniers jours)")
     @app_commands.describe(nombre="10 par défaut", shiny="shiny seulement (non par défaut)")
     @app_commands.choices(nombre=[app_commands.Choice(name=str(n), value=n) for n in TOP_SIZES])
     async def top(interaction: discord.Interaction, nombre: app_commands.Choice[int] | None = None,
@@ -718,7 +719,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------ shiny en vente
-    @tree.command(name="shiny", description="Shiny en vente sur le marché, avec leur mise et leur cote")
+    @G["marche"].command(name="shiny", description="Shiny en vente sur le marché, avec leur mise et leur cote")
     @app_commands.describe(tri="fin la plus proche par défaut", prix_max="seulement jusqu'à cette mise minimale",
                            nombre="25 par défaut", rentables="seulement les lignes 💰 (non par défaut)")
     @app_commands.choices(tri=[app_commands.Choice(name=n, value=v) for v, n in SHINY_SORTS.items()],
@@ -748,7 +749,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
             await interaction.followup.send(embed=embeds[-1])
 
     # ------------------------------------------------------------ échanges
-    @tree.command(name="echange", description="Un échange est-il équitable ? Valeur de chaque côté et contre-offre")
+    @G["echanges"].command(name="evaluer", description="Un échange est-il équitable ? Valeur de chaque côté et contre-offre")
     @app_commands.describe(je_donne="carte que tu donnes (« Titre », « Titre (L) », « Titre ✨ » pour un shiny)",
                            je_recois="carte que tu reçois", je_donne_2="autre carte que tu donnes",
                            je_donne_3="autre carte que tu donnes", je_recois_2="autre carte que tu reçois",
@@ -773,7 +774,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
                               f"part). Équitable : écart de {s.trades_fair_margin_ratio:.0%} au plus.")
         await interaction.followup.send(embed=embed)
 
-    @tree.command(name="echanges", description="Rendement de tes échanges : valeur donnée et reçue, échange par échange")
+    @G["echanges"].command(name="bilan", description="Rendement de tes échanges : valeur donnée et reçue, échange par échange")
     @app_commands.describe(jours="période, en jours (30 par défaut)")
     async def echanges(interaction: discord.Interaction, jours: app_commands.Range[int, 1, 365] = 30) -> None:
         from src.workers.trade_watch import LOG_KEY

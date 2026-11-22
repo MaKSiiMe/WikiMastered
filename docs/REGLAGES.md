@@ -84,7 +84,7 @@ DISCORD_WEBHOOK_REPORT=                # bilan de 23:00, récap des workers tout
 DISCORD_WEBHOOK_SYSTEM=              # démarrage, session, réseau, sauvegardes
 DISCORD_MENTION=                      # ex. @here : mention des alertes rouges
 KUMA_PUSH_URL=                        # moniteur « Push » d'Uptime Kuma, appelé après les passages réussis
-# Commandes slash (/roi, /bilan, /snipe…) : bot du portail développeur Discord (onglet Bot > Reset Token).
+# Commandes slash (/compte roi, /compte bilan, /sniper demander…) : bot du portail développeur Discord (onglet Bot > Reset Token).
 # Seul DISCORD_OWNER_ID (clic droit sur ton pseudo > Copier l'identifiant) peut s'en servir ; DISCORD_GUILD_ID
 # (clic droit sur le serveur) les fait apparaître tout de suite. Vide = pas de commandes, les webhooks seuls.
 DISCORD_BOT_TOKEN=
@@ -355,7 +355,7 @@ VALUE_SCAN_MAX_AGE_DAYS=7             # cote plus récente : reprise du cache, p
 VALUE_SCAN_UNSOLD_DAYS=30             # carte sans aucune vente : recotée après N jours
 VALUE_SCAN_FREEZE_BELOW=50            # cotée sous N WB : cote figée pour toujours (0 = jamais)
 
-# Valeur du compte (/valeur) : collection relue toutes les N heures au plus, si aucun autre worker ne l'a fait.
+# Valeur du compte (/compte valeur) : collection relue toutes les N heures au plus, si aucun autre worker ne l'a fait.
 ACCOUNT_VALUE_ENABLED=true
 ACCOUNT_VALUE_HOURS=6
 ```

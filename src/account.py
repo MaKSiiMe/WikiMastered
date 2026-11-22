@@ -1,4 +1,4 @@
-"""Valeur du compte en WB (/valeur sur Discord) : solde + cartes possédées + cartes en vente + mises en tête.
+"""Valeur du compte en WB (/compte valeur sur Discord) : solde + cartes possédées + cartes en vente + mises en tête.
 
 Lire toute la collection (≈ 5 600 exemplaires, 110 pages, le 27/10) prend plusieurs minutes : sa valeur est gardée
 en base (kv « collection_value ») à chaque lecture complète faite par un worker (cotes, inventaire, et le worker

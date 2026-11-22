@@ -618,7 +618,7 @@ async def test_sniper_follows_an_announced_sale_without_searching_its_title(tmp_
 
 @pytest.mark.asyncio
 async def test_a_card_you_wishlist_yourself_is_bought_up_to_its_quote_and_tagged(tmp_path):
-    """12/11 : une carte ajoutée à la main à la liste de souhaits est achetée par le sniper, sans /snipe : toute
+    """12/11 : une carte ajoutée à la main à la liste de souhaits est achetée par le sniper, sans /sniper demander : toute
     rareté au-dessus de celle possédée, jusqu'à sa cote et au plus WISH_MAX_PRICE ; gagnée, elle est étiquetée et
     reste souhaitée pour une rareté plus haute. Les cartes mises dans la liste par le bot ne comptent pas."""
     import json

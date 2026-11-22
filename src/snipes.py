@@ -1,9 +1,9 @@
-"""Cartes demandées sur Discord (/snipe) : le sniper les mise comme une carte de collection manquante.
+"""Cartes demandées sur Discord (/sniper demander) : le sniper les mise comme une carte de collection manquante.
 
 Chaque demande = un titre exact, une mise maximale et, au choix, une rareté et « shiny seulement » (kv « snipes »).
 Le sniper cherche la carte par son titre (comme un jour manquant), la relit en priorité dans sa fenêtre de mise et
 mise le minimum, jusqu'à la mise maximale. Une carte gagnée est gardée (pas revendue) et la demande est
-retirée ; /annuler la retire avant.
+retirée ; /sniper annuler la retire avant.
 """
 
 from __future__ import annotations

@@ -21,7 +21,7 @@ Par défaut, `DRY_RUN=true` : rien n'est envoyé au site, le bot annonce seuleme
 | [`wishes`](src/workers/wishes.py) | Achète les cartes que tu ajoutes toi-même à ta liste de souhaits du site, jusqu'à leur cote, et les étiquette | coupé (`WISH_MAX_PRICE`) |
 | [`trades`](src/workers/trade_watch.py) | Évalue les échanges qu'on te propose et suggère une contre-offre ; ne répond jamais à ta place | actif |
 | [`value_scan`](src/workers/value_scan.py) | Cote toute la collection toutes les 12 h, pour la défausse des derniers exemplaires | actif |
-| [`account_value`](src/workers/account_value.py) | Calcule la valeur du compte (`/valeur`) toutes les 6 h | actif |
+| [`account_value`](src/workers/account_value.py) | Calcule la valeur du compte (`/compte valeur`) toutes les 6 h | actif |
 | [`guard`](src/workers/profile_guard.py) | Relit ton profil et arrête tout le bot à la première sanction du site ; prévient quand tes paquets sont pleins | actif dès que la clé publique du site est trouvée |
 
 Les règles détaillées (estimation des prix, mises, remises en vente…) sont dans [docs/FONCTIONNEMENT.md](docs/FONCTIONNEMENT.md).
@@ -52,7 +52,7 @@ Ensuite, [choisis ce que le bot doit faire](docs/INSTALLATION.md#5-choisir-les-r
 |---|---|
 | [Installation](docs/INSTALLATION.md) | Installer, régler, passer en réel, entretenir, dépanner |
 | [Réglages](docs/REGLAGES.md) | Tous les réglages, avec leur valeur par défaut |
-| [Commandes](docs/COMMANDES.md) | Commandes Discord (`/bilan`, `/snipe`…), console, outils |
+| [Commandes](docs/COMMANDES.md) | Commandes Discord (`/compte bilan`, `/sniper demander`…), console, outils |
 | [Fonctionnement](docs/FONCTIONNEMENT.md) | Comprendre comment le bot décide |
 | [Développement](docs/DEVELOPPEMENT.md) | Lire ou modifier le code, lancer les tests |
 

@@ -534,7 +534,7 @@ class AuctionSniper(Worker):
         self._collection_wanted: set[str] = set()
         self._collection_logged: dict[str, str | None] = {}
         self._vanished_retry: dict[int, datetime] = {}  # mise -> prochaine relecture de son enchère introuvable
-        self._snipes: dict[str, Snipe] = {}  # cartes demandées sur Discord (/snipe), par clé de titre
+        self._snipes: dict[str, Snipe] = {}  # cartes demandées sur Discord (/sniper demander), par clé de titre
         # Cartes de ta liste de souhaits (worker souhaits), misées comme une demande, jusqu'à leur cote.
         self._wishes: dict[str, Snipe] = {}
         self._wish_ids: dict[str, str] = {}  # id de carte -> clé de titre, pour les ventes annoncées par le site
@@ -1027,7 +1027,7 @@ class AuctionSniper(Worker):
         return next(r for r, i in RARITY_RANK.items() if i == self._collection_best[key])
 
     def watched(self) -> list[tuple[Auction, int | None, str]]:
-        """Ventes suivies (commande Discord /opportunites) : enchère, plafond, motif ; les plus proches de la fin
+        """Ventes suivies (commande Discord /sniper opportunites) : enchère, plafond, motif ; les plus proches de la fin
         d'abord."""
         now = utcnow()
         out = []
@@ -1052,7 +1052,7 @@ class AuctionSniper(Worker):
         return snipe if snipe is not None and snipe.matches(auction) else None
 
     async def reload_snipes(self) -> None:
-        """Relit les cartes demandées sur Discord (aussi appelé par /snipe et /annuler, sans attendre) et les cartes
+        """Relit les cartes demandées sur Discord (aussi appelé par /sniper demander et /sniper annuler, sans attendre) et les cartes
         de ta liste de souhaits (worker souhaits)."""
         self._snipes = await load_snipes(self.db)
         self._wishes = await wishes.load(self.db, self.settings.wish_max_price)
@@ -1129,7 +1129,7 @@ class AuctionSniper(Worker):
                           auction.min_bid, limit)
             self.notifier.info("Carte souhaitée sans cote", f"{label} est en vente (mise minimale "
                                f"{auction.min_bid} WB{limit}), mais je n'ai aucune cote pour cette rareté : je ne "
-                               "mise pas. /snipe la demande à ton prix.", topic=Topic.COLLECTION, important=True,
+                               "mise pas. /sniper demander la demande à ton prix.", topic=Topic.COLLECTION, important=True,
                                url=auction_url(self.settings.wm_base_url, auction.id))
         return None
 
@@ -1853,7 +1853,7 @@ class AuctionSniper(Worker):
 
     def _report_bid(self, title: str, summary: str) -> None:
         """Mise placée ou simulée : dans les logs ; sur Discord seulement avec DISCORD_NOTIFY_EACH_BID (le récap des enchères
-        de 08:00 et /sniper en donnent le détail, les positions gagnées ont leur message)."""
+        de 08:00 et /sniper recap en donnent le détail, les positions gagnées ont leur message)."""
         self.log.info("%s : %s", title, summary)
         if self.settings.discord_notify_each_bid:
             self.notifier.info(title, summary)

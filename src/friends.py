@@ -1,4 +1,4 @@
-"""Cartes de collection manquantes que possèdent tes amis (/amis) : à toi de leur proposer un échange sur le site.
+"""Cartes de collection manquantes que possèdent tes amis (/collection amis) : à toi de leur proposer un échange sur le site.
 
 Lecture seule, à la demande, en requêtes de fond. Le bot n'a aucune route pour proposer un échange : rien n'est envoyé
 aux amis. La liste de souhaits porte les cartes manquantes (COLLECTION_WISHLIST) et le catalogue dit, pour chacune, quels
@@ -19,7 +19,7 @@ from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers.collection import collection_key
 
 KV_KEY = "friends_missing"
-FRESH = timedelta(hours=1)  # /amis puis /amis pseudo : pas de nouvelle lecture du catalogue
+FRESH = timedelta(hours=1)  # /collection amis puis /collection amis pseudo : pas de nouvelle lecture du catalogue
 PAGE_SIZE = 50
 MAX_PAGES = 200
 FRIENDS_SHOWN = 15

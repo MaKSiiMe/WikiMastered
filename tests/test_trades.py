@@ -1,4 +1,4 @@
-"""Échanges : valeur de chaque côté, verdict, contre-offre (src/trades.py, worker echanges, /echange)."""
+"""Échanges : valeur de chaque côté, verdict, contre-offre (src/trades.py, worker echanges, /echanges evaluer)."""
 
 from __future__ import annotations
 
@@ -187,7 +187,7 @@ async def test_every_trade_is_kept_with_both_sides_values_and_its_final_status(t
 
 
 def test_trade_history_counts_only_concluded_trades():
-    """/echanges : seuls les échanges conclus font le résultat ; un échange terminé sans issue connue est à part."""
+    """/echanges bilan : seuls les échanges conclus font le résultat ; un échange terminé sans issue connue est à part."""
     def kept(tid, seen, status, given, received):
         return {"id": tid, "seen": seen, "with": "Camille", "mine": True, "status": status, "wb_given": 500,
                 "wb_received": 0, "given_total": given, "received_total": received, "unknown": 0,

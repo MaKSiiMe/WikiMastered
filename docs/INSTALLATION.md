@@ -168,7 +168,7 @@ Par étapes, car le bot dépense alors de vrais WB. Après chaque changement, re
 
 ### Activer les commandes
 
-Pour interroger le bot depuis Discord (`/bilan`, `/snipe`… voir [Commandes](COMMANDES.md#discord)) :
+Pour interroger le bot depuis Discord (`/compte bilan`, `/sniper demander`… voir [Commandes](COMMANDES.md#discord)) :
 
 1. [Portail développeur Discord](https://discord.com/developers/applications) > **New Application**. Onglet **Bot** : **Reset Token** et copie-le ; laisse les *Privileged Gateway Intents* désactivés et décoche **Public Bot**.
 2. Onglet **OAuth2** > **URL Generator** : coche `bot` et `applications.commands`, puis la permission `Send Messages`. Ouvre l'URL et choisis ton serveur.
@@ -223,7 +223,7 @@ Pour le relancer malgré tout : `rm data/HALT` dans la console du conteneur, pui
 
 ### Sauvegardes
 
-Chaque nuit à 04:30 (`BACKUP_TIME`), le bot copie la base à chaud, vérifie la copie, la compresse et garde les 7 plus récentes (`BACKUP_KEEP_COUNT`), dans un dossier séparé des données. `/sauvegarde` sur Discord en fait une tout de suite, et `/etat` montre la dernière.
+Chaque nuit à 04:30 (`BACKUP_TIME`), le bot copie la base à chaud, vérifie la copie, la compresse et garde les 7 plus récentes (`BACKUP_KEEP_COUNT`), dans un dossier séparé des données. `/bot sauvegarde` sur Discord en fait une tout de suite, et `/bot etat` montre la dernière.
 
 Elles restent sur la même machine. Pour en garder une ailleurs : `docker cp wikimastered:/app/backups/<archive> .`
 
@@ -262,7 +262,7 @@ Tout est dans `data/` : base SQLite, journal, session. Avec Portainer, c'est le 
 | « Commandes Discord inactives » | `DISCORD_OWNER_ID` manquant ou pas un nombre : il faut ton identifiant, pas ton pseudo |
 | Pas de commande `/…` dans Discord | Sans `DISCORD_GUILD_ID`, jusqu'à une heure d'attente |
 | Aucun message Discord | Vérifie `DISCORD_WEBHOOK_MAIN` et lis les logs (`docker logs wikimastered`) : sans webhook, les messages y sont seulement recopiés |
-| Le bot ne mise pas | `SNIPER_RESALE_RARITIES` est vide par défaut. Sinon, regarde `/etat` : vérification anti-bot en attente, route en pause, sniper en pause. Sinon, `python -m src.main sniper-report --breakdown`. Il faut aussi quelques jours de ventes observées avant que le bot sache estimer les cartes |
+| Le bot ne mise pas | `SNIPER_RESALE_RARITIES` est vide par défaut. Sinon, regarde `/bot etat` : vérification anti-bot en attente, route en pause, sniper en pause. Sinon, `python -m src.main sniper-report --breakdown`. Il faut aussi quelques jours de ventes observées avant que le bot sache estimer les cartes |
 | Aucune collection dans le récap | `COLLECTION_SETS` est vide |
 | Une étiquette n'est pas posée | Elle doit d'abord être créée sur le site. `python -m src.main themes` liste celles qui manquent |
 | Conteneur `unhealthy` | Le bot n'écrit plus son `heartbeat` : lis les logs. Avec Docker Compose, vérifie les droits de `data/` (UID 1000) |
