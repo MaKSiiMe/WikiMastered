@@ -775,7 +775,7 @@ async def collection_status(ctx: Context) -> None:
     """Relit la collection à compléter et affiche possédées / manquantes."""
     s = ctx.settings
     if not (s.collection_sets or s.collection_titles):
-        print("Aucune collection configurée : ajoute COLLECTION_SETS=jours (et COLLECTION_MAX_PRICE).")
+        print("Aucune collection configurée : ajoute COLLECTION_SETS=days (et COLLECTION_MAX_PRICE).")
         return
     print(f"COLLECTION_SETS = {s.collection_sets}  COLLECTION_TITLES = {s.collection_titles}")
     state = await refresh_collection(ctx)
@@ -811,7 +811,7 @@ async def themes_status(ctx: Context) -> None:
         await wikidata.close()
     print(themes.summary(state))
     if state["untagged"]:
-        print("Sans thème (corrections possibles dans config/etiquettes.yaml) : " + ", ".join(state["untagged"]))
+        print("Sans thème (corrections possibles dans config/themes.yaml) : " + ", ".join(state["untagged"]))
     print(f"À poser : {state['to_add']} ; « {ctx.settings.tag_duplicate} » à retirer : {state['to_remove']}")
     if state["missing_tags"]:
         print("Étiquettes à créer sur le site : " + ", ".join(state["missing_tags"]))

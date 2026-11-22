@@ -2,7 +2,7 @@
 
 - Toutes les THEMES_INTERVAL_HOURS, lit toute la collection (requêtes de fond) et, pour chaque carte, l'exemplaire gardé
   (keep_order : favori, shiny, plus haute rareté, puis le plus ancien ; la vente prend toujours le plus récent).
-- Thèmes de la carte : règles de config/etiquettes.yaml appliquées à ce que Wikidata dit de son article (voir
+- Thèmes de la carte : règles de config/themes.yaml appliquées à ce que Wikidata dit de son article (voir
   src/core/wikidata.py), gardé en base (table card_facts) ; THEMES_LOOKUPS_PER_RUN cartes nouvelles par passage.
   Les corrections du fichier passent avant Wikidata.
 - Posées sur l'exemplaire gardé ; les autres exemplaires reçoivent TAG_DUPLICATE. Le bot n'enlève jamais un
@@ -37,7 +37,7 @@ from src.account import store_collection
 from src.core.client import ApiError
 from src.core.models import Card, OwnedCard
 from src.core.notifier import Topic
-from src.core.text import tag_key
+from src.core.text import config_value, tag_key
 from src.core.timeutils import utcnow
 from src.core.wikidata import Facts, Wikidata
 from src.workers.base import Context, Worker
@@ -47,7 +47,7 @@ log = logging.getLogger(__name__)
 
 KV_KEY = "etiquettes"
 FRAMES_KEY = "gif_frames"
-RULES_FILE = Path(__file__).resolve().parents[2] / "config" / "etiquettes.yaml"
+RULES_FILE = Path(__file__).resolve().parents[2] / "config" / "themes.yaml"
 PERSON = "Q5"  # être humain : les règles « description » et « metiers » ne valent que pour les personnes
 MISSING_RETRY = timedelta(days=7)  # article sans élément Wikidata : relu après N jours
 BACKLOG_MINUTES = 30
@@ -98,10 +98,14 @@ def _words(value: Any) -> tuple[str, ...]:
 
 def load_rules(path: Path | None = None) -> Rules:
     raw = yaml.safe_load((path or RULES_FILE).read_text(encoding="utf-8")) or {}
-    themes = tuple(Theme(str(name), frozenset(map(str, spec.get("natures") or ())),
-                         frozenset(map(str, spec.get("taxons") or ())), frozenset(map(str, spec.get("metiers") or ())),
-                         _words(spec.get("description")), tuple(map(str, spec.get("sauf") or ())), bool(spec.get("seul")),
-                         bool(spec.get("retirer")))
+    def get(spec: dict, key: str, old: str) -> Any:
+        return config_value(spec, key, old)
+
+    themes = tuple(Theme(str(name), frozenset(map(str, get(spec, "classes", "natures") or ())),
+                         frozenset(map(str, get(spec, "taxa", "taxons") or ())),
+                         frozenset(map(str, get(spec, "occupations", "metiers") or ())),
+                         _words(spec.get("description")), tuple(map(str, get(spec, "unless", "sauf") or ())),
+                         bool(get(spec, "alone", "seul")), bool(get(spec, "removable", "retirer")))
                    for name, spec in (raw.get("themes") or {}).items())
     return Rules(themes, {str(t): tuple(map(str, v or ())) for t, v in (raw.get("corrections") or {}).items()})
 

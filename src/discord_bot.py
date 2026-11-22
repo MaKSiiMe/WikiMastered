@@ -901,7 +901,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
 
     @tree.command(name="etiquettes", description="Tes tags du site (couleur, émoji) ; créer ou harmoniser ceux du bot")
     @app_commands.describe(creer="créer sur le site les tags que le bot pose et qui manquent (confirmation)",
-                           harmoniser="donner aux tags du site l'émoji et la couleur de config/etiquettes.yaml "
+                           harmoniser="donner aux tags du site l'émoji et la couleur de config/themes.yaml "
                                       "(confirmation)")
     async def etiquettes(interaction: discord.Interaction, creer: bool = False, harmoniser: bool = False) -> None:
         await interaction.response.defer()
@@ -924,7 +924,7 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
             embed.add_field(name=f"Posés par le bot, absents du site ({len(todo)})", value=todo_text[:1000],
                             inline=False)
         if changes:
-            embed.add_field(name=f"Différents de config/etiquettes.yaml ({len(changes)})", value=change_text[:1000],
+            embed.add_field(name=f"Différents de config/themes.yaml ({len(changes)})", value=change_text[:1000],
                             inline=False)
         todo, changes = (todo if creer else []), (changes if harmoniser else [])
         if not todo and not changes:

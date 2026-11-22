@@ -188,10 +188,10 @@ Une collection est une liste de titres Wikipédia à posséder. Le bot mise sur 
 
 | Collection | Contenu |
 |---|---|
-| `jours` | Les 366 jours de l'année, intégrés au code |
-| `gifs` | Les articles dont l'image principale est un GIF animé ([liste](../config/gifs_animes.txt)) |
+| `days` | Les 366 jours de l'année, intégrés au code |
+| `gifs` | Les articles dont l'image principale est un GIF animé ([liste](../config/animated_gifs.txt)) |
 | `elements` | Les 118 éléments du tableau périodique ([liste](../config/elements.txt)), étiquette « Élément » |
-| `pays` | Les 193 membres de l'ONU, le Vatican, la Palestine, le Kosovo et Taïwan ([liste](../config/pays.txt)), sans étiquette de collection : le worker etiquettes pose « Pays » |
+| `countries` | Les 193 membres de l'ONU, le Vatican, la Palestine, le Kosovo et Taïwan ([liste](../config/countries.txt)), sans étiquette de collection : le worker etiquettes pose « Pays » |
 | la tienne | À décrire dans [config/collections.yaml](../config/collections.yaml) : un nom, une étiquette, les titres |
 
 `COLLECTION_TITLES` ajoute des titres isolés. Pour protéger les cartes gagnées, ajoute leur étiquette à `TAG_PROTECTED`.
@@ -228,7 +228,7 @@ flowchart TD
 flowchart TD
     L["Lecture de toute la collection<br/>toutes les 6 h (requêtes de fond)"] --> G["Exemplaire gardé de chaque carte<br/>favori, shiny, rareté, le plus ancien"]
     G --> W["Wikidata : nature de l'article<br/>(gardée en base, 500 cartes par passage)"]
-    W --> R["Règles de config/etiquettes.yaml<br/>+ corrections à la main"]
+    W --> R["Règles de config/themes.yaml<br/>+ corrections à la main"]
     R --> T["Thèmes et « GIF » (carte animée) sur l'exemplaire gardé<br/>« Doublon » sur les autres"]
 ```
 

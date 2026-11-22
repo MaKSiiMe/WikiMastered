@@ -43,7 +43,7 @@ Les ventes observées, les prix et le marché suivi demandent une revente active
 | `/snipes` | Voir les cartes demandées |
 | `/souhaits` | Cartes de ta liste de souhaits suivies par le sniper (`WISH_MAX_PRICE`), la rareté que tu possèdes et le plafond de chaque rareté encore à prendre |
 | `/annuler <titre>` | Ne plus demander une carte |
-| `/etiquettes [creer] [harmoniser]` | Tes tags du site avec leur couleur, ceux que le bot pose mais qui manquent, et ceux dont l'émoji ou la couleur diffère de `config/etiquettes.yaml`. `creer` : crée les manquants ; `harmoniser` : applique l'émoji et la couleur du fichier (sans émoji dans le fichier, celui du site est gardé ; un tag absent du fichier n'est jamais touché). Confirmée par un bouton |
+| `/etiquettes [creer] [harmoniser]` | Tes tags du site avec leur couleur, ceux que le bot pose mais qui manquent, et ceux dont l'émoji ou la couleur diffère de `config/themes.yaml`. `creer` : crée les manquants ; `harmoniser` : applique l'émoji et la couleur du fichier (sans émoji dans le fichier, celui du site est gardé ; un tag absent du fichier n'est jamais touché). Confirmée par un bouton |
 | `/vitrines` | Tes vitrines du profil : nom, disposition, cartes |
 | `/vitrine <numero> <disposition> <cartes> [nom] [legendes]` | Remplir une vitrine : `cartes` = titres exacts dans l'ordre, séparés par des `;`. Le bot prend ton meilleur exemplaire de chaque carte (plus haute rareté, shiny d'abord). Ligne du temps : une date par carte dans `legendes`. Remplace la vitrine de ce numéro ; confirmée par un bouton |
 | `/vendre <carte> <prix> [rarete]` | Vendre ton exemplaire le plus récent (hors favori, shiny, gardé) à ce prix, à la première place libre, avant les autres ventes. Confirmée par un bouton |
@@ -135,6 +135,6 @@ Le bot n'envoie jamais de message privé : tout arrive dans les salons des webho
 |---|---|
 | `python -m src.tools.parse_curl [--name ROUTE --write] [--env] [--hot] < requete.curl` | Importe une requête copiée depuis les DevTools (« Copier comme cURL (bash) ») : corrige une route dans `config/endpoints.local.yaml`, met à jour `.env` (`--env`) ou dépose le cookie à chaud (`--hot`) |
 | `python -m src.tools.browser_login [--record]` | Ouvre un navigateur (Playwright, poste avec écran) où tu te connectes toi-même, puis écrit le cookie dans `data/session_cookie.txt`. `--record` : enregistre aussi les appels `/api/` dans `data/inspect/capture/` |
-| `python -m src.tools.gif_list` | Régénère `config/gifs_animes.txt` depuis Wikipédia (aucune requête au site du jeu) |
+| `python -m src.tools.gif_list` | Régénère `config/animated_gifs.txt` depuis Wikipédia (aucune requête au site du jeu) |
 
 `browser_login` demande en plus `pip install -r requirements-tools.txt && playwright install chromium`.

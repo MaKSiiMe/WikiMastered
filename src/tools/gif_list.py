@@ -1,4 +1,4 @@
-"""Liste des articles dont l'image principale est un GIF animé (config/gifs_animes.txt, collection « gifs »).
+"""Liste des articles dont l'image principale est un GIF animé (config/animated_gifs.txt, collection « gifs »).
 
     python -m src.tools.gif_list
 
@@ -21,7 +21,7 @@ import httpx
 from src.core.wikidata import USER_AGENT, Wikidata
 
 DUMP = "https://dumps.wikimedia.org/frwiki/latest/frwiki-latest-page_props.sql.gz"
-OUTPUT = Path(__file__).resolve().parents[2] / "config" / "gifs_animes.txt"
+OUTPUT = Path(__file__).resolve().parents[2] / "config" / "animated_gifs.txt"
 ENTRY = re.compile(r"\((\d+),'page_image(?:_free)?','((?:[^'\\]|\\.)*)'")
 
 

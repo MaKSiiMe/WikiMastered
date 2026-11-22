@@ -3,37 +3,38 @@
 # Chaque carte possédée reçoit, sur son exemplaire gardé, les thèmes dont une règle correspond à son article
 # Wikipédia, lu sur Wikidata. Les autres exemplaires de la carte reçoivent TAG_DUPLICATE (« Doublon »).
 # Le bot ne fait qu'ajouter : il ne retire que « Doublon », de l'exemplaire gardé quand il n'a plus de doublon, et les
-# thèmes marqués `retirer`.
+# thèmes marqués `removable`.
 # Les noms sont comparés sans émojis ni casse : « 🎵 Musique » sur le site correspond à « Musique » ici.
 # Chaque étiquette est à créer une fois sur le site ; une étiquette absente du site est ignorée (signalée).
 #
 # Une règle de thème (une carte peut en avoir plusieurs) :
-#   natures      classes Wikidata : l'article en est un exemple ou une sous-classe (Q5 : être humain)
-#   taxons       taxons Wikidata : l'espèce en descend (Q729 : animaux)
+#   classes      classes Wikidata : l'article en est un exemple ou une sous-classe (Q5 : être humain)
+#   taxa         taxons Wikidata : l'espèce en descend (Q729 : animaux)
 #   description  pour les personnes : un mot de la description Wikidata en français commence par l'un de ceux-ci
 #                (« footballeu » : footballeur, footballeuse) ; 4 lettres ou moins : le mot exact (« dj ») ;
 #                avec une espace ou un tiret : l'expression entière
-#   metiers      pour les personnes sans description : métiers Wikidata (P106)
-#   sauf         pas ce thème si la carte a déjà l'un de ceux-là (un pays est aussi une « entité territoriale ») ;
+#   occupations  pour les personnes sans description : métiers Wikidata (P106)
+#   unless       pas ce thème si la carte a déjà l'un de ceux-là (un pays est aussi une « entité territoriale ») ;
 #                ne retire pas un thème trouvé par la description ou le métier (une personne les cumule)
-#   seul         seulement si la carte n'a aucun autre thème
-#   retirer      retiré d'une carte qui n'a plus ce thème, une fois un autre de ses thèmes posé
-#   emoji, couleur  style de l'étiquette sur le site : à la création (/etiquettes creer) et pour harmoniser les
+#   alone        seulement si la carte n'a aucun autre thème
+#   removable    retiré d'une carte qui n'a plus ce thème, une fois un autre de ses thèmes posé
+#   emoji, color style de l'étiquette sur le site : à la création (/etiquettes creer) et pour harmoniser les
 #                existantes (/etiquettes harmoniser) ; sans émoji, celui du site est gardé
-# Modifier natures, taxons ou metiers fait relire Wikidata pour toutes les cartes au passage suivant.
+# Anciennes clés françaises (natures, taxons, metiers, sauf, seul, retirer, couleur, autres) encore lues.
+# Modifier classes, taxa ou occupations fait relire Wikidata pour toutes les cartes au passage suivant.
 
 themes:
   Personne:
-    couleur: "#3b82f6"
-    natures: [Q5]  # être humain
+    color: "#3b82f6"
+    classes: [Q5]  # être humain
 
   Pays:
-    couleur: "#14532d"
-    natures: [Q6256, Q3624078]  # pays, État souverain
+    color: "#14532d"
+    classes: [Q6256, Q3624078]  # pays, État souverain
 
   Lieu:
-    couleur: "#f97316"
-    natures:
+    color: "#f97316"
+    classes:
       - Q486972   # établissement humain (ville, commune, village)
       - Q56061    # entité territoriale administrative (région, département)
       - Q41176    # bâtiment
@@ -46,11 +47,11 @@ themes:
       - Q23442    # île
       - Q39614    # cimetière (sorti d'Objet)
       - Q79007    # voie de communication urbaine (rue, avenue : conserve les 51 rues)
-    sauf: [Pays, Histoire]  # une gare ou une église reste aussi un lieu, comme les cartes déjà étiquetées
+    unless: [Pays, Histoire]  # une gare ou une église reste aussi un lieu, comme les cartes déjà étiquetées
 
   Nature:
-    couleur: "#22c55e"
-    natures:
+    color: "#22c55e"
+    classes:
       - Q8502     # montagne
       - Q4022     # cours d'eau
       - Q23397    # lac
@@ -60,26 +61,26 @@ themes:
       - Q271669   # modelé (relief)
       - Q15324    # étendue d'eau
       - Q7946     # minéral
-    taxons: [Q756, Q764]  # plantes, champignons
-    sauf: [Pays, Lieu, Histoire, Animal, Spatial, Nourriture / Boisson]
+    taxa: [Q756, Q764]  # plantes, champignons
+    unless: [Pays, Lieu, Histoire, Animal, Spatial, Nourriture / Boisson]
 
   Animal:
-    couleur: "#78350f"
-    taxons: [Q729]  # animaux
-    natures:
+    color: "#78350f"
+    taxa: [Q729]  # animaux
+    classes:
       - Q39367     # race de chien
       - Q26401003  # animal individuel
-    sauf: [Personne]  # pour Wikidata, l'être humain est un animal
+    unless: [Personne]  # pour Wikidata, l'être humain est un animal
 
   Astéroïde:
-    couleur: "#a5b4fc"
-    natures:
+    color: "#a5b4fc"
+    classes:
       - Q3863     # astéroïde
       - Q1022867  # planète mineure (couvre les objets numérotés type (505476) 2013 UL15)
 
   Spatial:
-    couleur: "#4f46e5"
-    natures:
+    color: "#4f46e5"
+    classes:
       - Q634      # planète
       - Q523      # étoile
       - Q318      # galaxie
@@ -93,12 +94,12 @@ themes:
       - Q2133344  # mission spatiale
       - Q55818    # cratère d'impact (majoritairement lunaire/martien/planétaire sur Wikipédia)
     description: [astronaute, cosmonaute, spationaute, taïkonaute]
-    metiers: [Q11631]  # astronaute
-    sauf: [Astéroïde]
+    occupations: [Q11631]  # astronaute
+    unless: [Astéroïde]
 
   Cinéma / Série:
-    couleur: "#ef4444"
-    natures:
+    color: "#ef4444"
+    classes:
       - Q11424    # film
       - Q24856    # série de films
       - Q5398426  # série télévisée
@@ -111,12 +112,12 @@ themes:
     description: [acteur, actrice, comédien, réalisateur, réalisatrice, cinéaste, doubleu, scénariste,
                   producteur de cinéma, productrice de cinéma, producteur de télévision, animateur de télévision,
                   animatrice de télévision]
-    metiers: [Q33999, Q2526255, Q28389]  # acteur ou actrice, réalisateur, scénariste
-    sauf: [Jeu vidéo, Littérature / BD, Religion]  # évite de capter les persos de JV, de BD ou bibliques via Q95074
+    occupations: [Q33999, Q2526255, Q28389]  # acteur ou actrice, réalisateur, scénariste
+    unless: [Jeu vidéo, Littérature / BD, Religion]  # évite de capter les persos de JV, de BD ou bibliques via Q95074
 
   Musique:
-    couleur: "#a855f7"
-    natures:
+    color: "#a855f7"
+    classes:
       - Q7366       # chanson
       - Q134556     # single (35 cartes sans thème récupérées)
       - Q482994     # album
@@ -131,11 +132,11 @@ themes:
                   bassiste, violoncelliste, saxophoniste, trompettiste, organiste, flûtiste, harpiste,
                   dj, disc-jockey, beatmaker, producteur de musique, chef d'orchestre, parolier, parolière,
                   auteur-compositeur, autrice-compositrice]
-    metiers: [Q639669, Q177220, Q2252262, Q36834, Q130857]  # musicien, chanteur, rappeur, compositeur, DJ
+    occupations: [Q639669, Q177220, Q2252262, Q36834, Q130857]  # musicien, chanteur, rappeur, compositeur, DJ
 
   Sport:
-    couleur: "#84cc16"
-    natures:
+    color: "#84cc16"
+    classes:
       - Q349       # sport
       - Q847017    # club sportif
       - Q12973014  # équipe sportive
@@ -153,11 +154,11 @@ themes:
                   skipper, skippeuse, navigat, rameu, céiste, kayakiste, fondeu, bobeur, bobeuse, lugeu, curleu,
                   archer, archère, tireur sportif, tireuse sportive, cavalier, cavalière, grimpeu,
                   plongeu, water-polo, hockeye, badiste, snooker, fléchettes, culturiste, taekwondo]
-    metiers: [Q2066131, Q378622, Q41583, Q16029547]  # sportif, pilote, entraîneur, biathlète
+    occupations: [Q2066131, Q378622, Q41583, Q16029547]  # sportif, pilote, entraîneur, biathlète
 
   Jeu vidéo:
-    couleur: "#0891b2"
-    natures:
+    color: "#0891b2"
+    classes:
       - Q7889     # jeu vidéo
       - Q7058673  # série de jeux vidéo
       - Q8076     # console de jeux vidéo
@@ -167,8 +168,8 @@ themes:
                   concepteur de jeux vidéo]
 
   Littérature / BD:
-    couleur: "#c2410c"
-    natures:
+    color: "#c2410c"
+    classes:
       - Q7725634   # œuvre littéraire
       - Q571       # livre
       - Q8261      # roman
@@ -185,12 +186,12 @@ themes:
                   auteur de bande dessinée, autrice de bande dessinée, dessinateur de bande dessinée,
                   mangaka, bédéiste, journaliste, éditeur, éditrice, philosophe, traducteu, biographe,
                   chroniqueu, pamphlétaire, fabuliste, critique littéraire]
-    metiers: [Q36180, Q6625963, Q49757, Q1930187, Q4964182, Q715301]  # écrivain, romancier, poète, journaliste, philosophe, auteur de BD
-    sauf: [Jeu vidéo, Musique, Science]
+    occupations: [Q36180, Q6625963, Q49757, Q1930187, Q4964182, Q715301]  # écrivain, romancier, poète, journaliste, philosophe, auteur de BD
+    unless: [Jeu vidéo, Musique, Science]
 
   Art:
-    couleur: "#d81b60"
-    natures:
+    color: "#d81b60"
+    classes:
       - Q3305213  # peinture (77 cartes sans thème récupérées)
       - Q860861   # sculpture (sort le Buste de Beethoven d'Objet)
       - Q179700   # statue
@@ -198,12 +199,12 @@ themes:
     description: [peintre, sculpteu, photographe, architecte, graveu, illustrateu, dessinateur, dessinatrice,
                   artiste, plasticien, calligraphe, affichiste, caricaturiste, céramiste, styliste,
                   couturier, couturière, designer, chorégraphe, danseur, danseuse]
-    metiers: [Q1028181, Q1281618, Q33231, Q42973, Q644687]  # peintre, sculpteur, photographe, architecte, illustrateur
-    sauf: [Lieu, Littérature / BD, Cinéma / Série, Musique]
+    occupations: [Q1028181, Q1281618, Q33231, Q42973, Q644687]  # peintre, sculpteur, photographe, architecte, illustrateur
+    unless: [Lieu, Littérature / BD, Cinéma / Série, Musique]
 
   Science:
-    couleur: "#0d9488"
-    natures:
+    color: "#0d9488"
+    classes:
       - Q11862829  # discipline académique
       - Q11173     # composé chimique (~40 cartes sans thème récupérées)
       - Q11344     # élément chimique (déplacé depuis Nature)
@@ -223,12 +224,12 @@ themes:
                   archéologue, historien, sociologue, économiste, linguiste, psychologue, psychiatre,
                   neurologue, anthropologue, ethnologue, géographe, universitaire, académicien,
                   inventeu, ingénieu, informaticien, pharmacien, vétérinaire, épistémologue]
-    metiers: [Q901, Q170790, Q169470, Q593644, Q864503, Q39631, Q11063, Q201788, Q81096]  # scientifique, mathématicien, physicien, chimiste, biologiste, médecin, astronome, historien, ingénieur
-    sauf: [Nature, Animal, Technologie]
+    occupations: [Q901, Q170790, Q169470, Q593644, Q864503, Q39631, Q11063, Q201788, Q81096]  # scientifique, mathématicien, physicien, chimiste, biologiste, médecin, astronome, historien, ingénieur
+    unless: [Nature, Animal, Technologie]
 
   Politique:
-    couleur: "#881337"
-    natures:
+    color: "#881337"
+    classes:
       - Q7278      # parti politique (sort des sans thème)
       - Q40231     # élection
       - Q178790    # syndicat
@@ -240,12 +241,12 @@ themes:
                   comte, comtesse, marquis, marquise, baron, baronne, seigneur, aristocrate,
                   noble, pharaon, sultan, calife, émir, tsar, tsarine, militant, révolutionnaire,
                   syndicaliste, magistrat, juge, avocat]
-    metiers: [Q82955, Q193391, Q116, Q2478141, Q16533, Q40348]  # personnalité politique, diplomate, monarque, aristocrate, juge, avocat
-    sauf: [Pays, Entreprise / Marque, Sport, Musique, Science, Religion]
+    occupations: [Q82955, Q193391, Q116, Q2478141, Q16533, Q40348]  # personnalité politique, diplomate, monarque, aristocrate, juge, avocat
+    unless: [Pays, Entreprise / Marque, Sport, Musique, Science, Religion]
 
   Militaire:
-    couleur: "#991b1b"
-    natures:
+    color: "#991b1b"
+    classes:
       - Q176799    # unité militaire (~18 cartes sans thème récupérées)
       - Q728       # arme (sorti d'Objet)
       - Q15142894  # système d'arme
@@ -259,11 +260,11 @@ themes:
     description: [militaire, général, amiral, maréchal, officier, colonel, commandant, capitaine,
                   lieutenant, soldat, guerrier, guerrière, résistant, chevalier, mercenaire,
                   aviateur militaire, as de l'aviation]
-    metiers: [Q47064, Q189290]  # militaire, officier
+    occupations: [Q47064, Q189290]  # militaire, officier
 
   Religion:
-    couleur: "#8d6e63"
-    natures:
+    color: "#8d6e63"
+    classes:
       - Q9174      # religion
       - Q179461    # texte religieux
       - Q178885    # divinité
@@ -278,11 +279,11 @@ themes:
     description: [prélat, évêque, archevêque, cardinal, pape, prêtre, abbé, moine, religieu,
                   pasteur, rabbin, imam, théologien, missionnaire, saint, martyr, prophète,
                    prédicateu, mystique]
-    metiers: [Q250867, Q42603, Q29182, Q1234713]  # prélat catholique, prêtre, évêque, théologien
+    occupations: [Q250867, Q42603, Q29182, Q1234713]  # prélat catholique, prêtre, évêque, théologien
 
   Transport:
-    couleur: "#0284c7"
-    natures:
+    color: "#0284c7"
+    classes:
       - Q55488     # gare ferroviaire (ex. Gare d'Azilda : 64 d'Objet + 17 de Lieu unifiées)
       - Q55678     # halte ferroviaire (ex. Gare d'Azilda)
       - Q928830    # station de métro
@@ -296,11 +297,11 @@ themes:
       - Q870       # train
       - Q46970     # compagnie aérienne
     description: [aviateu, aviatrice]
-    sauf: [Voiture, Militaire, Spatial, Histoire]  # navire de guerre -> Militaire ; épave -> Histoire
+    unless: [Voiture, Militaire, Spatial, Histoire]  # navire de guerre -> Militaire ; épave -> Histoire
 
   Nourriture / Boisson:
-    couleur: "#fde047"
-    natures:
+    color: "#fde047"
+    classes:
       - Q2095      # nourriture
       - Q746549    # mets
       - Q19861951  # type de préparation culinaire
@@ -310,28 +311,28 @@ themes:
     description: [cuisinier, cuisinière, chef cuisinier, cheffe cuisinière, pâtissier, pâtissière, œnologue]
 
   Entreprise / Marque:
-    couleur: "#64748b"
-    natures:
+    color: "#64748b"
+    classes:
       - Q4830453  # entreprise
       - Q431289   # marque
       - Q786820   # constructeur automobile
     description: [entrepreneur, entrepreneuse, homme d'affaires, femme d'affaires, industriel,
                   dirigeant d'entreprise, chef d'entreprise, cheffe d'entreprise, banquier, banquière,
                   milliardaire, investisseu, armateur]
-    metiers: [Q131524, Q43845]  # entrepreneur, personnalité du monde des affaires
-    sauf: [Science, Transport, Jeu vidéo, Littérature / BD]  # évite universités, écoles, studios JV, éditeurs
+    occupations: [Q131524, Q43845]  # entrepreneur, personnalité du monde des affaires
+    unless: [Science, Transport, Jeu vidéo, Littérature / BD]  # évite universités, écoles, studios JV, éditeurs
 
   Voiture:
-    couleur: "#1e3a8a"
-    natures:
+    color: "#1e3a8a"
+    classes:
       - Q3231690   # modèle d'automobile
       - Q59773381  # série de modèles d'automobile
       - Q1420      # automobile
       - Q786820   # constructeur automobile
 
   Technologie:
-    couleur: "#22d3ee"
-    natures:
+    color: "#22d3ee"
+    classes:
       - Q11016     # technologie
       - Q7397      # logiciel
       - Q9143      # langage de programmation
@@ -346,23 +347,23 @@ themes:
       - Q313600    # appareil photographique numérique
       - Q5362345   # montre connectée
       - Q19799938  # modèle de montre connectée (ex. Apple Watch Ultra 2)
-    sauf: [Jeu vidéo, Voiture, Transport, Militaire]
+    unless: [Jeu vidéo, Voiture, Transport, Militaire]
 
   Objet:
-    couleur: "#b6a99a"
-    natures:
+    color: "#b6a99a"
+    classes:
       - Q8205328  # objet artificiel physique
       - Q39546    # outil
       - Q1183543  # dispositif
       - Q11460    # vêtement
       - Q14745    # meuble
       - Q11422    # jouet
-    seul: true  # une tour, un avion ou un téléphone sont aussi des objets : seulement faute de mieux
-    retirer: true  # les cartes classées Objet avant l'arrivée de Transport, Militaire, Art...
+    alone: true  # une tour, un avion ou un téléphone sont aussi des objets : seulement faute de mieux
+    removable: true  # les cartes classées Objet avant l'arrivée de Transport, Militaire, Art...
 
   Histoire:
-    couleur: "#d4a373"
-    natures:
+    color: "#d4a373"
+    classes:
       - Q13418847  # événement historique
       - Q178561    # bataille
       - Q198       # guerre
@@ -381,8 +382,8 @@ themes:
   # Pages sans sujet propre, qui restaient sans thème (relevé du 21/11 : ~1 400 cartes).
   Année:
     emoji: "🗓️"
-    couleur: "#99f6e4"
-    natures:
+    color: "#99f6e4"
+    classes:
       - Q577       # année (« 1194 »)
       - Q29964144  # année avant Jésus-Christ
       - Q18340514  # article chronologique (« 1916 en France », « 1490 en philosophie »)
@@ -392,78 +393,78 @@ themes:
 
   Liste:
     emoji: "📋"
-    couleur: "#d9f99d"
-    natures: [Q13406463]  # page de liste de Wikimédia (discographies, bibliographies…)
-    sauf: [Année]  # un article chronologique est aussi une liste
+    color: "#d9f99d"
+    classes: [Q13406463]  # page de liste de Wikimédia (discographies, bibliographies…)
+    unless: [Année]  # un article chronologique est aussi une liste
 
   Nom:
     emoji: "🏷️"
-    couleur: "#c026d3"
-    natures:
+    color: "#c026d3"
+    classes:
       - Q101352    # nom de famille
       - Q202444    # prénom
       - Q8436      # famille (« Famille Barberini », maisons nobles)
 
   Homonymie:
     emoji: "🔀"
-    couleur: "#94a3b8"
-    natures: [Q4167410]  # page d'homonymie de Wikimédia
+    color: "#94a3b8"
+    classes: [Q4167410]  # page d'homonymie de Wikimédia
 
   # Sous-thèmes, en plus du thème large (un film garde « Cinéma / Série ») : des familles de cartes assez grandes pour
   # les échanges.
   Football:
     emoji: "🥅"
-    couleur: "#4d7c0f"
-    natures:
+    color: "#4d7c0f"
+    classes:
       - Q476028    # club de football
       - Q26887310  # saison d'une équipe de football
     description: [footballeu]  # footballeur, footballeuse (pas « joueur de football américain »)
 
   Film:
     emoji: "📽️"
-    couleur: "#fca5a5"
-    natures: [Q11424]  # film (téléfilms, courts métrages, films d'animation compris)
+    color: "#fca5a5"
+    classes: [Q11424]  # film (téléfilms, courts métrages, films d'animation compris)
 
   Plante:
     emoji: "🌱"
-    couleur: "#86efac"
-    taxons: [Q756]  # plantes
+    color: "#86efac"
+    taxa: [Q756]  # plantes
 
   Insecte / Araignée:
     emoji: "🕷️"
-    couleur: "#d97706"
-    taxons: [Q1360]  # arthropodes : insectes, araignées, scorpions, mille-pattes, crustacés
+    color: "#d97706"
+    taxa: [Q1360]  # arthropodes : insectes, araignées, scorpions, mille-pattes, crustacés
 
   Royauté / Noblesse:
     emoji: "👑"
-    couleur: "#5b21b6"
+    color: "#5b21b6"
     description: [roi, reine, empereur, impératrice, pharaon, prince, monarque, sultan, tsar, souverain, régent,
                   calife, khan, shah, duc, duchesse, archiduc, comte, vicomte, marquis, baron, noble, aristocrate,
                   seigneur, landgrave, margrave]
 
   Personnage de fiction:
     emoji: "🦸"
-    couleur: "#2563eb"
-    natures:
+    color: "#2563eb"
+    classes:
       - Q95074     # personnage de fiction
       - Q4271324   # personnage mythologique
 
 # Babie : posée à la main sur le site, le bot ne la pose pas (et n'enlève jamais un thème).
 
-# Émoji et couleur des étiquettes qui ne sont pas des thèmes (les thèmes ont `emoji` et `couleur` dans leur règle),
+# Émoji et couleur des étiquettes qui ne sont pas des thèmes (les thèmes ont `emoji` et `color` dans leur règle),
 # pour /etiquettes creer et harmoniser. Une étiquette absente de ce fichier n'est jamais touchée.
-autres:
-  Doublon: {couleur: "#27272a"}
-  GIF: {couleur: "#ff2d95"}
-  Jour: {emoji: "📅", couleur: "#2dd4bf"}
-  Élément: {emoji: "⚗️", couleur: "#bae6fd"}
-  Vitrine: {emoji: "🏛️", couleur: "#fef9c3"}
-  Souhait: {emoji: "💫", couleur: "#f0abfc"}
-  Invendue: {emoji: "⏳", couleur: "#0c4a6e"}
-  Revente: {emoji: "💰", couleur: "#10b981"}
-  Collection: {couleur: "#eab308"}
-  L+: {couleur: "#be123c"}
-  Babie: {couleur: "#f472b6"}
+other_tags:
+  Doublon: {color: "#27272a"}
+  GIF: {color: "#ff2d95"}
+  Jour: {emoji: "📅", color: "#2dd4bf"}
+  Élément: {emoji: "⚗️", color: "#bae6fd"}
+  Vitrine: {emoji: "🏛️", color: "#fef9c3"}
+  Souhait: {emoji: "💫", color: "#f0abfc"}
+  Invendue: {emoji: "⏳", color: "#0c4a6e"}
+  Revente: {emoji: "💰", color: "#10b981"}
+  Collection: {color: "#eab308"}
+  L+: {color: "#be123c"}
+  Babie: {color: "#f472b6"}
 
 # Corrections à la main, prioritaires sur Wikidata : titre exact de la carte -> ses thèmes (remplacent ceux trouvés ;
 # [] : aucun thème).

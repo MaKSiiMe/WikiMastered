@@ -20,3 +20,9 @@ def tag_key(name: str) -> str:
     # accents sont des lettres composées (Ll), pas des Mn.
     text = "".join(c for c in text if unicodedata.category(c) not in ("So", "Sk", "Cf", "Mn"))
     return " ".join(text.replace("#", " ").casefold().split())
+
+
+def config_value(spec: dict, key: str, old: str) -> object:
+    """Valeur d'une clé des fichiers de config, ou de son ancien nom français (renommé le 22/11/2026 : `sauf` est devenu
+    `unless`…), encore lu pour les fichiers modifiés à la main."""
+    return spec[key] if key in spec else spec.get(old)

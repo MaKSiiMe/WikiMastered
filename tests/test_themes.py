@@ -1,4 +1,4 @@
-"""Étiquettes de thème : noms comparés sans émojis, règles de config/etiquettes.yaml, exemplaire gardé, passage."""
+"""Étiquettes de thème : noms comparés sans émojis, règles de config/themes.yaml, exemplaire gardé, passage."""
 
 from __future__ import annotations
 

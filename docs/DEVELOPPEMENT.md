@@ -38,8 +38,8 @@ src/
 └── …                    bilan (account.py), récap (recap.py), sauvegarde (backup.py), échanges (trades.py)…
 config/
 ├── endpoints.yaml       routes du site
-├── collections.yaml     collections à compléter (gifs_animes.txt : liste des GIF)
-└── etiquettes.yaml      règles des thèmes
+├── collections.yaml     collections à compléter (animated_gifs.txt : liste des GIF)
+└── themes.yaml      règles des thèmes
 ```
 
 Les docstrings en tête des modules, en particulier `auction_sniper.py`, `inventory_manager.py` et `pricing.py`, expliquent les choix et les relevés qui les justifient.
