@@ -86,7 +86,7 @@ def to_quote(cards: dict[str, int], cache: dict[str, tuple[datetime, bool]], fro
 
 # ---------------------------------------------------------------------- worker
 class ValueScan(Worker):
-    name = "cotes"
+    name = "value_scan"
     topic = Topic.SALES
 
     async def setup(self) -> None:

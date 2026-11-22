@@ -15,7 +15,7 @@
   suivant a lieu BACKLOG_MINUTES plus tard.
 - Aucune mise ni ouverture de paquet : rien ne compte pour la vérification anti-bot.
 
-`python -m src.main etiquettes` montre le classement sans rien écrire.
+`python -m src.main themes` montre le classement sans rien écrire.
 """
 
 from __future__ import annotations
@@ -297,7 +297,7 @@ def summary(state: dict) -> str:
 
 
 class ThemeTagger(Worker):
-    name = "etiquettes"
+    name = "themes"
     topic = Topic.COLLECTION
 
     async def setup(self) -> None:

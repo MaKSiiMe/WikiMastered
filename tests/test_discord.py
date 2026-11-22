@@ -168,7 +168,7 @@ async def test_paused_worker_skips_its_passes_until_resumed(tmp_path):
 
     client, notifier = make_client(tmp_path, lambda r: httpx.Response(404))
     ctx = await make_context(tmp_path, client, notifier)
-    await pauses.pause(ctx, ["sniper", "garde"], None)
+    await pauses.pause(ctx, ["sniper", "guard"], None)
     assert ctx.pauses == {"sniper": None}  # la garde des sanctions n'est jamais en pause
     worker = Counter(ctx)
     task = asyncio.create_task(worker.run())
@@ -180,7 +180,7 @@ async def test_paused_worker_skips_its_passes_until_resumed(tmp_path):
     task.cancel()
 
     await pauses.pause(ctx, ["inventory"], datetime.now(UTC) + timedelta(hours=1))
-    await pauses.pause(ctx, ["cotes"], datetime.now(UTC) - timedelta(minutes=1))
+    await pauses.pause(ctx, ["value_scan"], datetime.now(UTC) - timedelta(minutes=1))
     ctx.pauses.clear()
     await pauses.load(ctx)  # redémarrage : la pause en cours revient, la finie est oubliée
     assert set(ctx.pauses) == {"inventory"}

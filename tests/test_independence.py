@@ -64,7 +64,7 @@ async def test_each_worker_keeps_its_own_pace(tmp_path):
     """HTTP_WORKER_SPACING_SECONDS : les lectures d'un worker réglé s'espacent entre elles sans retenir celles du
     sniper, qui n'a que le plafond commun ; chaque requête est comptée sous le nom de son worker (récap)."""
     client, _ = make_client(tmp_path, lambda r: httpx.Response(200, json={"balance": 3}),
-                            http_worker_spacing_seconds={"cotes": 0.3})
+                            http_worker_spacing_seconds={"value_scan": 0.3})
 
     async def reads(lane, n):
         LANE.set(lane)  # comme main.supervise pour chaque worker
@@ -73,9 +73,9 @@ async def test_each_worker_keeps_its_own_pace(tmp_path):
             await client.get("balance")
         return time.monotonic() - start
 
-    cotes, sniper = await asyncio.gather(reads("cotes", 2), reads("sniper", 3))
+    cotes, sniper = await asyncio.gather(reads("value_scan", 2), reads("sniper", 3))
     assert cotes >= 0.3 and sniper < 0.2
-    assert client.take_traffic() == ({"cotes": 2, "sniper": 3}, 0) and not client.traffic
+    assert client.take_traffic() == ({"value_scan": 2, "sniper": 3}, 0) and not client.traffic
 
 
 @pytest.mark.asyncio

@@ -71,7 +71,7 @@ def sanctions(profile: dict, seen: dict, now: datetime) -> list[str]:
 
 
 class ProfileGuard(Worker):
-    name = "garde"
+    name = "guard"
     topic = Topic.SYSTEM
 
     async def setup(self) -> None:

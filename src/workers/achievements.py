@@ -29,7 +29,7 @@ class Achievement:
 
 
 class AchievementsWorker(Worker):
-    name = "succes"
+    name = "achievements"
     topic = Topic.ACHIEVEMENTS
 
     async def setup(self) -> None:

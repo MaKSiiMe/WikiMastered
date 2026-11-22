@@ -30,12 +30,20 @@ RARITY_RANK: dict[str, int] = {r: i for i, r in enumerate(RARITIES)}
 WRITE_GROUPS: dict[str, tuple[str, ...]] = {
     "sniper": ("place_bid",),            # mises des positions (achat pour revendre)
     "collection": ("collection_bid",),   # mises du mode collection (cartes gardées)
-    "ventes": ("create_listing", "reprice_listing"), "inventory": ("create_listing", "reprice_listing", "bulk_discard"),
-    "reglements": ("settle_auction",),   # enchères finies que le site tarde à régler
-    "vitrines": ("showcase_gallery",),   # vitrines du profil (/vitrine)
-    "defausse": ("bulk_discard",), "tags": ("tag_card",), "themes": ("theme_tag",),
-    "succes": ("achievements_check", "claim_achievement"),
-    "souhaits": ("wishlist_write", "mark_notifications_read"),     # liste de souhaits du site, pour les cartes de collection manquantes
+    "resale": ("create_listing", "reprice_listing"), "inventory": ("create_listing", "reprice_listing", "bulk_discard"),
+    "settle": ("settle_auction",),       # enchères finies que le site tarde à régler
+    "showcases": ("showcase_gallery",),  # vitrines du profil (/vitrine)
+    "discard": ("bulk_discard",), "tags": ("tag_card",), "themes": ("theme_tag",),
+    "achievements": ("achievements_check", "claim_achievement"),
+    "wishes": ("wishlist_write", "mark_notifications_read"),  # liste de souhaits du site, pour les cartes de collection manquantes
+}
+
+# Anciens noms des workers et des groupes d'écriture (renommés le 22/11/2026) -> nouveau nom. Encore acceptés dans
+# LIVE_WRITES, SIMULATE et HTTP_WORKER_SPACING_SECONDS (avertissement au démarrage), et dans les pauses gardées en base.
+RENAMED_WORKERS: dict[str, str] = {
+    "garde": "guard", "echanges": "trades", "valeur": "account_value", "etiquettes": "themes", "succes": "achievements",
+    "cotes": "value_scan", "souhaits": "wishes", "ventes": "resale", "reglements": "settle", "vitrines": "showcases",
+    "defausse": "discard",
 }
 
 # Anciens noms des réglages (renommés le 22/11/2026 : un domaine en tête de chaque nom) -> nouveau champ. Encore lus,
@@ -209,6 +217,7 @@ def expand_writes(names: list[str]) -> set[str]:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
     _legacy: list[str] = PrivateAttr(default_factory=list)
+    _legacy_values: list[tuple[str, str]] = PrivateAttr(default_factory=list)
 
     @classmethod
     def settings_customise_sources(cls, settings_cls: type[BaseSettings], init_settings: PydanticBaseSettingsSource,
@@ -221,11 +230,23 @@ class Settings(BaseSettings):
     def model_post_init(self, context: Any, /) -> None:
         self._legacy = list(_legacy_found)
         _legacy_found.clear()
+        # Noms de workers et de groupes d'avant le 22/11 dans les valeurs : remplacés, et signalés au démarrage.
+        self._legacy_values = []
+        for field in ("live_writes", "simulate"):
+            names = getattr(self, field)
+            old = [n for n in names if n.casefold() in RENAMED_WORKERS]
+            if old:
+                setattr(self, field, [RENAMED_WORKERS.get(n.casefold(), n) for n in names])
+                self._legacy_values += [(f"{field.upper()} : {n}", RENAMED_WORKERS[n.casefold()]) for n in old]
+        spacing = self.http_worker_spacing_seconds
+        if old := [n for n in spacing if n.casefold() in RENAMED_WORKERS]:
+            self.http_worker_spacing_seconds = {RENAMED_WORKERS.get(n.casefold(), n): v for n, v in spacing.items()}
+            self._legacy_values += [(f"HTTP_WORKER_SPACING_SECONDS : {n}", RENAMED_WORKERS[n.casefold()]) for n in old]
 
     @property
     def legacy_names(self) -> list[tuple[str, str]]:
         """(ancien nom, nouveau nom) des réglages lus sous leur ancien nom : à renommer dans Portainer ou le .env."""
-        return [(old, RENAMED[old].upper()) for old in self._legacy]
+        return [(old, RENAMED[old].upper()) for old in self._legacy] + self._legacy_values
 
 
     # --- Général -------------------------------------------------------------
@@ -279,7 +300,7 @@ class Settings(BaseSettings):
     http_peak_spacing_seconds: float = 0.0
     http_peak_cooldown_minutes: float = 30.0
     # Les écarts ci-dessus plafonnent les lectures (GET) de tous les workers réunis. En plus, chaque worker peut avoir
-    # son propre écart minimal entre deux de ses lectures : cotes=5,etiquettes=3 (ou en JSON). Un worker absent n'a
+    # son propre écart minimal entre deux de ses lectures : value_scan=5,themes=3 (ou en JSON). Un worker absent n'a
     # que le plafond commun ; le sniper n'y est pas, pour prendre les créneaux que les autres laissent. Vide ou 0 :
     # aucun écart propre (31/10 : la valeur 0 empêchait le bot de démarrer).
     http_worker_spacing_seconds: Annotated[dict[str, float], NoDecode] = Field(default_factory=dict)
@@ -334,7 +355,7 @@ class Settings(BaseSettings):
     # Échanges proposés relus toutes les N min : chacun est évalué une fois (src/trades.py), avec une contre-offre à
     # envoyer s'il est défavorable. Équitable : chaque côté vaut au moins (1 - TRADES_FAIR_MARGIN_RATIO) fois l'autre.
     trades_enabled: bool = True
-    # Cartes souhaitées (worker « souhaits ») : une carte que tu ajoutes toi-même à ta liste de souhaits du site est
+    # Cartes souhaitées (worker « wishes ») : une carte que tu ajoutes toi-même à ta liste de souhaits du site est
     # misée par le sniper jusqu'à sa cote dans la rareté en vente, au plus WISH_MAX_PRICE (0 = désactivé), dans toute
     # rareté plus haute que celle que tu possèdes. Gagnée, elle est gardée et reçoit TAG_WISH (vide = aucune).
     wish_max_price: int = 0
@@ -474,7 +495,7 @@ class Settings(BaseSettings):
     # par vente, sans mise, après la moitié de la durée (relevé du 21/11).
     resale_midway_reprice: bool = False
     # Enchère finie depuis plus d'une minute mais pas encore réglée par le site (« Finalisation… ») : le bot la
-    # finalise lui-même, comme le lien de la fiche, une fois (sa mise en tête, ou sa vente). Écritures : « reglements ».
+    # finalise lui-même, comme le lien de la fiche, une fois (sa mise en tête, ou sa vente). Écritures : « settle ».
     sniper_settle_stuck: bool = True
     # Temps réel du site (src/core/realtime.py) : le bot écoute les mises sur les enchères où il est engagé (relecture
     # aussitôt surenchéri) et tes notifications (carte souhaitée ou de collection en vente : lue sans attendre).
@@ -589,7 +610,7 @@ class Settings(BaseSettings):
     # actives, retirée quand la carte en sort. Le bot la gère seul : ne la pose pas à la main. "" = non.
     tag_showcase: str = ""
 
-    # --- Étiquettes de thème (worker « etiquettes ») ---------------------------------------
+    # --- Étiquettes de thème (worker « themes ») ---------------------------------------
     # Thème de chaque carte (Personne, Pays, Musique…) lu sur Wikidata selon config/etiquettes.yaml, posé sur
     # l'exemplaire gardé ; les autres exemplaires reçoivent TAG_DUPLICATE. Écritures : groupe « themes ».
     themes_enabled: bool = False
@@ -643,7 +664,7 @@ class Settings(BaseSettings):
             return json.loads(text)
         pairs = [re.split(r"[=:]", part, maxsplit=1) for part in text.split(",") if part.strip()]
         if any(len(pair) != 2 for pair in pairs):
-            example = {"http_worker_spacing_seconds": "cotes=5,etiquettes=3",
+            example = {"http_worker_spacing_seconds": "value_scan=5,themes=3",
                        "collection_set_quote_ratio": "pays=0.8"}.get(info.field_name or "", "elements=100")
             raise ValueError(f"{(info.field_name or '').upper()} : attendu nom=valeur séparés par des virgules "
                              f"(ex. {example}) : {text}")

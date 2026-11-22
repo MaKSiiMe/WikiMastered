@@ -50,7 +50,7 @@ COLOR, GREEN, ORANGE, RED, GREY = colors.INFO, colors.OK, colors.WARN, colors.AL
 # /pause et /reprise : ce qui est mis en pause (None : tous les workers, sauf la garde des sanctions).
 # « ventes » arrête aussi la revente des positions du sniper : pour la défausse ou les doublons seuls, /defausse et
 # /doublons.
-PAUSE_TARGETS = {"sniper": ["sniper"], "ventes": ["inventory"], "cotes": ["cotes"], "tout": None}
+PAUSE_TARGETS = {"sniper": ["sniper"], "ventes": ["inventory"], "cotes": ["value_scan"], "tout": None}
 PAUSE_MINUTES = [("30 min", 30), ("1 h", 60), ("2 h", 120), ("6 h", 360), ("jusqu'à /reprise", 0)]
 VERIFY_ID = "wm:verif-faite"  # bouton de l'alerte anti-bot, encore actif après un redémarrage du bot
 WATCH_SECONDS = 15  # vérification anti-bot demandée : vue au plus tard après ce délai

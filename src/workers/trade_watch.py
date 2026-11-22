@@ -29,7 +29,7 @@ BACKFILL_MAX = 40  # échanges terminés repris au plus (chaque carte coûte une
 
 
 class TradeWatch(Worker):
-    name = "echanges"
+    name = "trades"
     topic = Topic.TRADES
 
     async def step(self) -> float:

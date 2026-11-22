@@ -62,7 +62,7 @@ SIMULATE=
 ```
 
 **Exemples**
-- `DRY_RUN=true`, `LIVE_WRITES=ventes` : le bot vend vraiment tes doublons, mais ses enchères restent simulées.
+- `DRY_RUN=true`, `LIVE_WRITES=resale` : le bot vend vraiment tes doublons, mais ses enchères restent simulées.
 - `DRY_RUN=false`, `SIMULATE=sniper` : tout est réel (ventes, défausse, étiquettes…) sauf les mises de revente. Pratique pour regarder quelques jours ce que le sniper aurait acheté avant de lui confier des WikiBidous.
 
 ## Discord
@@ -120,7 +120,7 @@ HTTP_PEAK_START=09:00                 # pic de ventes (Paris) : écart plus cour
 HTTP_PEAK_END=02:00
 HTTP_PEAK_SPACING_SECONDS=0           # écart pendant le pic (0 = jamais de pic)
 HTTP_PEAK_COOLDOWN_MINUTES=30         # site qui limite le bot (429) pendant le pic : écart normal pendant N min
-HTTP_WORKER_SPACING_SECONDS=          # écart propre à un worker, en plus de la file commune ; ex. cotes=5,etiquettes=3
+HTTP_WORKER_SPACING_SECONDS=          # écart propre à un worker, en plus de la file commune ; ex. value_scan=5,themes=3
 HTTP_WRITE_SPACING_SECONDS=1.0        # écritures (mises, ventes…) : leur propre file, une toutes les N s
 HTTP_TIMEOUT_SECONDS=20
 HTTP_GET_MAX_ATTEMPTS=4               # essais d'une lecture (une écriture n'est jamais rejouée)

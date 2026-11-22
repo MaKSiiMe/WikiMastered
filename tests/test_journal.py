@@ -90,15 +90,15 @@ def test_timings_and_summary_lines():
     assert s["n"] == 20 and s["p50"] == 0.1 and s["p95"] == 2.0 and s["max"] == 9.0
     assert Timings().summary() == {"n": 0}
 
-    line = workers_line({"sniper": {**s, "erreurs": 2}, "garde": {"n": 1, "moy": 0.4, "max": 0.4, "erreurs": 0},
-                         "cotes": {"n": 0, "erreurs": 0, "pause": True}})
-    assert line.startswith("sniper 20 passages, moy 0.6 s, p95 2.0 s, max 9.0 s · garde 1 passage(s), 0.4 s")
-    assert "cotes en pause" in line and line.endswith("erreurs : sniper 2")
+    line = workers_line({"sniper": {**s, "erreurs": 2}, "guard": {"n": 1, "moy": 0.4, "max": 0.4, "erreurs": 0},
+                         "value_scan": {"n": 0, "erreurs": 0, "pause": True}})
+    assert line.startswith("sniper 20 passages, moy 0.6 s, p95 2.0 s, max 9.0 s · guard 1 passage(s), 0.4 s")
+    assert "value_scan en pause" in line and line.endswith("erreurs : sniper 2")
 
     net = NetStats()
     for _ in range(3):
         net.record("marketplace", "sniper", 0.2, 0.15, "200")
-    net.record("sales_summary", "valeur", 4.0, 0.3, "429")
+    net.record("sales_summary", "account_value", 4.0, 0.3, "429")
     net.record("place_bid", "écritures", 0.0, 0.5, "ReadTimeout")
     lines = network_lines(net.take(), 60)
     assert lines[0] == "5 requêtes (0.08/s) — échecs : sales_summary 429 ×1, place_bid ReadTimeout ×1"

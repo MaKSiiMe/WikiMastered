@@ -1,6 +1,6 @@
 """Cartes souhaitées : une carte que tu ajoutes toi-même à ta liste de souhaits du site est achetée par le sniper.
 
-Toutes les WISH_CHECK_MINUTES, le worker « souhaits » relit ta liste de souhaits (table Supabase `wishlist_items`).
+Toutes les WISH_CHECK_MINUTES, le worker « wishes » relit ta liste de souhaits (table Supabase `wishlist_items`).
 Les cartes que le bot y a mises pour les collections (COLLECTION_WISHLIST) ne comptent pas : seules les tiennes
 deviennent des cartes souhaitées (kv « wishes »), avec leur titre et la plus haute rareté que tu en possèdes déjà.
 
@@ -208,7 +208,7 @@ async def overview_text(ctx: Context) -> str:
 
 
 class WishWatch(Worker):
-    name = "souhaits"
+    name = "wishes"
     topic = Topic.COLLECTION
 
     async def setup(self) -> None:

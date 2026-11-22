@@ -148,11 +148,11 @@ Ce sont les réglages les plus utiles au départ. Pour en changer un, ajoute ou 
 | Réglage | Effet |
 |---|---|
 | `DRY_RUN=true` | Tout est simulé |
-| `DRY_RUN=true` + `LIVE_WRITES=ventes` | Seuls les groupes listés sont réels |
+| `DRY_RUN=true` + `LIVE_WRITES=resale` | Seuls les groupes listés sont réels |
 | `DRY_RUN=false` + `SIMULATE=sniper` | Tout est réel sauf les groupes listés |
 | `DRY_RUN=false` | Tout est réel |
 
-Groupes : `sniper`, `collection`, `ventes`, `defausse`, `tags`, `themes`, `succes`, `inventory` (ventes + défausse).
+Groupes : `sniper`, `collection`, `resale` (mises en vente), `discard` (défausse), `inventory` (les deux), `tags`, `themes`, `achievements`, `wishes`, `settle`, `showcases`. Les anciens noms français restent acceptés, avec un avertissement au démarrage.
 
 ## 6. Passer en réel
 
@@ -264,7 +264,7 @@ Tout est dans `data/` : base SQLite, journal, session. Avec Portainer, c'est le 
 | Aucun message Discord | Vérifie `DISCORD_WEBHOOK_MAIN` et lis les logs (`docker logs wikimastered`) : sans webhook, les messages y sont seulement recopiés |
 | Le bot ne mise pas | `SNIPER_RESALE_RARITIES` est vide par défaut. Sinon, regarde `/etat` : vérification anti-bot en attente, route en pause, sniper en pause. Sinon, `python -m src.main sniper-report --breakdown`. Il faut aussi quelques jours de ventes observées avant que le bot sache estimer les cartes |
 | Aucune collection dans le récap | `COLLECTION_SETS` est vide |
-| Une étiquette n'est pas posée | Elle doit d'abord être créée sur le site. `python -m src.main etiquettes` liste celles qui manquent |
+| Une étiquette n'est pas posée | Elle doit d'abord être créée sur le site. `python -m src.main themes` liste celles qui manquent |
 | Conteneur `unhealthy` | Le bot n'écrit plus son `heartbeat` : lis les logs. Avec Docker Compose, vérifie les droits de `data/` (UID 1000) |
 | Sauvegarde impossible (Docker Compose) | `backups/` doit appartenir à l'UID 1000 : `sudo chown -R 1000:1000 backups` |
 

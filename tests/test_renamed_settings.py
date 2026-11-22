@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -76,3 +79,37 @@ async def test_settings_changed_on_discord_keep_their_value_under_the_new_name(t
     assert await ctx.db.kv_get(overrides.KV_KEY) == {"duplicates_sell": True, "discard_enabled": False,
                                                      "collection_max_price": 40}
     await ctx.db.close()
+
+
+def test_old_worker_and_group_names_in_values_are_replaced_and_reported(monkeypatch):
+    monkeypatch.setenv("SIMULATE", "sniper,souhaits")
+    monkeypatch.setenv("LIVE_WRITES", "ventes")
+    monkeypatch.setenv("HTTP_WORKER_SPACING_SECONDS", "cotes=5,themes=3")
+    s = Settings(_env_file=None)
+    assert s.simulate == ["sniper", "wishes"] and s.live_writes == ["resale"]
+    assert s.http_worker_spacing_seconds == {"value_scan": 5.0, "themes": 3.0}
+    assert s.legacy_names == [("LIVE_WRITES : ventes", "resale"), ("SIMULATE : souhaits", "wishes"),
+                              ("HTTP_WORKER_SPACING_SECONDS : cotes", "value_scan")]
+
+
+@pytest.mark.asyncio
+async def test_pauses_saved_under_an_old_worker_name_are_kept(tmp_path):
+    import httpx
+
+    from src import pauses
+    from tests.test_integration import make_client, make_context
+
+    client, notifier = make_client(tmp_path, lambda r: httpx.Response(404))
+    ctx = await make_context(tmp_path, client, notifier)
+    await ctx.db.kv_set(pauses.KV_KEY, {"cotes": None, "sniper": None})  # défausse coupée : worker des cotes en pause
+    await pauses.load(ctx)
+    assert set(ctx.pauses) == {"value_scan", "sniper"}
+    assert await ctx.db.kv_get(pauses.KV_KEY) == {"value_scan": None, "sniper": None}
+    await ctx.db.close()
+
+
+def test_every_worker_has_an_english_name():
+    names = {m for path in Path("src/workers").glob("*.py")
+             for m in re.findall(r'^    name = "([a-z_]+)"', path.read_text(encoding="utf-8"), re.MULTILINE)} - {"worker"}
+    assert names == {"sniper", "inventory", "collection", "themes", "achievements", "wishes", "trades", "value_scan",
+                     "account_value", "guard"}
