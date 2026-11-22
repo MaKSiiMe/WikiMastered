@@ -16,7 +16,7 @@ from src.workers.base import Worker
 
 
 class AccountValue(Worker):
-    name = "valeur"
+    name = "account_value"
     topic = Topic.SALES
 
     async def step(self) -> float:

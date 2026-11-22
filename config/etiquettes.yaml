@@ -1,4 +1,4 @@
-# Étiquettes de thème (worker « etiquettes », THEMES_ENABLED=true).
+# Étiquettes de thème (worker « themes », THEMES_ENABLED=true).
 #
 # Chaque carte possédée reçoit, sur son exemplaire gardé, les thèmes dont une règle correspond à son article
 # Wikipédia, lu sur Wikidata. Les autres exemplaires de la carte reçoivent TAG_DUPLICATE (« Doublon »).

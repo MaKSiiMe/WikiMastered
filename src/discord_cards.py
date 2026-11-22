@@ -518,7 +518,7 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         if etat is None:
             await interaction.response.send_message(embed=switch_embed(
                 "🗑️ Défausse automatique", s.discard_enabled,
-                "Le worker cotes est en pause (il ne sert qu'à elle)." if "cotes" in ctx.pauses else "",
+                "Le worker value_scan (cotes) est en pause (il ne sert qu'à elle)." if "value_scan" in ctx.pauses else "",
                 "/defausse activer" if not s.discard_enabled else "/defausse couper"))
             return
         on = bool(etat.value)
@@ -526,9 +526,9 @@ def register(client: discord.Client, tree: app_commands.CommandTree, ctx: Contex
         # Le worker cotes ne sert qu'à la défausse des derniers exemplaires : en pause avec elle, ses requêtes
         # (route des cotes, limitée) restent au sniper.
         if on:
-            await pauses.resume(ctx, ["cotes"])
+            await pauses.resume(ctx, ["value_scan"])
         else:
-            await pauses.pause(ctx, ["cotes"], None)
+            await pauses.pause(ctx, ["value_scan"], None)
         log.info("Discord : défausse %s", "activée" if on else "coupée")
         await interaction.response.send_message(embed=switch_embed(
             "🗑️ Défausse automatique", on,

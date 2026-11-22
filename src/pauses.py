@@ -9,15 +9,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from src.config import RENAMED_WORKERS
 from src.core.timeutils import utcnow
 from src.workers.base import Context
 
 KV_KEY = "pauses"
-NEVER_PAUSED = ("garde",)
+NEVER_PAUSED = ("guard",)
 
 
 async def load(ctx: Context) -> None:
     saved = await ctx.db.kv_get(KV_KEY, {})
+    if any(name in RENAMED_WORKERS for name in saved):  # pauses d'avant le 22/11 (« cotes ») : nouveau nom du worker
+        saved = {RENAMED_WORKERS.get(name, name): until for name, until in saved.items()}
+        await ctx.db.kv_set(KV_KEY, saved)
     ctx.pauses.clear()
     now = utcnow()
     for name, until in saved.items():

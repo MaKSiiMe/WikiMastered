@@ -26,16 +26,16 @@ STALE_AFTER = timedelta(minutes=15)
 # Blocs du récap, dans l'ordre : (titre, workers concernés)
 BLOCKS: list[tuple[str, tuple[str, ...]]] = [
     (Topic.SNIPER.value, ("sniper",)),
-    (Topic.SALES.value, ("inventory", "cotes", "valeur")),
-    (Topic.COLLECTION.value, ("collection", "souhaits")),
-    (Topic.ACHIEVEMENTS.value, ("succes",)),
-    (Topic.TRADES.value, ("echanges",)),
-    ("🛡️ Garde", ("garde",)),
+    (Topic.SALES.value, ("inventory", "value_scan", "account_value")),
+    (Topic.COLLECTION.value, ("collection", "wishes")),
+    (Topic.ACHIEVEMENTS.value, ("achievements",)),
+    (Topic.TRADES.value, ("trades",)),
+    ("🛡️ Garde", ("guard",)),
 ]
 
 
 # Workers dont les lignes d'activité vont sur Discord quand ils ont fait quelque chose (succès réclamés).
-SHOWN = {"succes"}
+SHOWN = {"achievements"}
 
 
 def health(worker: Worker, now: datetime, session_ok: bool) -> tuple[str, str | None]:

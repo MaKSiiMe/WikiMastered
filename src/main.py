@@ -897,7 +897,8 @@ def main(argv: list[str] | None = None) -> None:
     ins = sub.add_parser("inspect", help="capture les vraies réponses JSON (lecture seule)")
     ins.add_argument("--out", default=None)
     sub.add_parser("collection", help="collection à compléter : possédées / manquantes (lecture seule)")
-    sub.add_parser("etiquettes", help="thèmes de toute la collection (Wikidata) et étiquettes à poser (sans écrire)")
+    sub.add_parser("themes", aliases=["etiquettes"],
+                   help="thèmes de toute la collection (Wikidata) et tags à poser (sans écrire)")
     mk = sub.add_parser("market", help="où sont les fins imminentes dans le marché (lecture seule)")
     mk.add_argument("--pages", type=int, default=4)
     mk.add_argument("--sort", default="ending_soon")
@@ -962,7 +963,8 @@ def main(argv: list[str] | None = None) -> None:
         "report": daily_report,
         "inspect": lambda ctx: inspect(ctx, args.out),
         "collection": collection_status,
-        "etiquettes": themes_status,
+        "themes": themes_status,
+        "etiquettes": themes_status,  # ancien nom, encore accepté
         "market": lambda ctx: market_status(ctx, max(1, min(args.pages, 10)), args.sort, args.rarity.upper()),
         "gifs": gifs_status,
         "profile": profile_status,

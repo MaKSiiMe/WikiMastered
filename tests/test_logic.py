@@ -452,7 +452,9 @@ def test_every_list_setting_accepts_csv_from_the_environment(monkeypatch):
 
 @pytest.mark.parametrize("value, expected", [
     ("0", {}), ("", {}), ("{}", {}),  # 31/10 : HTTP_WORKER_SPACING_SECONDS=0 empêchait le bot de démarrer
-    ("cotes=5, etiquettes=3", {"cotes": 5.0, "etiquettes": 3.0}), ('{"cotes": 5}', {"cotes": 5.0}),
+    ("value_scan=5, themes=3", {"value_scan": 5.0, "themes": 3.0}), ('{"value_scan": 5}', {"value_scan": 5.0}),
+    # anciens noms des workers (avant le 22/11) : remplacés par les nouveaux
+    ("cotes=5, etiquettes=3", {"value_scan": 5.0, "themes": 3.0}),
 ])
 def test_worker_spacing_accepts_csv_json_or_nothing(monkeypatch, value, expected):
     monkeypatch.setenv("HTTP_WORKER_SPACING_SECONDS", value)

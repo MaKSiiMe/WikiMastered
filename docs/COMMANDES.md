@@ -69,7 +69,7 @@ Une carte demandée par `/snipe` est cherchée par son titre, comme une carte de
 | `/pause [quoi] [duree]` | Met en pause `sniper` (par défaut), `ventes` (reventes comprises), `cotes` ou `tout` (sauf la garde). 1 h par défaut, ou 30 min, 2 h, 6 h, jusqu'à `/reprise`. Tient après un redémarrage |
 | `/reprise [quoi]` | Reprend ce qui est en pause (tout, par défaut) |
 | `/verif-faite` | Vérification anti-bot faite dans le navigateur : la prochaine mise part tout de suite pour la tester |
-| `/defausse [etat]` | Voir, activer ou désactiver la défausse automatique. Coupée, le worker `cotes`, qui ne sert qu'à elle, est mis en pause. Les reventes continuent |
+| `/defausse [etat]` | Voir, activer ou désactiver la défausse automatique. Coupée, le worker `value_scan` (cotes), qui ne sert qu'à elle, est mis en pause. Les reventes continuent |
 | `/doublons [etat]` | Voir, activer ou désactiver la vente automatique des doublons. Coupée, les doublons programmés sont annulés |
 | `/sauvegarde` | Sauvegarde la base maintenant ([restauration](INSTALLATION.md#sauvegardes)) |
 
@@ -120,7 +120,7 @@ Le bot n'envoie jamais de message privé : tout arrive dans les salons des webho
 | Commande | Effet |
 |---|---|
 | `python -m src.main collection` | Cartes possédées et manquantes |
-| `python -m src.main etiquettes` | Thèmes de toute la collection, cartes sans thème, étiquettes à créer, sans rien écrire |
+| `python -m src.main themes` | Thèmes de toute la collection, cartes sans thème, étiquettes à créer, sans rien écrire |
 | `python -m src.main inventory scan` | Ce qui serait vendu ou défaussé |
 | `python -m src.main inventory report [--lookups N]` | Toute la collection cotée, détail dans `data/inventaire-<date>.csv` |
 | `python -m src.main inventory list --apply` | **Écrit** : programme la vente des doublons (simulé si `DRY_RUN=true`) |

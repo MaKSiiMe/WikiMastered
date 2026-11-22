@@ -1,6 +1,6 @@
 """Échanges entre joueurs : valeur de chaque côté, verdict, contre-offre à envoyer.
 
-Sert au worker « echanges » (chaque échange qu'on te propose, évalué une fois) et à /echange (un échange que tu
+Sert au worker « trades » (chaque échange qu'on te propose, évalué une fois) et à /echange (un échange que tu
 envisages). Valeur d'une carte : médiane de ses ventes observées des TRADE_DAYS derniers jours (même rareté, shiny à
 part, ventes suspectes écartées) ; moins de TRADE_MIN_SALES ventes : l'estimation du bot, sans requête. Le nombre de
 ventes dit si elle part vite : le 28/10, un joueur refusait Jeffrey Epstein (L, ~12 000) « qui se vend pas trop » contre

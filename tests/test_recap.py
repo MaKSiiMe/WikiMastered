@@ -41,7 +41,7 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     workers = [
         worker("sniper", last_ok=now, next_due=now + timedelta(seconds=3),
                lines=["40 enchère(s) examinée(s) : pas assez vue vendue 30 · misée 10"]),
-        worker("succes", last_ok=now - timedelta(hours=2), next_due=now - timedelta(hours=1)),  # bloqué
+        worker("achievements", last_ok=now - timedelta(hours=2), next_due=now - timedelta(hours=1)),  # bloqué
         worker("inventory", last_ok=now, next_due=now + timedelta(minutes=10), errors=2, last_error="HTTP 500"),
         worker("collection", last_ok=now, next_due=now + timedelta(hours=6)),
     ]
@@ -50,7 +50,7 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
     blocks = dict(sections)
     assert problem and sections[0][0] == "À vérifier"
     assert "sniper : 17 positions ouvertes, plafond 15" in blocks["À vérifier"]
-    assert "succes : aucun passage depuis" in blocks["À vérifier"]
+    assert "achievements : aucun passage depuis" in blocks["À vérifier"]
     assert "inventory : 2 erreur(s), dernière : HTTP 500" in blocks["À vérifier"]
     # 12/11 : le récap ne garde que le résultat ; le détail de chaque worker va dans les logs.
     assert blocks["🎯 Sniper"] == "**0 achat** · 0 mise · 17 mises simulées\n17 positions en stock (dont 0 réelle)"
@@ -65,8 +65,8 @@ async def test_recap_reports_activity_health_and_problems(tmp_path):
 
 def test_traffic_line_per_worker():
     """Bloc Réseau : lectures par worker (les plus nombreuses d'abord), débit moyen, écritures et limitations."""
-    traffic = Counter({"cotes": 600, "sniper": 7900, "écritures": 45})
-    assert traffic_line(traffic, 1, 4 * 3600) == ("Lectures : 8500 (0.59/s) · sniper 7900 · cotes 600\n"
+    traffic = Counter({"value_scan": 600, "sniper": 7900, "écritures": 45})
+    assert traffic_line(traffic, 1, 4 * 3600) == ("Lectures : 8500 (0.59/s) · sniper 7900 · value_scan 600\n"
                                                   "Écritures : 45 · limitées par le site : 1")
     assert traffic_line(Counter(), 0, 0) == "Lectures : 0 (0.00/s)\nÉcritures : 0 · limitées par le site : 0"
 
