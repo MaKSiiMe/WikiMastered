@@ -1,8 +1,13 @@
-"""Cartes de collection manquantes que possèdent tes amis (/collection amis) : à toi de leur proposer un échange sur le site.
+"""Cartes de ta liste de souhaits que possèdent tes amis : à toi de leur proposer un échange sur le site.
 
-Lecture seule, à la demande, en requêtes de fond. Le bot n'a aucune route pour proposer un échange : rien n'est envoyé
-aux amis. La liste de souhaits porte les cartes manquantes (COLLECTION_WISHLIST) et le catalogue dit, pour chacune, quels
-amis la possèdent (`friendOwners`) : ~30 lectures quel que soit le nombre d'amis, au lieu d'une collection par ami.
+Lecture seule, en requêtes de fond : /collection amis à la demande, et le worker « friends » (FRIENDS_CHECK_HOURS) qui
+prévient sur Discord quand un ami possède une carte de ta liste qu'il n'avait pas au passage précédent. Le bot n'a aucune
+route pour proposer un échange : rien n'est envoyé aux amis.
+
+Le catalogue du site (`/api/cards?wishlist=1`) donne, pour chaque carte de ta liste, les amis qui la possèdent et dans
+quelles raretés (`friendOwners`) : ~30 lectures quel que soit le nombre d'amis, au lieu d'une collection par ami. Une
+carte compte chez un ami s'il l'a dans une rareté qui t'avance : n'importe laquelle pour une carte de collection
+manquante, au-dessus de ton meilleur exemplaire pour une carte souhaitée (worker « wishes ») ou un favori à monter.
 """
 
 from __future__ import annotations
@@ -10,34 +15,63 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from src.config import RARITIES, RARITY_RANK
 from src.core.client import ApiError
 from src.core.timeutils import utcnow
 from src.roi import plural
 from src.trades import Priced, card_value
+from src.workers import favorites, wishes
 from src.workers.base import Context
 from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers.collection import collection_key
 
-KV_KEY = "friends_missing"
+KV_KEY = "friends_wishlist"
 FRESH = timedelta(hours=1)  # /collection amis puis /collection amis pseudo : pas de nouvelle lecture du catalogue
 PAGE_SIZE = 50
 MAX_PAGES = 200
 FRIENDS_SHOWN = 15
-TITLES_SHOWN = 5
+TITLES_SHOWN = 8
 
 
-async def _missing(ctx: Context) -> set[str]:
-    return set((await ctx.db.kv_get(COLLECTION_KV) or {}).get("missing") or [])
+@dataclass(frozen=True)
+class Needs:
+    """Ce qui t'avance pour chaque carte de ta liste : `missing` (clés de titre) en toute rareté, `above` (id de carte ->
+    ton meilleur rang) au-dessus de ce rang. Carte inconnue des deux (ajoutée depuis le dernier passage) : toute rareté."""
+
+    missing: frozenset[str] = frozenset()
+    above: dict[str, int] | None = None
+
+    def useful(self, card_id: str, title: str, rarities: list[str]) -> list[str] | None:
+        """Raretés de l'ami qui t'avancent, de la plus haute à la plus basse ; [] : le site ne dit pas lesquelles (gardée
+        quand même) ; None : aucune ne t'avance."""
+        floor = -1 if collection_key(title) in self.missing else (self.above or {}).get(card_id, -1)
+        names = {str(r).upper() for r in rarities if r}
+        if not names:
+            return []
+        # Rareté inconnue du bot (nouvelle sur le site) : gardée, au-dessus de toutes.
+        kept = sorted((r for r in names if RARITY_RANK.get(r, len(RARITIES)) > floor),
+                      key=lambda r: -RARITY_RANK.get(r, len(RARITIES)))
+        return kept or None
+
+
+async def needs(ctx: Context) -> Needs:
+    missing = frozenset((await ctx.db.kv_get(COLLECTION_KV) or {}).get("missing") or [])
+    above: dict[str, int] = {}
+    for key in (wishes.KV_KEY, favorites.KV_KEY):
+        for cid, card in ((await ctx.db.kv_get(key) or {}).get("cards") or {}).items():
+            best = int(card.get("best", -1))
+            above[cid] = min(above.get(cid, best), best)
+    return Needs(missing, above)
 
 
 async def overview(ctx: Context, refresh: bool = False, now: datetime | None = None) -> dict:
-    """{"at", "cards" : cartes manquantes lues, "friends" : {pseudo : [titres]}}, gardé une heure."""
+    """{"at", "cards" : cartes de ta liste lues, "friends" : {pseudo : [{id, title, rarities}]}}, gardé une heure."""
     now = now or utcnow()
     state = await ctx.db.kv_get(KV_KEY)
     if state and not refresh and now - datetime.fromisoformat(state["at"]) < FRESH:
         return state
-    missing = await _missing(ctx)
-    friends: dict[str, list[str]] = {}
+    need = await needs(ctx)
+    friends: dict[str, list[dict]] = {}
     seen: set[str] = set()
     for page in range(MAX_PAGES):
         data = await ctx.api.wishlist_catalog_page(page)
@@ -48,32 +82,61 @@ async def overview(ctx: Context, refresh: bool = False, now: datetime | None = N
         fresh = [c for c in cards if isinstance(c, dict) and c.get("id") not in seen]
         seen.update(str(c.get("id")) for c in fresh)
         for card in fresh:
-            title = str(card.get("wikipedia_title") or "")
-            if collection_key(title) not in missing:
-                continue  # dans la liste de souhaits par le joueur lui-même : pas une carte de collection
-            for owner in owners.get(card.get("id")) or []:
-                if isinstance(owner, dict) and owner.get("username"):
-                    friends.setdefault(str(owner["username"]), []).append(title)
+            cid, title = str(card.get("id")), str(card.get("wikipedia_title") or "")
+            for owner in owners.get(cid) or []:
+                if not isinstance(owner, dict) or not owner.get("username"):
+                    continue
+                rarities = need.useful(cid, title, owner.get("rarities") or [])
+                if rarities is not None:
+                    friends.setdefault(str(owner["username"]), []).append(
+                        {"id": cid, "title": title, "rarities": rarities})
         if len(cards) < PAGE_SIZE or not fresh:
             break
-    state = {"at": now.isoformat(), "cards": len(missing),
+    for cards in friends.values():
+        cards.sort(key=lambda c: (-max((RARITY_RANK.get(r, len(RARITIES)) for r in c["rarities"]), default=-1),
+                                  c["title"].casefold()))
+    state = {"at": now.isoformat(), "cards": len(seen),
              "friends": dict(sorted(friends.items(), key=lambda kv: (-len(kv[1]), kv[0].casefold())))}
     await ctx.db.kv_set(KV_KEY, state)
     return state
 
 
+def _card(card: dict) -> str:
+    return card["title"] + (f" ({', '.join(card['rarities'])})" if card["rarities"] else "")
+
+
+def friends_lines(friends: dict[str, list[dict]]) -> list[str]:
+    lines = []
+    for name, cards in list(friends.items())[:FRIENDS_SHOWN]:
+        more = "…" if len(cards) > TITLES_SHOWN else ""
+        lines.append(f"**{name}** ({len(cards)}) : " + ", ".join(_card(c) for c in cards[:TITLES_SHOWN]) + more)
+    if len(friends) > FRIENDS_SHOWN:
+        lines.append(f"… et {len(friends) - FRIENDS_SHOWN} autres amis")
+    return lines
+
+
 def overview_text(state: dict) -> str:
     friends = state["friends"]
     if not friends:
-        return "Aucun ami ne possède tes cartes manquantes pour l'instant."
-    found = {title for titles in friends.values() for title in titles}
-    lines = [f"**{len(found)} cartes** chez **{len(friends)} amis**, sur {state['cards']} manquantes.\n"]
-    for name, titles in list(friends.items())[:FRIENDS_SHOWN]:
-        more = "…" if len(titles) > TITLES_SHOWN else ""
-        lines.append(f"**{name}** ({len(titles)}) : " + ", ".join(titles[:TITLES_SHOWN]) + more)
-    if len(friends) > FRIENDS_SHOWN:
-        lines.append(f"… et {len(friends) - FRIENDS_SHOWN} autres amis")
-    return "\n".join(lines)
+        return "Aucun ami ne possède une carte de ta liste de souhaits dans une rareté qui t'avance, pour l'instant."
+    found = {card["id"] for cards in friends.values() for card in cards}
+    return "\n".join([f"**{plural(len(found), 'carte')}** de ta liste chez **{plural(len(friends), 'ami')}**, "
+                      f"sur {state['cards']} souhaitées.\n", *friends_lines(friends)])
+
+
+def pairs(state: dict) -> set[str]:
+    """Une clé par carte chez un ami : « pseudo|id de carte »."""
+    return {f"{name}|{card['id']}" for name, cards in state["friends"].items() for card in cards}
+
+
+def news_text(state: dict, keys: set[str]) -> str:
+    """Le message du worker « friends » : seulement les cartes de `keys`, par ami."""
+    friends = {name: kept for name, cards in state["friends"].items()
+               if (kept := [c for c in cards if f"{name}|{c['id']}" in keys])}
+    found = {card["id"] for cards in friends.values() for card in cards}
+    return "\n".join([f"{plural(len(found), 'carte')} de ta liste chez {plural(len(friends), 'ami')} : propose-leur un "
+                      "échange sur le site.\n", *friends_lines(friends),
+                      "\n/collection amis pseudo : valeur, doublons et offre équilibrée."])
 
 
 @dataclass(frozen=True)
@@ -90,12 +153,13 @@ class FriendCard:
 
 
 async def friend_cards(ctx: Context, username: str) -> list[FriendCard]:
-    """Les cartes manquantes de cet ami, celles qu'il peut donner d'abord, puis par valeur croissante."""
-    missing = await _missing(ctx)
+    """Les cartes de ta liste chez cet ami, dans une rareté qui t'avance : celles qu'il peut donner d'abord, puis par
+    valeur croissante."""
+    need = await needs(ctx)
     rows, pending = await ctx.api.friend_wishlisted(username)
     by_card: dict[str, list] = {}
     for row in rows:
-        if collection_key(row.title) in missing:
+        if need.useful(row.catalog_id, row.title, [row.rarity] if row.rarity else []) is not None:
             by_card.setdefault(row.catalog_id, []).append(row)
     out = []
     for card_id, copies in by_card.items():
@@ -110,7 +174,7 @@ async def friend_cards(ctx: Context, username: str) -> list[FriendCard]:
 
 def friend_text(cards: list[FriendCard]) -> str:
     if not cards:
-        return "Cet ami n'a aucune de tes cartes manquantes, ou sa collection n'est pas lisible."
+        return "Cet ami n'a aucune carte de ta liste dans une rareté qui t'avance, ou sa collection n'est pas lisible."
     lines = []
     for c in cards:
         value = f"~{c.priced.value:.0f} WB" if c.priced.value is not None else "valeur inconnue"

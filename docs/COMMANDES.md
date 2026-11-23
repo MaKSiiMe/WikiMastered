@@ -94,7 +94,7 @@ Collections, liste de souhaits, amis.
 | `/collection souhaits` | Cartes de ta liste de souhaits suivies par le sniper (`WISH_MAX_PRICE`), la rareté que tu possèdes et le plafond de chaque rareté encore à prendre |
 | `/collection plafond [wb_max]` | Voir ou changer la mise maximale d'une carte de collection manquante, sans redéployer |
 | `/collection joueur <pseudo> [etiquette]` | Collection publique d'un joueur (une de ses étiquettes au choix), comparée à la liste des GIF |
-| `/collection amis [pseudo] [actualiser]` | Tes cartes manquantes que possèdent tes amis, classés par nombre de cartes (liste reprise pendant 1 h, sauf avec `actualiser`). Avec `pseudo` : valeur de chaque carte, doublons, favorites, et l'offre équilibrée pour ses doublons. Rien n'est envoyé à tes amis : l'échange se propose sur le site. Demande `COLLECTION_WISHLIST` |
+| `/collection amis [pseudo] [actualiser]` | Les cartes de ta liste de souhaits que possèdent tes amis, dans une rareté qui t'avance (toute rareté pour une carte de collection manquante, au-dessus de ton meilleur exemplaire pour une carte souhaitée ou un favori), avec les raretés de chacun, classés par nombre de cartes (liste reprise pendant 1 h, sauf avec `actualiser`). Avec `pseudo` : valeur de chaque carte, doublons, favorites, et l'offre équilibrée pour ses doublons. Rien n'est envoyé à tes amis : l'échange se propose sur le site. `FRIENDS_CHECK_HOURS` l'annonce tout seul |
 
 ### 🏆 /profil
 

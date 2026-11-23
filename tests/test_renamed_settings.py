@@ -112,7 +112,7 @@ def test_every_worker_has_an_english_name():
     names = {m for path in Path("src/workers").glob("*.py")
              for m in re.findall(r'^    name = "([a-z_]+)"', path.read_text(encoding="utf-8"), re.MULTILINE)} - {"worker"}
     assert names == {"sniper", "inventory", "collection", "themes", "achievements", "wishes", "trades", "value_scan",
-                     "account_value", "guard", "favorites"}
+                     "account_value", "guard", "favorites", "friends"}
 
 
 def test_unused_and_default_variables_are_reported(tmp_path, monkeypatch):

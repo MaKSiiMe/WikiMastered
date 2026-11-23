@@ -755,18 +755,13 @@ def build_client(ctx: Context, workers: list[Worker], cli: ModuleType,
         await followup(interaction, embed=discord.Embed(title=f"🔎 Collection de {pseudo}",
                                                             description=summary_player(state)[:4000], color=COLOR))
 
-    @G["collection"].command(name="amis", description="Tes cartes de collection manquantes que possèdent tes amis (rien ne leur est envoyé)")
+    @G["collection"].command(name="amis", description="Cartes de ta liste de souhaits que possèdent tes amis (rien ne leur est envoyé)")
     @app_commands.describe(pseudo="le détail pour cet ami : valeur, doublons, offre équilibrée",
                            actualiser="relire le site, sinon la liste de moins d'une heure est reprise")
     async def friends_missing(interaction: discord.Interaction, pseudo: str = "", actualiser: bool = False) -> None:
-        if not s.collection_wishlist:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="🤝 Cartes chez tes amis", description="Il faut `COLLECTION_WISHLIST=true` : la recherche passe "
-                "par ta liste de souhaits.", color=colors.WARN))
-            return
         await interaction.response.defer(thinking=True)
         name = pseudo.strip()
-        title = f"🤝 Tes cartes manquantes chez {name}" if name else "🤝 Cartes manquantes chez tes amis"
+        title = f"🤝 Ta liste de souhaits chez {name}" if name else "🤝 Ta liste de souhaits chez tes amis"
         try:
             text = friends.friend_text(await friends.friend_cards(ctx, name)) if name else \
                 friends.overview_text(await friends.overview(ctx, actualiser))

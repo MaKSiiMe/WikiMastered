@@ -21,6 +21,7 @@ Par défaut, `DRY_RUN=true` : rien n'est envoyé au site, le bot annonce seuleme
 | [`wishes`](src/workers/wishes.py) | Achète les cartes que tu ajoutes toi-même à ta liste de souhaits du site, jusqu'à leur cote, et les étiquette | coupé (`WISH_MAX_PRICE`) |
 | [`favorites`](src/workers/favorites.py) | Monte tes cartes en favori dans une rareté plus haute, jusqu'à L, au plus à leur cote ; le favori passe au nouvel exemplaire | coupé (`FAVORITES_UPGRADE`) |
 | [`trades`](src/workers/trade_watch.py) | Évalue les échanges qu'on te propose et suggère une contre-offre ; ne répond jamais à ta place | actif |
+| [`friends`](src/workers/friend_watch.py) | Annonce les cartes de ta liste de souhaits que possèdent tes amis, dans une rareté qui t'avance ; l'échange se propose sur le site | coupé (`FRIENDS_CHECK_HOURS`) |
 | [`value_scan`](src/workers/value_scan.py) | Cote toute la collection toutes les 12 h, pour la défausse des derniers exemplaires | actif |
 | [`account_value`](src/workers/account_value.py) | Calcule la valeur du compte (`/compte valeur`) toutes les 6 h | actif |
 | [`guard`](src/workers/profile_guard.py) | Relit ton profil et arrête tout le bot à la première sanction du site ; prévient quand tes paquets sont pleins | actif dès que la clé publique du site est trouvée |

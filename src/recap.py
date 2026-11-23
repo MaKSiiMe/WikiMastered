@@ -29,7 +29,7 @@ BLOCKS: list[tuple[str, tuple[str, ...]]] = [
     (Topic.SALES.value, ("inventory", "value_scan", "account_value")),
     (Topic.COLLECTION.value, ("collection", "wishes")),
     (Topic.ACHIEVEMENTS.value, ("achievements",)),
-    (Topic.TRADES.value, ("trades",)),
+    (Topic.TRADES.value, ("trades", "friends")),
     ("🛡️ Garde", ("guard",)),
 ]
 

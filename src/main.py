@@ -71,6 +71,7 @@ from src.workers.trade_watch import TradeWatch
 from src.workers.value_scan import ValueScan
 from src.workers.wishes import WishWatch
 from src.workers.favorites import FavoriteWatch
+from src.workers.friend_watch import FriendWatch
 
 log = logging.getLogger("wikimastered")
 
@@ -671,6 +672,8 @@ async def run_bot(settings: Settings) -> None:
             workers.append(WishWatch(ctx))
         if settings.sniper_enabled and settings.favorites_upgrade:
             workers.append(FavoriteWatch(ctx))
+        if settings.friends_check_hours > 0:
+            workers.append(FriendWatch(ctx))
         if settings.guard_enabled and settings.supabase_anon_key:
             workers.insert(0, ProfileGuard(ctx))  # en premier : une sanction arrête le bot avant les autres
         elif settings.guard_enabled:
