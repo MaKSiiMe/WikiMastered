@@ -414,6 +414,12 @@ WISH_UNQUOTED_MAX_PRICE=0               # carte souhaitée sans cote dans cette 
 WISH_CHECK_MINUTES=10                   # lecture de ta liste de souhaits
 ```
 
+Le worker `friends` relit ta liste de souhaits toutes les `FRIENDS_CHECK_HOURS` heures et annonce, une fois, chaque carte de ta liste qu'un ami possède dans une rareté qui t'avance (toute rareté pour une carte de collection manquante, au-dessus de ton meilleur exemplaire pour une carte souhaitée ou un favori à monter). Lecture seule : l'échange se propose sur le site.
+
+```sh
+FRIENDS_CHECK_HOURS=0                   # cartes de ta liste chez tes amis, annoncées dans le salon des échanges ; 0 = coupé
+```
+
 **Exemples**
 - `WISH_MAX_PRICE=2000` : une carte de ta liste de souhaits estimée 1500 WB est achetée jusqu'à 1500 WB. Une carte estimée 3000 l'est jusqu'à 2000 WB au plus.
 - `WISH_UNQUOTED_MAX_PRICE=100` : une carte souhaitée jamais vue vendue dans cette rareté, en vente à 10 WB, est misée jusqu'à 100 WB. En vente à 600 WB, elle n'est pas misée et le bot te prévient.

@@ -405,6 +405,10 @@ class Settings(BaseSettings):
     quote_history_fallback: bool = True
     tag_wish: str = "Souhait"
     wish_check_minutes: float = 10.0
+    # Cartes de ta liste de souhaits chez tes amis (worker « friends ») : le catalogue du site est relu toutes les N h et
+    # un message annonce chaque carte de ta liste qu'un ami possède dans une rareté qui t'avance, une fois. Lecture
+    # seule : l'échange se propose sur le site. 0 = coupé (/collection amis reste disponible à la demande).
+    friends_check_hours: float = 0.0
     # Favoris à monter (worker « favorites ») : chaque carte en favori est misée dans toute rareté au-dessus de ton
     # meilleur exemplaire, jusqu'à L, au plus à sa cote (jamais une vente shiny ; sans cote : pas de mise). Repérée sans
     # recherche par titre : le bot la met dans ta liste de souhaits (le site annonce ses ventes) et le sniper voit déjà
