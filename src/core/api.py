@@ -11,6 +11,7 @@ from src.core.models import (
     Auction, AuctionDetail, Balance, CollectionPage, CollectionStats, MarketPage, MyBids, MyListingsInfo,
     OwnedCard, SalesSummary, TradesList,
 )
+from src.core.shared_prices import SharedPrices
 
 log = logging.getLogger(__name__)
 
@@ -20,8 +21,9 @@ BULK_DISCARD_MAX = 50
 
 
 class WikiMastersAPI:
-    def __init__(self, client: WikiMastersClient):
+    def __init__(self, client: WikiMastersClient, shared: SharedPrices | None = None):
         self.client = client
+        self.shared = shared  # cache de prix partagé (core/shared_prices.py), facultatif
 
     @property
     def user_id(self) -> str | None:
@@ -121,9 +123,16 @@ class WikiMastersAPI:
         return result.items(), result.hasMore
 
     async def price_history(self, card_id: str, *, wait: bool = True, background: bool = False) -> dict[str, Any]:
-        """Historique des prix d'une carte, par rareté et par semaine (fiche de la carte) : réponse brute."""
+        """Historique des prix d'une carte, par rareté et par semaine (fiche de la carte) : réponse brute. Avec les
+        prix partagés (SHARED_PRICES_URL), une lecture récente d'un autre participant évite la requête au site, et
+        chaque lecture du site y est déposée."""
+        if self.shared and (shared := await self.shared.get(card_id)) is not None:
+            return shared
         data = await self.client.get("price_history", card_id=card_id, wait=wait, background=background)
-        return data if isinstance(data, dict) else {}
+        data = data if isinstance(data, dict) else {}
+        if self.shared:
+            self.shared.put(card_id, data)
+        return data
 
     async def reprice(self, auction_id: str, amount: int) -> MutationResult:
         """Baisse la mise de départ d'une de mes ventes (une fois, sans mise, après la moitié de la durée)."""

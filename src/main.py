@@ -46,6 +46,7 @@ from src.core.endpoints import Endpoints
 from src.core.models import MarketPage
 from src.core.notifier import DiscordNotifier, Topic
 from src.core.pricing import PriceService, Quote, advised_bid
+from src.core.shared_prices import SharedPrices
 from src.core.stats import network_lines, workers_line
 from src.core.winmodel import thresholds_text
 from src.core.timeutils import local_dt, next_local, now_local, set_timezone, sleep_until, utcnow
@@ -141,7 +142,9 @@ async def build_context(settings: Settings):
     db = Database(settings.data_dir / "wikimastered.db")
     await db.connect()
     notifier.store = db  # messages uniques des positions
-    api = WikiMastersAPI(client)
+    shared = SharedPrices(settings.shared_prices_url, settings.shared_prices_token,
+                          timedelta(minutes=settings.quote_cache_minutes))
+    api = WikiMastersAPI(client, shared)
     ctx = Context(settings, client, api, db, notifier, PriceService(api, db, settings.quote_cache_minutes, settings.quote_recent_sales,
                                                                     settings.quote_site_margin_ratio))
     if settings.realtime_enabled:
@@ -151,6 +154,7 @@ async def build_context(settings: Settings):
     try:
         yield ctx
     finally:
+        await shared.close()
         await client.close()
         await db.close()
         await notifier.close()

@@ -425,6 +425,10 @@ class Settings(BaseSettings):
 
     # --- Cotes ------------------------------------------------------------------
     quote_cache_minutes: float = 180.0
+    # Prix partagés avec d'autres joueurs (serveur de l'extension WikiMastered, core/shared_prices.py) : historiques
+    # des prix lus par les autres participants depuis moins de QUOTE_CACHE_MINUTES, et dépôt des nôtres. Vide = coupé.
+    shared_prices_url: str = ""
+    shared_prices_token: str = ""
     quote_min_sales: int = 4     # ventes observées minimum avant d'acheter une carte
     # Un shiny en demande plus : son marché est maigre (Mark Wahlberg ✨, achetée 6119 le 24/10 sur 3 ventes de 3400,
     # 7797 et 8000, revendue 5000). Seules ses propres ventes comptent, la cote du site n'entre pas dans l'estimation.

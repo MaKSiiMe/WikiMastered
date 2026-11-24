@@ -177,6 +177,13 @@ QUOTE_OBSERVED_KEEP_DAYS=0              # ventes observées effacées après N j
 MARKET_FEE_RATIO=0.0                    # commission du site sur une vente, si elle existe
 ```
 
+**Prix partagés (facultatif)** : avec l'[extension WikiMastered](https://github.com/MaKSiiMe/WikiMastered-extension), plusieurs joueurs et leurs bots mettent en commun les historiques de prix qu'ils lisent, sur un petit serveur ([mise en route](https://github.com/MaKSiiMe/WikiMastered-extension/tree/main/server)). Avant de lire une carte sur le site, le bot demande au serveur si un participant l'a lue depuis moins de `QUOTE_CACHE_MINUTES`, et il y dépose chaque historique qu'il lit. Le quota du site (~90-100 lectures par 10 min) reste celui de ton compte, mais il sert pour moins de cartes. Seuls l'identifiant de la carte et l'historique partent : ni cookie, ni pseudo, ni collection. Si le serveur ne répond pas, le bot lit le site comme avant et réessaie le serveur 5 minutes plus tard.
+
+```sh
+SHARED_PRICES_URL=                      # adresse du serveur, ex. https://wikimastered-share.<compte>.workers.dev ; vide = coupé
+SHARED_PRICES_TOKEN=                    # jeton de ce bot sur ce serveur (secret, comme le cookie)
+```
+
 **Exemple** : les 5 dernières ventes observées d'une carte UR sont 700, 800, 820, 900 et 950 WB, dont 4 disputées (plus d'une mise).
 - **Assez de ventes :** 5 ventes, il en faut 4 (`QUOTE_MIN_SALES`). C'est bon.
 - **Assez de ventes disputées :** 4, il en faut 4 (`SNIPER_MIN_CONTESTED_SALES`). C'est bon.
