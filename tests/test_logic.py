@@ -199,6 +199,22 @@ def test_position_needs_contested_and_steady_recent_sales():
     assert decide(sale, params, wild, 3, pf) is None and refusal(sale, params, wild, 3, pf) == "ventes trop dispersées"
     loose = snipe_params(settings(sniper_min_contested_sales=0, sniper_max_spread_ratio=0), night=False)
     assert decide(sale, loose, wild, 3, pf) and decide(sale, loose, eclipse, 3, pf)
+    # 25/11 : la dispersion ne prédisait rien pour les shiny, le filtre à 1,5 en écartait ~79 %.
+    shiny = auction(card=card, base_amount=200, is_shiny=True)
+    assert decide(shiny, params, wild, 3, pf)
+    assert refusal(shiny, params, eclipse, 3, pf) == "trop peu de ventes disputées"
+
+
+def test_no_night_by_default_and_night_settings_fall_back_to_day():
+    s = Settings(_env_file=None, sniper_max_deal_ratio=0.85, sniper_window_seconds=25,
+                 sniper_night_max_deal_ratio=0, sniper_night_window_seconds=0)
+    assert s.sniper_night_start == s.sniper_night_end
+    assert not in_window(datetime(2026, 11, 25, 3, 0, tzinfo=PARIS), s.sniper_night_start, s.sniper_night_end)
+    night = snipe_params(s, night=True)
+    assert (night.deal_ratio, night.window_seconds) == (0.85, 25)
+    strict = snipe_params(Settings(_env_file=None, sniper_max_deal_ratio=0.85, sniper_night_max_deal_ratio=0.6,
+                                   sniper_night_window_seconds=40), night=True)
+    assert (strict.deal_ratio, strict.window_seconds) == (0.6, 40)
 
 
 def test_position_bid_pushed_toward_ceiling_collection_stays_at_minimum():

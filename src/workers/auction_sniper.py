@@ -154,8 +154,10 @@ class SnipeParams:
 
 def snipe_params(s: Settings, night: bool) -> SnipeParams:
     return SnipeParams(
-        window_seconds=s.sniper_night_window_seconds if night else s.sniper_window_seconds,
-        deal_ratio=s.sniper_night_max_deal_ratio if night else s.sniper_max_deal_ratio,
+        window_seconds=s.sniper_night_window_seconds if night and s.sniper_night_window_seconds > 0
+        else s.sniper_window_seconds,
+        deal_ratio=s.sniper_night_max_deal_ratio if night and s.sniper_night_max_deal_ratio > 0
+        else s.sniper_max_deal_ratio,
         max_bid=s.sniper_max_bid,
         budget=(s.sniper_daily_budget + (s.sniper_night_budget_bonus if night else 0)) if s.sniper_daily_budget else 0,
         night=night,
@@ -201,14 +203,17 @@ def too_disputed(auction: Auction, params: SnipeParams) -> str | None:
 
 def skipped(auction: Auction, quote: Quote, params: SnipeParams) -> str | None:
     """Revente écartée avant tout calcul de prix : ventes trop peu sûres, carte trop peu chère, enchère disputée."""
-    return unsteady(quote, params) or too_low_value(auction, quote, params) or too_disputed(auction, params)
+    return (unsteady(quote, params, auction.shiny) or too_low_value(auction, quote, params)
+            or too_disputed(auction, params))
 
 
-def unsteady(quote: Quote, params: SnipeParams) -> str | None:
-    """Pourquoi les dernières ventes ne suffisent pas à acheter : trop peu disputées, ou trop dispersées."""
+def unsteady(quote: Quote, params: SnipeParams, shiny: bool = False) -> str | None:
+    """Pourquoi les dernières ventes ne suffisent pas à acheter : trop peu disputées, ou trop dispersées. Un shiny
+    échappe au filtre de dispersion : rejouées du 28/10 au 20/11, ses ventes dispersées se revendaient aussi bien, et
+    SNIPER_MAX_SPREAD_RATIO=1.5 en écartait ~79 %."""
     if quote.contested is not None and quote.contested < params.min_contested:
         return "trop peu de ventes disputées"
-    if params.max_spread > 0 and quote.spread is not None and quote.spread > params.max_spread:
+    if not shiny and params.max_spread > 0 and quote.spread is not None and quote.spread > params.max_spread:
         return "ventes trop dispersées"
     return None
 
