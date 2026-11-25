@@ -8,26 +8,49 @@ propose, contre-offres comprises) est annoncé une seule fois, dans le salon pri
 
 Chaque échange en attente, proposé par toi ou reçu, est aussi gardé avec la valeur de chaque côté (kv « trades_log »),
 puis son statut final quand il n'est plus en cours : c'est la base du rendement de tes échanges.
+
+Cartes attendues : celles que tu reçois dans un échange en cours (proposé par toi ou reçu) sont gardées à part (kv
+« trades_incoming », clé de titre -> rang de la rareté, -1 si inconnue) : le sniper ne les mise pas pour une collection,
+un souhait ou un favori, l'échange va les apporter. Échange conclu : une carte souhaitée reçue est marquée obtenue et
+étiquetée TAG_WISH (worker « wishes »), et les workers « collection » (étiquettes, favoris posés) et « favorites » sont
+réveillés sans attendre leur prochain passage (6 h pour la collection). Le 24/11, une trentaine d'échanges acceptés
+dans la journée : cartes reçues ni étiquetées ni en favori, posées à la main.
 """
 
 from __future__ import annotations
 
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from src import trades
+from src.config import RARITY_RANK
 from src.core.client import ApiError, RateLimited
 from src.core.models import TradesList
 from src.core.timeutils import utcnow
 from src.core.notifier import Topic
-from src.workers.base import Worker
+from src.workers import favorites, wishes
+from src.workers.base import Worker, wake
+from src.workers.collection import collection_key, record_win, targets
 
 KV_KEY = "trades_seen"  # échanges déjà annoncés (seulement ceux encore actifs)
 LOG_KEY = "trades_log"  # tes échanges, proposés ou reçus, avec la valeur de chaque côté : id -> src.trades.snapshot
 LOG_MAX = 300
 BACKFILL_KEY = "trades_backfilled"  # anciens échanges repris une fois
 BACKFILL_MAX = 40  # échanges terminés repris au plus (chaque carte coûte une ou deux requêtes de fond)
+INCOMING_KEY = "trades_incoming"  # cartes à recevoir dans tes échanges en cours : clé de titre -> rang de rareté
+MISSED_WITHIN = timedelta(days=1)  # échange conclu sans avoir été vu en cours : repris s'il date d'au plus ce délai
+
+
+def incoming(history: dict[str, dict], active: set[str]) -> dict[str, int]:
+    """Cartes que tu reçois dans tes échanges en cours : clé de titre -> rang de la plus haute rareté (-1 : inconnue)."""
+    out: dict[str, int] = {}
+    for tid in active:
+        for card in (history.get(tid) or {}).get("received") or []:
+            if card.get("title") and card["title"] != "?":
+                key = collection_key(card["title"])
+                out[key] = max(out.get(key, -1), RARITY_RANK.get(card.get("rarity") or "", -1))
+    return out
 
 
 class TradeWatch(Worker):
@@ -60,20 +83,25 @@ class TradeWatch(Worker):
                                columns=e.columns, sections=[("\u200b", e.notes)] if e.notes else [],
                                url=f"{self.ctx.client.endpoints.base_url}/trades", important=True,
                                alert=True)  # à accepter ou refuser sur le site
-        await self._close_ended(history, active, me, raw)
+        done = await self._close_ended(history, active, me, raw)
         if me and not await self.db.kv_get(BACKFILL_KEY):
             await self._backfill(history, me, raw)
+        elif me:
+            done += await self._catch_missed(history, me, raw)
+        await self._received(done)
+        await self.db.kv_set(INCOMING_KEY, incoming(history, active))
         await self.db.kv_set(KV_KEY, sorted(seen & active))
         await self.db.kv_set(LOG_KEY, dict(sorted(history.items(), key=lambda kv: kv[1]["seen"])[-LOG_MAX:]))
         minutes = self.settings.trades_check_minutes
         return random.uniform(0.8, 1.2) * minutes * 60
 
-    async def _close_ended(self, history: dict[str, dict], active: set[str], me: str, raw: Any) -> None:
+    async def _close_ended(self, history: dict[str, dict], active: set[str], me: str, raw: Any) -> list[dict]:
         """Échanges qui ne sont plus en cours : statut final lu dans la liste du site (accepté, refusé, annulé…),
-        sinon « ended ». Un échange conclu avec des cartes sans valeur est réévalué (`_revalue`)."""
+        sinon « ended ». Un échange conclu avec des cartes sans valeur est réévalué (`_revalue`). Renvoie les échanges
+        conclus."""
         ended = [t for tid, t in history.items() if t["status"] == "pending" and tid not in active]
         if not ended:
-            return
+            return []
         final = {str(t.get("id")): t for t in (raw.get("trades") or [] if isinstance(raw, dict) else [])
                  if isinstance(t, dict)}
         for t in ended:
@@ -85,6 +113,71 @@ class TradeWatch(Worker):
                 await self._revalue(t, found, me)
             self.log.info("échange avec %s terminé (%s) : donné ~%d WB, reçu ~%d WB", t["with"], t["status"],
                           t["given_total"], t["received_total"])
+        return [t for t in ended if trades.concluded(t["status"])]
+
+    async def _catch_missed(self, history: dict[str, dict], me: str, raw: Any) -> list[dict]:
+        """Échanges conclus entre deux passages, jamais vus en cours (accepté dans les TRADES_CHECK_MINUTES) : repris
+        comme les autres, s'ils datent d'au plus MISSED_WITHIN. Renvoie ceux repris."""
+        out = []
+        since = utcnow() - MISSED_WITHIN
+        for row in raw.get("trades") or [] if isinstance(raw, dict) else []:
+            if not isinstance(row, dict) or not row.get("id") or row["id"] in history:
+                continue
+            status = str(row.get("status") or "")
+            if not trades.concluded(status) or me not in (str(row.get("initiator_id") or "").lower(),
+                                                          str(row.get("recipient_id") or "").lower()):
+                continue
+            try:
+                at = datetime.fromisoformat(str(row.get("updated_at") or row.get("created_at") or "")
+                                            .replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if at < since:
+                continue
+            trade = TradesList.model_validate({"trades": [row]}).trades[0]
+            try:
+                e = await trades.evaluate_trade(self.ctx, trade, me, offers=False, at=utcnow())
+            except (ApiError, RateLimited) as exc:
+                self.log.debug("échange %s pas repris (%s)", trade.id, exc)
+                continue
+            seen = str(row.get("created_at") or at.isoformat()).replace("Z", "+00:00")
+            history[trade.id] = {**trades.snapshot(trade, e, me, seen, status=status), "ended": utcnow().isoformat()}
+            self.log.info("échange avec %s conclu entre deux passages (%s) : donné ~%d WB, reçu ~%d WB",
+                          history[trade.id]["with"], status, history[trade.id]["given_total"],
+                          history[trade.id]["received_total"])
+            out.append(history[trade.id])
+        return out
+
+    async def _received(self, done: list[dict]) -> None:
+        """Cartes reçues par des échanges conclus : souhaitées, marquées obtenues et à étiqueter ; de collection ou en
+        favori, les workers concernés sont réveillés."""
+        cards = [c for t in done for c in t.get("received") or [] if c.get("title") and c["title"] != "?"]
+        if not cards:
+            return
+        since = {id(c): t["seen"] for t in done for c in t.get("received") or []}
+        wished = []
+        for card in cards:
+            at = datetime.fromisoformat(since[id(card)]) - timedelta(minutes=1)
+            if await wishes.record_win(self.db, card["title"], card.get("rarity"), at=at, copy=card.get("copy"),
+                                       only_wished=True):
+                wished.append(card["title"])
+        keys = {collection_key(c["title"]) for c in cards}
+        wanted = set(targets(self.ctx))
+        starred = set((await favorites.card_ids(self.db)).values())
+        for card in cards:  # possédée tout de suite : le sniper ne la mise plus en attendant la relecture
+            key = collection_key(card["title"])
+            if key in wanted:
+                await record_win(self.ctx, card["title"], card.get("rarity"))
+            if key in starred and card.get("rarity"):
+                await favorites.record_win(self.db, card["title"], card["rarity"])
+        if wished:
+            self.log.info("échange : cartes souhaitées reçues, à étiqueter : %s", ", ".join(wished))
+            wake(self.ctx, "wishes")
+        if keys & wanted:
+            self.log.info("échange : cartes de collection reçues, collection relue sans attendre")
+            wake(self.ctx, "collection")
+        if keys & starred:
+            wake(self.ctx, "favorites")
 
     async def _revalue(self, t: dict, found: dict, me: str) -> None:
         """Échange conclu : ses cartes réévaluées maintenant qu'elles ont changé de main. En attente, la rareté d'une

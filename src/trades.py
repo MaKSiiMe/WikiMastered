@@ -14,7 +14,7 @@ import logging
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from itertools import combinations
 
@@ -47,6 +47,7 @@ class Priced:
     shiny: bool = False
     value: float | None = None  # None : jamais vue vendue, valeur inconnue
     sales: int = 0  # ventes observées sur TRADE_DAYS jours
+    copy: str | None = None  # exemplaire échangé (user_card_id), pour le retrouver une fois reçu
 
     @property
     def label(self) -> str:
@@ -296,8 +297,8 @@ async def evaluate_trade(ctx: Context, trade: Trade, me: str, offers: bool = Tru
     catalog, copies = await lookup_items(ctx, trade.items)
     for item in trade.items:
         title, rarity, shiny = await item_details(ctx, item, me, at is not None, catalog, copies)
-        priced = await card_value(ctx, item.card_id or (item.card.id if item.card else None), title, rarity, shiny,
-                                  at)
+        priced = replace(await card_value(ctx, item.card_id or (item.card.id if item.card else None), title, rarity,
+                                          shiny, at), copy=item.user_card_id)
         (given if (item.offered_by or "").lower() == me else received).append(priced)
     mine_first = (trade.initiator_id or "").lower() == me
     wb_initiator, wb_recipient = trade.initiator_wikibidous or 0, trade.recipient_wikibidous or 0
@@ -312,7 +313,8 @@ def snapshot(trade: Trade, e: Evaluation, me: str, at: str, status: str = "pendi
     other = (trade.recipient if mine_first else trade.initiator) or {}
 
     def cards(side: list[Priced]) -> list[dict]:
-        return [{"title": c.title, "rarity": c.rarity, "shiny": c.shiny, "value": c.value} for c in side]
+        return [{"title": c.title, "rarity": c.rarity, "shiny": c.shiny, "value": c.value, "copy": c.copy}
+                for c in side]
 
     return {"id": trade.id, "seen": at, "with": other.get("username") or "?", "mine": mine_first,
             "given": cards(e.given), "received": cards(e.received), "wb_given": e.wb_given,

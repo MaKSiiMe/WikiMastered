@@ -57,6 +57,7 @@ from src.workers.collection import KV_KEY as COLLECTION_KV
 from src.workers import favorites, wishes, wishlist
 from src.workers.collection import PriceRule, collection_key, price_rules, record_win, targets as collection_targets
 from src.workers.inventory_manager import ANTIBOT_HINT, RIVAL_MIN_SHARE
+from src.workers.trade_watch import INCOMING_KEY as TRADES_INCOMING
 
 COLLECTION_PREFIX = "collection"  # mises de la règle par rareté : gardées, pas revendues
 # Le site refuse plus de 50 enchères par page (403 dès limit=100, relevé du 15/10/2026).
@@ -549,6 +550,8 @@ class AuctionSniper(Worker):
         # Cartes en favori à monter en rareté (worker favorites), jusqu'à leur cote ; jamais cherchées par leur titre.
         self._favorites: dict[str, Snipe] = {}
         self._favorite_ids: dict[str, str] = {}
+        # Cartes à recevoir dans tes échanges en cours (worker trades) : clé -> rang de rareté (-1 : inconnue).
+        self._incoming: dict[str, int] = {}
         self._win_model: WinModel | None = None  # valeur d'une mise, d'après les mises réglées
         self._win_model_at = _EPOCH
         await self._refresh_win_model()
@@ -1056,6 +1059,18 @@ class AuctionSniper(Worker):
                 out.append((a, t.ceiling, "revente, misée" if t.recheck else "revente"))
         return sorted(out, key=lambda w: w[0].end_at)
 
+    def _coming_by_trade(self, auction: Auction, snipe: Snipe | None) -> bool:
+        """Carte voulue (collection, souhait, favori, demande) qu'un échange en cours va t'apporter, dans cette rareté
+        ou plus haut : pas de mise, ce serait l'acheter deux fois. Rareté reçue inconnue : seulement pour une carte
+        que tu n'as pas du tout."""
+        rank = self._incoming.get(collection_key(auction.title))
+        if rank is None:
+            return False
+        if rank >= 0:
+            return rank >= RARITY_RANK.get(auction.rarity or "", len(RARITY_RANK))
+        key = collection_key(auction.title)
+        return key in self._collection_missing or (snipe is not None and snipe.above < 0)
+
     def _snipe_for(self, auction: Auction) -> Snipe | None:
         """Demande qui vaut pour cette vente : carte demandée sur Discord, sinon carte de ta liste de souhaits."""
         key = collection_key(auction.title)
@@ -1073,6 +1088,7 @@ class AuctionSniper(Worker):
         self._wish_ids = await wishes.card_ids(self.db) if self._wishes else {}
         self._favorites = await favorites.load(self.db) if self.settings.favorites_upgrade else {}
         self._favorite_ids = await favorites.card_ids(self.db) if self._favorites else {}
+        self._incoming = await self.db.kv_get(TRADES_INCOMING) or {}
 
     def _rules(self, auction: Auction) -> list[PriceRule]:
         return self._price_rules.get(collection_key(auction.title)) or [PriceRule()]
@@ -1566,6 +1582,10 @@ class AuctionSniper(Worker):
         else:
             # Rareté jamais revendue : la cote ne sert que de repère, prise dans les ventes observées (sans requête).
             quote = (await self.ctx.prices.observed_quote(auction.catalog_id)).get(auction.rarity or "")
+        if (self._snipe_for(auction) is not None or self._collection_wants(auction)) \
+                and self._coming_by_trade(auction, self._snipe_for(auction)):
+            self._outcome(auction, "attendue dans un échange en cours", quote)
+            return None
         collection_cap = await self._collection_cap(auction)
         # Déjà surenchérie : un rival suit nos mises d'un pas, la suivante va droit au plafond (une seule de plus).
         rebid = last is not None and last["status"] in ("placed", "outbid")
