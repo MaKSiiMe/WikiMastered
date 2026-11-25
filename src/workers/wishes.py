@@ -9,7 +9,7 @@ en vente et jamais au-dessus de WISH_MAX_PRICE. Sans cote connue : jusqu'à WISH
 Il prend toute rareté plus haute que celle que tu possèdes déjà : une carte que tu as en R, ajoutée à ta liste, est
 achetée en SR ou au-dessus.
 Une carte gagnée, ou reçue par un échange (worker « trades »), est gardée (pas revendue) et reçoit l'étiquette TAG_WISH.
-Une carte attendue dans un échange en cours n'est pas misée (kv « trades_incoming »). Depuis le 22/11, une carte obtenue après son
+Depuis le 22/11, une carte obtenue après son
 ajout (gagnée par le sniper, ou arrivée par un paquet ou un échange) n'est plus misée et sort de ta liste de souhaits
 (groupe d'écriture « wishes ») ; remets-la dans ta liste pour viser une rareté plus haute.
 """

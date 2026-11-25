@@ -353,12 +353,11 @@ async def test_trade_cards_with_ids_only_are_read_in_the_site_tables(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cards_coming_by_trade_are_not_bid_then_tagged_once_received(tmp_path):
+async def test_cards_received_by_trade_are_tagged_once_accepted(tmp_path):
     """24/11 : une trentaine d'échanges proposés pour des cartes de collection et de la liste de souhaits. En cours,
-    leurs cartes sont attendues (pas de mise) ; acceptés, la carte souhaitée est marquée obtenue et attend son
+    rien ne change (la carte reste misée) ; acceptés, la carte souhaitée est marquée obtenue et attend son
     étiquette (exemplaire de l'échange), la collection est relue sans attendre ses 6 h."""
     from src.workers import wishes
-    from src.workers.trade_watch import INCOMING_KEY
 
     mine = trade("t0", ME, AUTRE, [item("jeffrey", ME), item("emma", AUTRE), item("zendaya", AUTRE)])
     active, finished = [mine], []
@@ -377,13 +376,12 @@ async def test_cards_coming_by_trade_are_not_bid_then_tagged_once_received(tmp_p
     worker.notifier = Sent()  # type: ignore[assignment]
     await worker.setup()
     await worker.step()
-    assert await ctx.db.kv_get(INCOMING_KEY) == {"emma watson": 5, "zendaya": 5}
     assert not ctx.wakeups.get("collection")
+    assert "obtained" not in (await ctx.db.kv_get(wishes.KV_KEY))["cards"]["emma"]
 
     active.clear()
     finished.append({**mine, "status": "accepted"})
     await worker.step()
-    assert await ctx.db.kv_get(INCOMING_KEY) == {}
     state = await ctx.db.kv_get(wishes.KV_KEY)
     assert state["cards"]["emma"]["obtained"]
     assert [(t["title"], t["rarity"], t["copy"]) for t in state["to_tag"]] == [("Emma Watson", "L", "u-emma")]
@@ -413,31 +411,6 @@ async def test_a_trade_accepted_between_two_passes_is_still_taken(tmp_path):
     assert list(await ctx.db.kv_get(LOG_KEY)) == ["t9"]
     assert len((await ctx.db.kv_get(wishes.KV_KEY))["to_tag"]) == 1
     await ctx.db.close()
-
-
-def test_a_card_coming_by_trade_is_not_bid_on():
-    """Attendue en L : aucune vente voulue (souhait, collection) de la même carte n'est misée ; plus haute que celle
-    attendue, si. Rareté attendue inconnue : seulement une carte que tu n'as pas du tout."""
-    from types import SimpleNamespace
-
-    from src.core.models import Auction
-    from src.snipes import Snipe
-    from src.workers.auction_sniper import AuctionSniper
-
-    def sale(title: str, rarity: str) -> Auction:
-        return Auction.model_validate({"id": "a", "card_id": "c", "status": "active", "base_amount": 10,
-                                       "end_at": datetime.now(UTC).isoformat(),
-                                       "card": {"id": "c", "wikipedia_title": title, "rarity": rarity}})
-
-    sniper = SimpleNamespace(_incoming={"emma watson": 3, "zendaya": -1}, _collection_missing={"zendaya"})
-    coming = AuctionSniper._coming_by_trade
-    assert coming(sniper, sale("Emma Watson", "SR"), None) and coming(sniper, sale("Emma Watson", "R"), None)
-    assert not coming(sniper, sale("Emma Watson", "UR"), None)
-    assert coming(sniper, sale("Zendaya", "L"), None)
-    assert not coming(sniper, sale("Jeffrey Epstein", "C"), None)
-    sniper._collection_missing = set()
-    assert not coming(sniper, sale("Zendaya", "L"), Snipe("Zendaya", 0, favorite=True, above=2))
-    assert coming(sniper, sale("Zendaya", "L"), Snipe("Zendaya", 100, wish=True, above=-1))
 
 
 @pytest.mark.asyncio

@@ -9,9 +9,8 @@ propose, contre-offres comprises) est annoncé une seule fois, dans le salon pri
 Chaque échange en attente, proposé par toi ou reçu, est aussi gardé avec la valeur de chaque côté (kv « trades_log »),
 puis son statut final quand il n'est plus en cours : c'est la base du rendement de tes échanges.
 
-Cartes attendues : celles que tu reçois dans un échange en cours (proposé par toi ou reçu) sont gardées à part (kv
-« trades_incoming », clé de titre -> rang de la rareté, -1 si inconnue) : le sniper ne les mise pas pour une collection,
-un souhait ou un favori, l'échange va les apporter. Échange conclu : une carte souhaitée reçue est marquée obtenue et
+Une carte d'un échange en cours reste misée par le sniper : tant qu'il n'est pas accepté, tu ne l'as pas. Échange
+conclu : une carte souhaitée reçue est marquée obtenue et
 étiquetée TAG_WISH (worker « wishes »), et les workers « collection » (étiquettes, favoris posés) et « favorites » sont
 réveillés sans attendre leur prochain passage (6 h pour la collection). Le 24/11, une trentaine d'échanges acceptés
 dans la journée : cartes reçues ni étiquetées ni en favori, posées à la main.
@@ -24,7 +23,6 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from src import trades
-from src.config import RARITY_RANK
 from src.core.client import ApiError, RateLimited
 from src.core.models import TradesList
 from src.core.timeutils import utcnow
@@ -38,19 +36,7 @@ LOG_KEY = "trades_log"  # tes échanges, proposés ou reçus, avec la valeur de 
 LOG_MAX = 300
 BACKFILL_KEY = "trades_backfilled"  # anciens échanges repris une fois
 BACKFILL_MAX = 40  # échanges terminés repris au plus (chaque carte coûte une ou deux requêtes de fond)
-INCOMING_KEY = "trades_incoming"  # cartes à recevoir dans tes échanges en cours : clé de titre -> rang de rareté
 MISSED_WITHIN = timedelta(days=1)  # échange conclu sans avoir été vu en cours : repris s'il date d'au plus ce délai
-
-
-def incoming(history: dict[str, dict], active: set[str]) -> dict[str, int]:
-    """Cartes que tu reçois dans tes échanges en cours : clé de titre -> rang de la plus haute rareté (-1 : inconnue)."""
-    out: dict[str, int] = {}
-    for tid in active:
-        for card in (history.get(tid) or {}).get("received") or []:
-            if card.get("title") and card["title"] != "?":
-                key = collection_key(card["title"])
-                out[key] = max(out.get(key, -1), RARITY_RANK.get(card.get("rarity") or "", -1))
-    return out
 
 
 class TradeWatch(Worker):
@@ -89,7 +75,6 @@ class TradeWatch(Worker):
         elif me:
             done += await self._catch_missed(history, me, raw)
         await self._received(done)
-        await self.db.kv_set(INCOMING_KEY, incoming(history, active))
         await self.db.kv_set(KV_KEY, sorted(seen & active))
         await self.db.kv_set(LOG_KEY, dict(sorted(history.items(), key=lambda kv: kv[1]["seen"])[-LOG_MAX:]))
         minutes = self.settings.trades_check_minutes
