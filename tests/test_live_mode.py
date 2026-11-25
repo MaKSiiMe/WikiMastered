@@ -172,5 +172,7 @@ def test_hours_without_leading_zero():
     """17/10 : une heure à 3:00 dans Portainer arrêtait le bot au démarrage."""
     s = Settings(_env_file=None, sniper_night_start="2:00", sniper_night_end=" 7:30", http_peak_start="23:00")
     assert (s.sniper_night_start, s.sniper_night_end, s.http_peak_start) == (time(2, 0), time(7, 30), time(23, 0))
+    bare = Settings(_env_file=None, sniper_night_start="0", sniper_night_end=" 7 ")  # 25/11 : « 0 » refusé au démarrage
+    assert (bare.sniper_night_start, bare.sniper_night_end) == (time(0, 0), time(7, 0))
 
 
