@@ -48,6 +48,7 @@ ANY = "*"
 OUTLIER_FACTOR = 3.0
 HISTORY_WEEKS = 4  # semaines avec ventes retenues au plus pour la cote de l'historique (les plus récentes)
 HISTORY_MIN_SALES = 10  # ventes suffisantes : les semaines plus anciennes ne comptent pas
+HISTORY_REFERENCE_WEEKS = 8  # semaines avec ventes qui servent de repère pour écarter une semaine aberrante
 HISTORY_TTL = timedelta(hours=6)
 HISTORY_OFF = timedelta(hours=1)  # route refusée (compte, panne) : plus essayée pendant ce temps
 HISTORY_CACHE_MAX = 500
@@ -123,6 +124,31 @@ def combine(observed: list[int], n_observed: int, site_average: float | None,
     return Quote(site_average, 0)
 
 
+def weighted_median(points: list[dict]) -> float:
+    """Moyenne de la semaine du milieu, chaque semaine pesant son nombre de ventes."""
+    ordered = sorted(points, key=lambda p: p["avg"])
+    half, seen = sum(p["count"] for p in ordered) / 2, 0
+    for point in ordered:
+        seen += point["count"]
+        if seen >= half:
+            return float(point["avg"])
+    return float(ordered[-1]["avg"])
+
+
+def drop_outlier_weeks(points: list[dict]) -> list[dict]:
+    """Semaines peu vendues (moins de HISTORY_MIN_SALES ventes) dont la moyenne est plus de OUTLIER_FACTOR fois
+    au-dessus ou au-dessous de la médiane des HISTORY_REFERENCE_WEEKS dernières semaines avec ventes (pondérée par
+    leurs ventes) : écartées. Le 24/11, une seule vente de 15 septembre SR à 8 067 WB faisait la semaine (le site
+    affichait « 8 067, +17 826 % »), contre ~40 les douze semaines d'avant. Une semaine très vendue reste : c'est
+    une vraie tendance (Ana de Armas L, 86 ventes)."""
+    recent = points[:HISTORY_REFERENCE_WEEKS]
+    if len(recent) < 2:
+        return points
+    middle = weighted_median(recent)
+    return [p for p in points if p["count"] >= HISTORY_MIN_SALES
+            or middle / OUTLIER_FACTOR <= p["avg"] <= middle * OUTLIER_FACTOR]
+
+
 def history_quotes(data: dict | None) -> dict[str, Quote]:
     """Cote par rareté tirée de l'historique des prix du site : moyenne des dernières semaines avec des ventes,
     pondérée par leur nombre, en remontant jusqu'à HISTORY_MIN_SALES ventes ou HISTORY_WEEKS semaines. Une carte
@@ -141,6 +167,7 @@ def history_quotes(data: dict | None) -> dict[str, Quote]:
         points = sorted((p for p in weekly if isinstance(p, dict) and isinstance(p.get("avg"), int | float)
                          and isinstance(p.get("count"), int) and p["count"] > 0 and p["avg"] > 0),
                         key=lambda p: str(p.get("start", "")), reverse=True)
+        points = drop_outlier_weeks(points)
         kept: list[dict] = []
         for point in points:
             kept.append(point)

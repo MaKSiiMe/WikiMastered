@@ -54,6 +54,25 @@ def test_a_well_sold_card_takes_the_week_average_like_the_site():
     assert quotes["UR"].average == 4239 and quotes["UR"].count == 15
 
 
+# 15 septembre SR, relevé le 25/11 : une seule vente à 8 067 WB la semaine du 23/11, ~40 les semaines d'avant.
+SEPTEMBRE = {"computed_at": "2026-11-25T10:00:00Z", "by_rarity": {"SR": {"weekly": [
+    {"start": "2026-10-26", "avg": 45, "min": 20, "max": 90, "count": 14},
+    {"start": "2026-11-02", "avg": 38, "min": 15, "max": 80, "count": 9},
+    {"start": "2026-11-09", "avg": 41, "min": 19, "max": 70, "count": 6},
+    {"start": "2026-11-16", "avg": 43, "min": 19, "max": 80, "count": 5},
+    {"start": "2026-11-23", "avg": 8067, "min": 8067, "max": 8067, "count": 1}]}}}
+
+
+def test_a_lone_outlier_sale_does_not_make_the_quote():
+    """15 septembre SR : la vente à 8 067 WB (le site affichait « +17 826 % ») est écartée, la cote reste ~40. Une
+    semaine très vendue reste, même loin des autres (Ana de Armas L, 86 ventes)."""
+    quote = history_quotes(SEPTEMBRE)["SR"]
+    assert quote.average == pytest.approx((43 * 5 + 41 * 6) / 11) and quote.count == 11
+    jump = {"by_rarity": {"L": {"weekly": [{"start": "2026-11-09", "avg": 900, "count": 4},
+                                           {"start": "2026-11-16", "avg": 9000, "count": 40}]}}}
+    assert history_quotes(jump)["L"].average == 9000
+
+
 @pytest.mark.asyncio
 async def test_site_quote_comes_from_the_price_history_in_one_request(tmp_path):
     """Depuis le 20/11, ?scope=summary ne renvoie plus de moyenne : la cote du site (plafond du sniper, cote des

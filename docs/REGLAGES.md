@@ -478,7 +478,7 @@ TAG_GIF=GIF                             # sur l'exemplaire gardé d'une carte an
 
 ## Garde, succès, échanges, valeur
 
-La garde relit ton profil et arrête tout le bot à la première sanction du site. Les succès débloqués sont réclamés chaque soir. Les échanges qu'on te propose sont évalués, avec une contre-offre s'ils sont défavorables.
+La garde relit ton profil et arrête tout le bot à la première sanction du site. Les succès débloqués sont réclamés chaque soir. Les échanges qu'on te propose sont évalués, avec une contre-offre s'ils sont défavorables. Une carte que tu reçois dans un échange en cours n'est pas misée par le sniper (collection, souhait, favori) : l'échange va l'apporter. Échange accepté : une carte souhaitée reçue reçoit `TAG_WISH`, et la collection est relue tout de suite (étiquettes, favoris) au lieu d'attendre `COLLECTION_REFRESH_MINUTES`.
 
 ```sh
 GUARD_ENABLED=true                      # une sanction du site arrête tout le bot (SUPABASE_ANON_KEY requise)

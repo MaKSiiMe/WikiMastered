@@ -35,6 +35,17 @@ class Context:
     last_backup: dict = field(default_factory=dict)  # dernière sauvegarde de la base (src/backup.py), pour /bot etat
     last_stats: dict = field(default_factory=dict)  # dernier relevé de stats_loop (src/main.py), pour /bot etat
     realtime: Any = None  # temps réel du site (src/core/realtime.py, REALTIME_ENABLED), sinon None
+    # Réveils demandés par un autre worker (`wake`) : nom du worker -> signal, qui écourte son attente.
+    wakeups: dict[str, asyncio.Event] = field(default_factory=dict)
+
+
+def wake(ctx: Context, name: str) -> None:
+    """Demande au worker `name` un passage sans attendre la fin de son délai (au plus tôt WAKE_MIN_SECONDS après la
+    fin du précédent). Demandé pendant un passage : un passage de plus juste après."""
+    ctx.wakeups.setdefault(name, asyncio.Event()).set()
+
+
+WAKE_MIN_SECONDS = 60.0
 
 
 class Worker:
@@ -106,7 +117,19 @@ class Worker:
                 self.log.exception("erreur inattendue")
                 delay = self._on_error(exc)
             self.next_due = utcnow() + timedelta(seconds=max(0.0, delay))
-            await asyncio.sleep(max(0.0, delay))
+            await self._sleep(max(0.0, delay))
+
+    async def _sleep(self, delay: float) -> None:
+        """Attend `delay` secondes, moins si un autre worker le réveille (`wake`)."""
+        event = self.ctx.wakeups.setdefault(self.name, asyncio.Event())
+        floor = min(delay, WAKE_MIN_SECONDS)
+        await asyncio.sleep(floor)
+        try:
+            await asyncio.wait_for(event.wait(), delay - floor)
+            self.log.info("réveillé avant l'heure")
+        except TimeoutError:
+            pass
+        event.clear()
 
     def _paused_for(self) -> float:
         """Secondes à attendre avant de revérifier la pause (0 : pas en pause). Une pause finie est retirée."""

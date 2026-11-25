@@ -8,7 +8,8 @@ Le sniper les mise comme une carte demandée sur Discord (/sniper demander), au 
 en vente et jamais au-dessus de WISH_MAX_PRICE. Sans cote connue : jusqu'à WISH_UNQUOTED_MAX_PRICE (0 = pas de mise).
 Il prend toute rareté plus haute que celle que tu possèdes déjà : une carte que tu as en R, ajoutée à ta liste, est
 achetée en SR ou au-dessus.
-Une carte gagnée est gardée (pas revendue) et reçoit l'étiquette TAG_WISH. Depuis le 22/11, une carte obtenue après son
+Une carte gagnée, ou reçue par un échange (worker « trades »), est gardée (pas revendue) et reçoit l'étiquette TAG_WISH.
+Une carte attendue dans un échange en cours n'est pas misée (kv « trades_incoming »). Depuis le 22/11, une carte obtenue après son
 ajout (gagnée par le sniper, ou arrivée par un paquet ou un échange) n'est plus misée et sort de ta liste de souhaits
 (groupe d'écriture « wishes ») ; remets-la dans ta liste pour viser une rareté plus haute.
 """
@@ -68,18 +69,27 @@ async def card_ids(db: Database) -> dict[str, str]:
             if card.get("title") and not card.get("obtained")}
 
 
-async def record_win(db: Database, title: str, rarity: str | None, at: datetime | None = None) -> None:
-    """Carte souhaitée gagnée : plus de mise, elle sort de ta liste au prochain passage, et l'exemplaire attend son
-    étiquette."""
+async def record_win(db: Database, title: str, rarity: str | None, at: datetime | None = None,
+                     copy: str | None = None, only_wished: bool = False) -> bool:
+    """Carte souhaitée gagnée (ou reçue par un échange) : plus de mise, elle sort de ta liste au prochain passage, et
+    l'exemplaire attend son étiquette. `at` : l'exemplaire est arrivé après ce moment ; `copy` : son identifiant, s'il
+    est connu. `only_wished` : rien si la carte n'est pas souhaitée (échange). Renvoie True si elle l'était."""
     state = await _state(db)
     key = collection_key(title)
     when = (at or utcnow()).isoformat()
+    wished = False
     for card in state["cards"].values():
         if card.get("title") and collection_key(card["title"]) == key:
+            if only_wished and -1 < RARITY_RANK.get(rarity or "", -1) <= int(card.get("best", -1)):
+                continue  # reçue dans une rareté que tu avais déjà : toujours souhaitée plus haut
             card["best"] = max(int(card.get("best", -1)), RARITY_RANK.get(rarity or "", -1))
-            card["obtained"] = when
-    state["to_tag"].append({"title": title, "rarity": rarity, "since": when, "tries": 0})
+            card.setdefault("obtained", when)
+            wished = True
+    if only_wished and not wished:
+        return False
+    state["to_tag"].append({"title": title, "rarity": rarity, "since": when, "tries": 0, "copy": copy})
     await db.kv_set(KV_KEY, state)
+    return wished
 
 
 async def _titles(ctx: Context, ids: list[str]) -> dict[str, str]:
@@ -187,10 +197,14 @@ async def tag_won(ctx: Context) -> tuple[int, str]:
         posted = False
         with contextlib.suppress(ApiError):
             since = datetime.fromisoformat(item["since"]) - timedelta(minutes=1)
-            copies = [c for c in await _copies(ctx, item["title"])
-                      if (c.rarity or "?") == (item.get("rarity") or "?") and c.obtained_at and c.obtained_at >= since]
+            rows = await _copies(ctx, item["title"])
+            # Reçue par un échange : son exemplaire, s'il garde son identifiant ; sinon le plus récent de la rareté
+            # (rareté inconnue d'une carte reçue : n'importe laquelle) arrivé depuis.
+            copies = [c for c in rows if item.get("copy") and c.id == item["copy"]] or [
+                c for c in rows if (not item.get("rarity") or (c.rarity or "?") == item["rarity"])
+                and c.obtained_at and c.obtained_at >= since]
             if copies:
-                copy = max(copies, key=lambda c: c.obtained_at)
+                copy = max(copies, key=lambda c: c.obtained_at or since)
                 status, _ = await ctx.client.supabase("POST", "user_card_tags", prefer="return=minimal",
                                                       json_body={"user_card_id": copy.id, "tag_id": tag_id})
                 posted = status in (200, 201, 204, 409)  # 409 : déjà étiquetée

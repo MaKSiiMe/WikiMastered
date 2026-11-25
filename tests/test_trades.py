@@ -249,7 +249,7 @@ async def test_trades_ended_before_tracking_are_taken_back_once(tmp_path):
     assert set(kept) == {"old", "no"} and await ctx.db.kv_get(BACKFILL_KEY)
     old = kept["old"]
     assert (old["status"], old["retro"], old["with"], old["wb_received"]) == ("accepted", True, "Camille", 1000)
-    assert old["given"] == [{"title": "Jeffrey Epstein", "rarity": "L", "shiny": False, "value": 12150}]
+    assert old["given"] == [{"title": "Jeffrey Epstein", "rarity": "L", "shiny": False, "value": 12150, "copy": "u-jef"}]
     assert old["received_total"] == 5500 + 1000 and old["unknown"] == 0
     head, lines = trades.history_text(kept, "2026-01-01")
     assert "**1 échange conclu**" in head and "↩︎" in lines[0] + lines[1]
@@ -350,3 +350,113 @@ async def test_trade_cards_with_ids_only_are_read_in_the_site_tables(tmp_path):
     assert e.received[0].label == "R · Zendaya ✨"  # pas de rareté figée : celle de la carte
     assert reads == [("cards", ["emma", "zendaya"]), ("user_cards", ["u-emma", "u-z"])]
     await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_cards_coming_by_trade_are_not_bid_then_tagged_once_received(tmp_path):
+    """24/11 : une trentaine d'échanges proposés pour des cartes de collection et de la liste de souhaits. En cours,
+    leurs cartes sont attendues (pas de mise) ; acceptés, la carte souhaitée est marquée obtenue et attend son
+    étiquette (exemplaire de l'échange), la collection est relue sans attendre ses 6 h."""
+    from src.workers import wishes
+    from src.workers.trade_watch import INCOMING_KEY
+
+    mine = trade("t0", ME, AUTRE, [item("jeffrey", ME), item("emma", AUTRE), item("zendaya", AUTRE)])
+    active, finished = [mine], []
+
+    def handler(request):
+        if request.url.path == "/api/trades":
+            return httpx.Response(200, json={"trades": active + finished})
+        raise AssertionError(f"route inattendue {request.url}")
+
+    client, notifier = make_client(tmp_path, handler, collection_titles=["Zendaya"])
+    ctx = await make_context(tmp_path, client, notifier)
+    await ctx.db.kv_set("trades_backfilled", True)
+    await ctx.db.kv_set(wishes.KV_KEY, {"cards": {"emma": {"title": "Emma Watson", "since": "2026-11-01T00:00:00+00:00"}},
+                                        "to_tag": []})
+    worker = TradeWatch(ctx)
+    worker.notifier = Sent()  # type: ignore[assignment]
+    await worker.setup()
+    await worker.step()
+    assert await ctx.db.kv_get(INCOMING_KEY) == {"emma watson": 5, "zendaya": 5}
+    assert not ctx.wakeups.get("collection")
+
+    active.clear()
+    finished.append({**mine, "status": "accepted"})
+    await worker.step()
+    assert await ctx.db.kv_get(INCOMING_KEY) == {}
+    state = await ctx.db.kv_get(wishes.KV_KEY)
+    assert state["cards"]["emma"]["obtained"]
+    assert [(t["title"], t["rarity"], t["copy"]) for t in state["to_tag"]] == [("Emma Watson", "L", "u-emma")]
+    assert ctx.wakeups["wishes"].is_set() and ctx.wakeups["collection"].is_set()
+    await ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_a_trade_accepted_between_two_passes_is_still_taken(tmp_path):
+    """Accepté avant même d'avoir été vu en cours : repris quand même (s'il date d'au plus un jour), une seule fois."""
+    from src.workers import wishes
+    from src.workers.trade_watch import LOG_KEY
+
+    now = datetime.now(UTC).isoformat()
+    quick = {**trade("t9", ME, AUTRE, [item("jeffrey", ME), item("emma", AUTRE)], status="accepted"),
+             "created_at": now, "updated_at": now}
+    old = {**trade("t8", ME, AUTRE, [item("emma", AUTRE)], status="accepted"),
+           "updated_at": "2026-01-01T00:00:00+00:00"}
+    ctx = await context(tmp_path, [], [quick, old])
+    await ctx.db.kv_set("trades_backfilled", True)
+    await ctx.db.kv_set(wishes.KV_KEY, {"cards": {"emma": {"title": "Emma Watson"}}, "to_tag": []})
+    worker = TradeWatch(ctx)
+    worker.notifier = Sent()  # type: ignore[assignment]
+    await worker.setup()
+    await worker.step()
+    await worker.step()
+    assert list(await ctx.db.kv_get(LOG_KEY)) == ["t9"]
+    assert len((await ctx.db.kv_get(wishes.KV_KEY))["to_tag"]) == 1
+    await ctx.db.close()
+
+
+def test_a_card_coming_by_trade_is_not_bid_on():
+    """Attendue en L : aucune vente voulue (souhait, collection) de la même carte n'est misée ; plus haute que celle
+    attendue, si. Rareté attendue inconnue : seulement une carte que tu n'as pas du tout."""
+    from types import SimpleNamespace
+
+    from src.core.models import Auction
+    from src.snipes import Snipe
+    from src.workers.auction_sniper import AuctionSniper
+
+    def sale(title: str, rarity: str) -> Auction:
+        return Auction.model_validate({"id": "a", "card_id": "c", "status": "active", "base_amount": 10,
+                                       "end_at": datetime.now(UTC).isoformat(),
+                                       "card": {"id": "c", "wikipedia_title": title, "rarity": rarity}})
+
+    sniper = SimpleNamespace(_incoming={"emma watson": 3, "zendaya": -1}, _collection_missing={"zendaya"})
+    coming = AuctionSniper._coming_by_trade
+    assert coming(sniper, sale("Emma Watson", "SR"), None) and coming(sniper, sale("Emma Watson", "R"), None)
+    assert not coming(sniper, sale("Emma Watson", "UR"), None)
+    assert coming(sniper, sale("Zendaya", "L"), None)
+    assert not coming(sniper, sale("Jeffrey Epstein", "C"), None)
+    sniper._collection_missing = set()
+    assert not coming(sniper, sale("Zendaya", "L"), Snipe("Zendaya", 0, favorite=True, above=2))
+    assert coming(sniper, sale("Zendaya", "L"), Snipe("Zendaya", 100, wish=True, above=-1))
+
+
+@pytest.mark.asyncio
+async def test_a_worker_is_woken_before_its_delay():
+    """La collection relit tout toutes les 6 h : un échange conclu la réveille sans attendre."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from src.workers import base
+
+    ctx = SimpleNamespace(wakeups={})
+    worker = SimpleNamespace(ctx=ctx, name="collection", log=SimpleNamespace(info=lambda *a: None))
+    original = base.WAKE_MIN_SECONDS
+    base.WAKE_MIN_SECONDS = 0.01
+    try:
+        task = asyncio.create_task(base.Worker._sleep(worker, 3600))
+        await asyncio.sleep(0.05)
+        base.wake(ctx, "collection")
+        await asyncio.wait_for(task, 1)
+        assert not ctx.wakeups["collection"].is_set()
+    finally:
+        base.WAKE_MIN_SECONDS = original
