@@ -439,7 +439,8 @@ class Settings(BaseSettings):
     quote_site_margin_ratio: float = Field(1.0, ge=1.0)
     # Achat d'une position : parmi ces N ventes, au moins tant de ventes disputées (plus d'une mise), et la plus
     # haute pas plus de X fois la plus basse (0 = sans limite). Le 18/10, l'éclipse XXIe était achetée 882 sur une
-    # estimation de 1197 faite de 3 ventes au prix de départ et de 2 disputées (970 et 1774).
+    # estimation de 1197 faite de 3 ventes au prix de départ et de 2 disputées (970 et 1774). Les shiny échappent à la
+    # dispersion (leurs ventes dispersées se revendaient aussi bien).
     sniper_min_contested_sales: int = 4
     sniper_max_spread_ratio: float = 1.5
 
@@ -498,11 +499,12 @@ class Settings(BaseSettings):
     sniper_max_concurrent_bids: int = 0   # 0 = illimité (le site n'impose pas de limite aux mises)
     sniper_avoid_my_bids: bool = True     # ne jamais toucher aux cartes sur lesquelles tu mises toi-même
 
-    # Arbitrage nocturne
-    sniper_night_start: time = time(2, 0)
-    sniper_night_end: time = time(7, 30)
-    sniper_night_max_deal_ratio: float = 0.50
-    sniper_night_window_seconds: int = 30
+    # Réglages de nuit, de SNIPER_NIGHT_START à SNIPER_NIGHT_END. Même heure aux deux (le défaut) : pas de nuit, les
+    # réglages du jour valent toute la journée. Chaque réglage de nuit à 0 reprend celui du jour.
+    sniper_night_start: time = time(0, 0)
+    sniper_night_end: time = time(0, 0)
+    sniper_night_max_deal_ratio: float = 0.0  # SNIPER_MAX_DEAL_RATIO la nuit (0 = celui du jour)
+    sniper_night_window_seconds: int = 0      # SNIPER_WINDOW_SECONDS la nuit (0 = celui du jour)
     sniper_night_budget_bonus: int = 0
     sniper_night_min_bid_value: float = 0.0  # valeur minimale d'une mise la nuit (0 = SNIPER_MIN_BID_VALUE)
     sniper_night_max_rise: float = 0.0  # SNIPER_MAX_RISE la nuit (0 = celui du jour)

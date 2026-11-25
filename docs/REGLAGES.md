@@ -187,7 +187,7 @@ SHARED_PRICES_TOKEN=                    # jeton de ce bot sur ce serveur (secret
 **Exemple** : les 5 dernières ventes observées d'une carte UR sont 700, 800, 820, 900 et 950 WB, dont 4 disputées (plus d'une mise).
 - **Assez de ventes :** 5 ventes, il en faut 4 (`QUOTE_MIN_SALES`). C'est bon.
 - **Assez de ventes disputées :** 4, il en faut 4 (`SNIPER_MIN_CONTESTED_SALES`). C'est bon.
-- **Ventes assez proches :** la plus haute fait 950 / 700 = 1,36 fois la plus basse, la limite est 1,5 (`SNIPER_MAX_SPREAD_RATIO`). C'est bon. Avec une vente à 1200, on aurait 1200 / 700 = 1,7 et la carte serait écartée, parce que ses ventes sont trop dispersées.
+- **Ventes assez proches :** la plus haute fait 950 / 700 = 1,36 fois la plus basse, la limite est 1,5 (`SNIPER_MAX_SPREAD_RATIO`). C'est bon. Avec une vente à 1200, on aurait 1200 / 700 = 1,7 et la carte serait écartée, parce que ses ventes sont trop dispersées. Les shiny ne passent pas ce filtre : leurs ventes dispersées se revendaient aussi bien.
 - **Estimation :** la médiane vaut 820, mais la moyenne du site est de 780. Avec `QUOTE_SITE_MARGIN_RATIO=1.0`, l'estimation est plafonnée à 780 WB. Avec `1.1`, le plafond passerait à 858 et l'estimation resterait à 820.
 
 Cette estimation est la « revente visée » des messages Discord. C'est ce que la carte rapporte en moyenne, pas son prix de mise en vente : voir plus bas.
@@ -208,7 +208,7 @@ SNIPER_OBSERVE_SECONDS=60               # ventes tout juste terminées (prix obs
 SNIPER_WINDOW_SECONDS=30                # miser s'il reste moins de X s
 SNIPER_MIN_SECONDS_LEFT=15              # ... mais jamais dans les 10 dernières (prolongation de 60 s), marge de 5 s
 SNIPER_MIN_CONTESTED_SALES=4            # parmi les QUOTE_MIN_SALES ventes, au moins N disputées (plus d'une mise) pour acheter
-SNIPER_MAX_SPREAD_RATIO=1.5             # et la plus haute de ces ventes ≤ 1,5 × la plus basse (0 = sans limite)
+SNIPER_MAX_SPREAD_RATIO=1.5             # et la plus haute de ces ventes ≤ 1,5 × la plus basse (0 = sans limite ; shiny exceptés)
 SNIPER_MAX_DEAL_RATIO=0.5               # mise ≤ 50 % de l'estimation, en plus du bénéfice minimum
 SNIPER_MIN_BID_RATIO=0.25               # mise < 25 % de l'estimation : position sautée (quota anti-bot gardé)
 SNIPER_MIN_ESTIMATE=0                   # carte non shiny revendue seulement si estimée ≥ N WB (0 = toutes ; shiny toujours)
@@ -228,10 +228,10 @@ SNIPER_SETTLE_DELAY_SECONDS=30          # attente après la fin d'une enchère a
 SNIPER_SETTLE_STUCK=true                # enchère finie depuis 1 min mais pas encore réglée par le site : finalisée par le bot
 SNIPER_AVOID_MY_BIDS=true               # le bot ignore les cartes sur lesquelles tu mises (tes collections)
 SNIPER_MAX_CONCURRENT_BIDS=0            # limite volontaire d'enchères en cours (0 = illimité, comme le site)
-SNIPER_NIGHT_START=02:00
-SNIPER_NIGHT_END=07:30
-SNIPER_NIGHT_MAX_DEAL_RATIO=0.5
-SNIPER_NIGHT_WINDOW_SECONDS=30
+SNIPER_NIGHT_START=00:00               # même heure que SNIPER_NIGHT_END : pas de nuit, réglages du jour toute la journée
+SNIPER_NIGHT_END=00:00
+SNIPER_NIGHT_MAX_DEAL_RATIO=0           # SNIPER_MAX_DEAL_RATIO la nuit (0 = celui du jour)
+SNIPER_NIGHT_WINDOW_SECONDS=0           # SNIPER_WINDOW_SECONDS la nuit (0 = celui du jour)
 SNIPER_NIGHT_BUDGET_BONUS=0
 SNIPER_NIGHT_MIN_BID_VALUE=0            # valeur minimale d'une mise la nuit (0 = SNIPER_MIN_BID_VALUE)
 SNIPER_NIGHT_MAX_RISE=0                 # SNIPER_MAX_RISE la nuit, ex. 1.2 : une mise déjà faite au plus (0 = celui du jour)
@@ -298,7 +298,7 @@ Le bot mise donc **300 WB au plus**.
 - **Mise minimale à 150 :** 150 est sous 25 % de l'estimation (780 × 0,25 = 195, `SNIPER_MIN_BID_RATIO`). L'enchère partira sûrement bien plus haut, donc le bot ne gâche pas une mise du quota anti-bot dessus.
 - **Mise minimale à 320 :** au-dessus de 300, le bot ne mise pas.
 
-La nuit (`SNIPER_NIGHT_START` à `SNIPER_NIGHT_END`), `SNIPER_NIGHT_MAX_DEAL_RATIO` et `SNIPER_NIGHT_WINDOW_SECONDS` remplacent les réglages de jour.
+Par défaut, il n'y a pas de nuit : `SNIPER_NIGHT_START` et `SNIPER_NIGHT_END` sont à la même heure. Si tu règles une nuit, `SNIPER_NIGHT_MAX_DEAL_RATIO` et `SNIPER_NIGHT_WINDOW_SECONDS` y remplacent les réglages de jour ; à 0, ceux du jour s'appliquent.
 
 **4. Le prix de mise en vente.** Le bot gagne à 240. La carte est remise en vente aux enchères, et le prix affiché est un **prix de départ** que les joueurs font monter. C'est le plus grand de :
 - 240 × 1,2 = 288 (`RESALE_START_MARGIN_RATIO`) ;

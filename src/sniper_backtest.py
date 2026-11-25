@@ -89,7 +89,7 @@ def replay(cases: list[Case], combo: Combo, s: Settings, budget: int, resale: fl
     bids = wins = 0
     gain = 0.0
     for c in cases:
-        ceiling = min(math.floor(c.estimate * (combo.night if c.night else combo.day)),
+        ceiling = min(math.floor(c.estimate * (combo.night if c.night and combo.night > 0 else combo.day)),
                       math.floor(c.estimate - need), budget)
         if s.sniper_max_bid:
             ceiling = min(ceiling, s.sniper_max_bid)
