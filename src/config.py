@@ -689,10 +689,13 @@ class Settings(BaseSettings):
     @field_validator("*", mode="before")
     @classmethod
     def _pad_hours(cls, value: Any, info: ValidationInfo) -> Any:
-        """Une heure s'écrit aussi sans zéro initial : 3:00 vaut 03:00 (17/10 : une heure à 3:00 refusée)."""
+        """Une heure s'écrit aussi sans zéro initial : 3:00 vaut 03:00 (17/10 : une heure à 3:00 refusée), ou sans
+        minutes : 3 vaut 03:00 (25/11 : SNIPER_NIGHT_END=0 empêchait le bot de démarrer)."""
         field = cls.model_fields.get(info.field_name or "")
         if field is not None and time in (field.annotation, *get_args(field.annotation)) and isinstance(value, str):
             value = value.strip()
+            if re.fullmatch(r"\d{1,2}", value):
+                return f"{int(value):02d}:00"
             if re.fullmatch(r"\d:\d\d(:\d\d)?", value):
                 return f"0{value}"
         return value
