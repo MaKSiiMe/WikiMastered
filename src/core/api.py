@@ -16,7 +16,7 @@ from src.core.shared_prices import SharedPrices
 log = logging.getLogger(__name__)
 
 COLLECTION_PAGE_SIZE = 50
-MAX_COLLECTION_PAGES = 400
+MAX_COLLECTION_PAGES = 2000  # garde-fou : 100 000 exemplaires (le compte en avait 20 000 le 28/11)
 BULK_DISCARD_MAX = 50
 
 
